@@ -19,6 +19,7 @@ PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 LOKI_URL = os.getenv("LOKI_URL", "http://loki-gateway:80")
 JAEGER_URL = os.getenv("JAEGER_URL", "http://jaeger-query:16686")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.minikube.internal:11434")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 DEFAULT_NAMESPACE = os.getenv("DEFAULT_NAMESPACE", "dev")
 DEFAULT_SERVICE = os.getenv("DEFAULT_SERVICE", "unknown-service")
 SLO_TARGET = float(os.getenv("SLO_TARGET", "0.995"))
@@ -26,7 +27,7 @@ SLO_TARGET = float(os.getenv("SLO_TARGET", "0.995"))
 prom = PrometheusClient(PROMETHEUS_URL)
 loki = LokiClient(LOKI_URL)
 jaeger = JaegerClient(JAEGER_URL)
-llm = LlmClient(OLLAMA_URL, model="llama3:8b")
+llm = LlmClient(OLLAMA_URL, model=LLM_MODEL)
 
 app = FastAPI(title="AI Observer Agent", version="2.1.0")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -141,8 +142,8 @@ def _run_reasoning(alert: dict[str, str]) -> dict[str, Any]:
             merged["confidence_score"] = f"{round(float(merged['confidence']) * 100)}%"
         analysis = merged
     except Exception as err:
-        datasource_errors["ollama"] = str(err)
-        LOGGER.error("ollama request failed error=%s", err)
+        datasource_errors["llm"] = str(err)
+        LOGGER.error("llm request failed error=%s", err)
         context["datasource_errors"] = datasource_errors
         analysis = baseline_analysis
 
