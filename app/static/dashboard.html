@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Observability Reasoning Dashboard</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --soft: #21262d;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+      --ok: #238636;
+      --warn: #d29922;
+      --crit: #da3633;
+      --accent: #58a6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(1000px 500px at 100% -10%, #1f304a 0, var(--bg) 55%);
+      color: var(--text);
+      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+    }
+    .wrap { max-width: 1200px; margin: 20px auto; padding: 0 16px; }
+    .top {
+      display: grid; gap: 10px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      align-items: end;
+      margin-bottom: 14px;
+    }
+    .top label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
+    input, select, button {
+      width: 100%; border: 1px solid #30363d; background: var(--panel); color: var(--text);
+      border-radius: 8px; padding: 10px;
+    }
+    button { cursor: pointer; background: linear-gradient(120deg, #1f6feb, #388bfd); border: 0; font-weight: 600; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+    .card {
+      background: linear-gradient(170deg, #161b22, #10151c);
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .kpi { grid-column: span 3; }
+    .wide { grid-column: span 6; }
+    .full { grid-column: span 12; }
+    .title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .val { font-size: 22px; font-weight: 700; margin-top: 8px; }
+    .ok { color: var(--ok); } .warn { color: var(--warn); } .crit { color: var(--crit); }
+    ul { margin: 8px 0 0; padding-left: 18px; }
+    li { margin-bottom: 6px; }
+    pre {
+      margin: 0; overflow: auto; max-height: 280px; background: var(--soft);
+      border-radius: 10px; padding: 10px; border: 1px solid #30363d; font-size: 12px;
+    }
+    .muted { color: var(--muted); font-size: 12px; }
+    @media (max-width: 900px) {
+      .top { grid-template-columns: repeat(2, 1fr); }
+      .kpi, .wide { grid-column: span 12; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <label>Namespace</label>
+        <input id="namespace" value="dev">
+      </div>
+      <div>
+        <label>Service</label>
+        <input id="service" value="order-service">
+      </div>
+      <div>
+        <label>Severity</label>
+        <select id="severity">
+          <option>warning</option>
+          <option>critical</option>
+          <option>info</option>
+        </select>
+      </div>
+      <div>
+        <label>Refresh (sec)</label>
+        <input id="interval" type="number" min="5" value="20">
+      </div>
+      <div>
+        <label>Status</label>
+        <div id="status" class="muted">idle</div>
+      </div>
+      <div>
+        <label>Action</label>
+        <button id="refreshBtn">Refresh Now</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card kpi"><div class="title">Root Cause</div><div class="val" id="root">-</div></div>
+      <div class="card kpi"><div class="title">Impact</div><div class="val" id="impact">-</div></div>
+      <div class="card kpi"><div class="title">Confidence</div><div class="val" id="confidence">-</div></div>
+      <div class="card kpi"><div class="title">Risk Window</div><div class="val" id="risk">-</div></div>
+
+      <div class="card wide">
+        <div class="title">Human Summary</div>
+        <div id="summary" style="margin-top:8px;">-</div>
+      </div>
+      <div class="card wide">
+        <div class="title">Causal Chain</div>
+        <ul id="chain"></ul>
+      </div>
+
+      <div class="card wide">
+        <div class="title">Corrective Actions</div>
+        <ul id="corrective"></ul>
+      </div>
+      <div class="card wide">
+        <div class="title">Preventive Hardening</div>
+        <ul id="preventive"></ul>
+      </div>
+
+      <div class="card wide">
+        <div class="title">Error Signature Prediction</div>
+        <pre id="signatures">-</pre>
+      </div>
+      <div class="card wide">
+        <div class="title">Datasource Errors / Missing Observability</div>
+        <pre id="errors">-</pre>
+      </div>
+
+      <div class="card full">
+        <div class="title">Raw Live Reasoning JSON</div>
+        <pre id="raw">-</pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let timer = null;
+
+    function setStatus(text, cls) {
+      const el = document.getElementById("status");
+      el.textContent = text;
+      el.className = cls ? cls : "muted";
+    }
+
+    function liFill(id, arr) {
+      const ul = document.getElementById(id);
+      ul.innerHTML = "";
+      (arr || []).forEach((x) => {
+        const li = document.createElement("li");
+        li.textContent = x;
+        ul.appendChild(li);
+      });
+      if (!arr || !arr.length) ul.innerHTML = "<li class='muted'>none</li>";
+    }
+
+    function riskClass(v) {
+      if (!v) return "";
+      const s = String(v).toLowerCase();
+      if (s.includes("high") || s.includes("1h")) return "crit";
+      if (s.includes("medium") || s.includes("24h")) return "warn";
+      return "ok";
+    }
+
+    async function load() {
+      const ns = encodeURIComponent(document.getElementById("namespace").value.trim() || "dev");
+      const svc = encodeURIComponent(document.getElementById("service").value.trim() || "order-service");
+      const sev = encodeURIComponent(document.getElementById("severity").value);
+      setStatus("loading...", "warn");
+      try {
+        const r = await fetch(`/api/reasoning/live?namespace=${ns}&service=${svc}&severity=${sev}`);
+        const data = await r.json();
+        const a = data.analysis || {};
+        const c = data.context || {};
+
+        document.getElementById("root").textContent = a.probable_root_cause || "-";
+        document.getElementById("impact").textContent = a.impact_level || "-";
+        document.getElementById("impact").className = `val ${riskClass(a.impact_level)}`;
+        document.getElementById("confidence").textContent = a.confidence_score || "-";
+        document.getElementById("risk").textContent = (a.risk_forecast || {}).predicted_breach_window || "-";
+        document.getElementById("risk").className = `val ${riskClass((a.risk_forecast || {}).predicted_breach_window)}`;
+        document.getElementById("summary").textContent = a.human_summary || "-";
+
+        liFill("chain", a.causal_chain || []);
+        liFill("corrective", a.corrective_actions || []);
+        liFill("preventive", a.preventive_hardening || []);
+
+        document.getElementById("signatures").textContent = JSON.stringify(a.error_log_prediction || {}, null, 2);
+        document.getElementById("errors").textContent = JSON.stringify({
+          datasource_errors: c.datasource_errors || {},
+          missing_observability: a.missing_observability || []
+        }, null, 2);
+        document.getElementById("raw").textContent = JSON.stringify(data, null, 2);
+        setStatus("live", "ok");
+      } catch (e) {
+        setStatus(`error: ${e}`, "crit");
+      }
+    }
+
+    function restartTimer() {
+      if (timer) clearInterval(timer);
+      const sec = Math.max(5, Number(document.getElementById("interval").value || 20));
+      timer = setInterval(load, sec * 1000);
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", load);
+    document.getElementById("interval").addEventListener("change", restartTimer);
+    restartTimer();
+    load();
+  </script>
+</body>
+</html>

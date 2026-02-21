@@ -28,6 +28,8 @@ uvicorn main:app --host 0.0.0.0 --port 8080
 
 - `GET /healthz`
 - `POST /webhook/alertmanager`
+- `GET /api/reasoning/live?namespace=dev&service=order-service&severity=warning`
+- `GET /dashboard`
 
 ## Response highlights
 

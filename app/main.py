@@ -1,7 +1,9 @@
 import os
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from jaeger_client import JaegerClient
 from llm_client import LlmClient
@@ -26,7 +28,8 @@ loki = LokiClient(LOKI_URL)
 jaeger = JaegerClient(JAEGER_URL)
 llm = LlmClient(OLLAMA_URL, model="llama3:8b")
 
-app = FastAPI(title="AI Observer Agent", version="2.0.0")
+app = FastAPI(title="AI Observer Agent", version="2.1.0")
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 def _extract_alert_fields(payload: AlertmanagerWebhook) -> dict[str, str]:
@@ -51,14 +54,7 @@ def _extract_alert_fields(payload: AlertmanagerWebhook) -> dict[str, str]:
     }
 
 
-@app.get("/healthz", response_model=HealthResponse)
-def healthz() -> HealthResponse:
-    return HealthResponse(status="ok")
-
-
-@app.post("/webhook/alertmanager", response_model=AlertAnalysisResponse)
-def analyze_alert(payload: AlertmanagerWebhook) -> dict[str, Any]:
-    alert = _extract_alert_fields(payload)
+def _run_reasoning(alert: dict[str, str]) -> dict[str, Any]:
     namespace = alert["namespace"]
     service = alert["service"]
 
@@ -152,3 +148,35 @@ def analyze_alert(payload: AlertmanagerWebhook) -> dict[str, Any]:
 
     analysis["policy_note"] = "No auto-remediation was applied. Explicit approval required before any changes."
     return {"context": context, "analysis": analysis}
+
+
+@app.get("/healthz", response_model=HealthResponse)
+def healthz() -> HealthResponse:
+    return HealthResponse(status="ok")
+
+
+@app.get("/dashboard")
+def dashboard() -> FileResponse:
+    return FileResponse(STATIC_DIR / "dashboard.html")
+
+
+@app.get("/api/reasoning/live", response_model=AlertAnalysisResponse)
+def live_reasoning(
+    namespace: str = Query(default=DEFAULT_NAMESPACE),
+    service: str = Query(default=DEFAULT_SERVICE),
+    severity: str = Query(default="warning"),
+) -> dict[str, Any]:
+    alert = {
+        "alertname": "LiveObservabilitySnapshot",
+        "namespace": namespace,
+        "service": service,
+        "severity": severity,
+        "status": "firing",
+    }
+    return _run_reasoning(alert)
+
+
+@app.post("/webhook/alertmanager", response_model=AlertAnalysisResponse)
+def analyze_alert(payload: AlertmanagerWebhook) -> dict[str, Any]:
+    alert = _extract_alert_fields(payload)
+    return _run_reasoning(alert)
