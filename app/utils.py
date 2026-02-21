@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import time
 from typing import Any
 
@@ -51,3 +52,13 @@ def parse_json_safe(value: str) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def clean_float(value: Any) -> float | None:
+    try:
+        f = float(value)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except Exception:
+        return None

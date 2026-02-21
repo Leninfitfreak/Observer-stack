@@ -11,7 +11,7 @@ class JaegerClient:
     def query_slow_traces(self, service: str, limit: int = 5, min_duration_ms: int = 500) -> dict[str, Any]:
         params = {
             "service": service,
-            "limit": "20",
+            "limit": "30",
             "lookback": "1h",
             "minDuration": f"{min_duration_ms}ms",
         }
@@ -19,7 +19,8 @@ class JaegerClient:
         payload = resp.json()
         traces = payload.get("data", [])
 
-        summaries: list[dict[str, Any]] = []
+        slow_traces: list[dict[str, Any]] = []
+        error_span_count = 0
         for trace in traces:
             spans = trace.get("spans", [])
             if not spans:
@@ -28,24 +29,41 @@ class JaegerClient:
             duration_ms = round(float(max_span.get("duration", 0)) / 1000.0, 2)
             if duration_ms < min_duration_ms:
                 continue
-            summaries.append(
+
+            span_errors = 0
+            for span in spans:
+                tags = span.get("tags", [])
+                for tag in tags:
+                    if tag.get("key") == "error" and str(tag.get("value")).lower() == "true":
+                        span_errors += 1
+                        break
+            error_span_count += span_errors
+
+            slow_traces.append(
                 {
                     "trace_id": trace.get("traceID", "unknown"),
                     "max_span_operation": max_span.get("operationName", "unknown"),
                     "max_span_duration_ms": duration_ms,
                     "span_count": len(spans),
+                    "error_span_count": span_errors,
                 }
             )
 
-        summaries.sort(key=lambda x: x["max_span_duration_ms"], reverse=True)
-        top_summaries = summaries[:limit]
+        slow_traces.sort(key=lambda x: x["max_span_duration_ms"], reverse=True)
+        top_traces = slow_traces[:limit]
 
-        summary_text = "No slow traces (>500ms) found."
-        if top_summaries:
-            compact = [
-                f'{s["trace_id"]}:{s["max_span_operation"]}({s["max_span_duration_ms"]}ms)'
-                for s in top_summaries
-            ]
-            summary_text = f"Top slow traces: {'; '.join(compact)}"
+        critical_path = None
+        if top_traces:
+            t0 = top_traces[0]
+            critical_path = f'{t0["max_span_operation"]} ({t0["max_span_duration_ms"]}ms)'
 
-        return {"slow_traces": top_summaries, "summary": summary_text}
+        summary = "No slow traces (>500ms) found."
+        if top_traces:
+            summary = f"Top {len(top_traces)} slow traces found; longest critical path candidate: {critical_path}."
+
+        return {
+            "slow_traces": top_traces,
+            "error_span_count": error_span_count,
+            "longest_critical_path": critical_path,
+            "summary": summary,
+        }

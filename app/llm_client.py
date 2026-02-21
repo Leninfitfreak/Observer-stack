@@ -6,11 +6,20 @@ from utils import parse_json_safe, request_with_retry
 
 
 PROMPT_HEADER = (
-    "You are an expert SRE AI assistant.\n"
-    "Analyze the provided metrics, logs, and traces.\n"
-    "Provide strictly JSON with keys:\n"
-    "probable_root_cause, impact_level, recommended_remediation, confidence_score.\n"
-    "confidence_score must include % sign.\n"
+    "ROLE: Platform Reliability & SRE Execution Agent.\n"
+    "Objective: detect instability, correlate observability signals, identify probable root cause, "
+    "predict risk, propose corrective actions and preventive hardening.\n"
+    "Reasoning rules:\n"
+    "- Correlate metrics + traces + logs.\n"
+    "- Explain causality (not only correlation).\n"
+    "- Assign confidence score between 0.0 and 1.0.\n"
+    "- Avoid premature rollback recommendation.\n"
+    "- Flag missing observability when data is insufficient.\n"
+    "- Never auto-apply changes without explicit approval.\n"
+    "Return STRICT JSON only with keys:\n"
+    "probable_root_cause, impact_level, recommended_remediation, confidence, "
+    "causal_chain, corrective_actions, preventive_hardening, risk_forecast, "
+    "deployment_correlation, error_log_prediction, missing_observability, human_summary.\n"
 )
 
 
@@ -24,11 +33,9 @@ class LlmClient:
     ):
         self.base_url = base_url.rstrip("/")
         self.model = model
-        # CPU-backed local models can take >60s for structured prompts.
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else int(
             os.getenv("OLLAMA_TIMEOUT_SECONDS", "180")
         )
-        # Keep retries low to avoid very long webhook response times.
         self.attempts = attempts if attempts is not None else int(os.getenv("OLLAMA_ATTEMPTS", "1"))
 
     def analyze(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -50,13 +57,7 @@ class LlmClient:
         body = resp.json()
         raw = body.get("response", "")
         parsed = parse_json_safe(raw)
-
         if parsed:
             return parsed
 
-        return {
-            "probable_root_cause": "Unable to parse model response",
-            "impact_level": "Medium",
-            "recommended_remediation": "Review datasource summaries manually and inspect affected service health.",
-            "confidence_score": "40%",
-        }
+        return {"human_summary": "LLM response parsing failed"}

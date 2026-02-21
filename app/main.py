@@ -8,6 +8,7 @@ from llm_client import LlmClient
 from loki_client import LokiClient
 from models import AlertAnalysisResponse, AlertmanagerWebhook, HealthResponse
 from prometheus_client import PrometheusClient
+from sre_reasoner import build_rule_based_analysis
 from utils import LOGGER, setup_logging
 
 setup_logging()
@@ -18,13 +19,14 @@ JAEGER_URL = os.getenv("JAEGER_URL", "http://jaeger-query:16686")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.minikube.internal:11434")
 DEFAULT_NAMESPACE = os.getenv("DEFAULT_NAMESPACE", "dev")
 DEFAULT_SERVICE = os.getenv("DEFAULT_SERVICE", "unknown-service")
+SLO_TARGET = float(os.getenv("SLO_TARGET", "0.995"))
 
 prom = PrometheusClient(PROMETHEUS_URL)
 loki = LokiClient(LOKI_URL)
 jaeger = JaegerClient(JAEGER_URL)
 llm = LlmClient(OLLAMA_URL, model="llama3:8b")
 
-app = FastAPI(title="AI Observer Agent", version="1.0.0")
+app = FastAPI(title="AI Observer Agent", version="2.0.0")
 
 
 def _extract_alert_fields(payload: AlertmanagerWebhook) -> dict[str, str]:
@@ -64,18 +66,41 @@ def analyze_alert(payload: AlertmanagerWebhook) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     logs_data: dict[str, Any] = {"summary": "logs datasource unavailable", "lines": []}
     traces_data: dict[str, Any] = {"summary": "tracing datasource unavailable", "slow_traces": []}
+    kubernetes_signals: dict[str, Any] = {}
+    deployment_signals: dict[str, Any] = {}
+    slo_signals: dict[str, Any] = {}
 
     try:
-        metrics = prom.collect_metrics(namespace=namespace, service=service)
+        metrics = prom.collect_service_metrics(namespace=namespace, service=service)
     except Exception as err:
-        datasource_errors["prometheus"] = str(err)
-        metrics = {
-            "error_rate_5xx_5m": None,
-            "latency_p95_seconds_5m": None,
-            "cpu_usage_cores_5m": None,
-            "memory_usage_bytes": None,
-        }
-        LOGGER.error("prometheus query failed service=%s namespace=%s error=%s", service, namespace, err)
+        datasource_errors["prometheus_metrics"] = str(err)
+        LOGGER.error("prometheus service metrics failed service=%s namespace=%s error=%s", service, namespace, err)
+        metrics = {}
+
+    try:
+        kubernetes_signals = prom.collect_kubernetes_signals(namespace=namespace, service=service)
+    except Exception as err:
+        datasource_errors["prometheus_kubernetes"] = str(err)
+        LOGGER.error("prometheus kubernetes signals failed service=%s namespace=%s error=%s", service, namespace, err)
+        kubernetes_signals = {}
+
+    try:
+        deployment_signals = prom.collect_deployment_signals(namespace=namespace, service=service)
+    except Exception as err:
+        datasource_errors["prometheus_deployment"] = str(err)
+        LOGGER.error("prometheus deployment signals failed service=%s namespace=%s error=%s", service, namespace, err)
+        deployment_signals = {}
+
+    try:
+        slo_signals = prom.collect_slo_error_budget(
+            namespace=namespace,
+            error_rate_5xx=metrics.get("error_rate_5xx_5m"),
+            slo_target=SLO_TARGET,
+        )
+    except Exception as err:
+        datasource_errors["prometheus_slo"] = str(err)
+        LOGGER.error("prometheus slo signals failed namespace=%s error=%s", namespace, err)
+        slo_signals = {}
 
     try:
         logs_data = loki.query_errors(namespace=namespace, service=service, minutes=5, limit=20)
@@ -92,22 +117,38 @@ def analyze_alert(payload: AlertmanagerWebhook) -> dict[str, Any]:
     context = {
         "alert": alert,
         "metrics": metrics,
-        "logs_summary": logs_data.get("summary", ""),
-        "trace_summary": traces_data.get("summary", ""),
+        "traces": traces_data,
+        "logs": logs_data,
+        "kubernetes": kubernetes_signals,
+        "deployment": deployment_signals,
+        "slo": slo_signals,
         "datasource_errors": datasource_errors,
     }
 
+    baseline_analysis = build_rule_based_analysis(context)
+    if "human_summary" not in baseline_analysis:
+        baseline_analysis["human_summary"] = (
+            f"Probable root cause: {baseline_analysis['probable_root_cause']}. "
+            f"Impact: {baseline_analysis['impact_level']}. "
+            "Corrective actions and preventive hardening included in machine fields."
+        )
+    baseline_analysis["confidence_score"] = baseline_analysis.get(
+        "confidence_score", f"{round((baseline_analysis.get('confidence', 0.4)) * 100)}%"
+    )
+
     try:
-        llm_result = llm.analyze(context)
+        llm_input = {"telemetry": context, "baseline_reasoning": baseline_analysis}
+        llm_result = llm.analyze(llm_input)
+        merged = dict(baseline_analysis)
+        merged.update({k: v for k, v in llm_result.items() if v is not None and v != ""})
+        if "confidence_score" not in merged and merged.get("confidence") is not None:
+            merged["confidence_score"] = f"{round(float(merged['confidence']) * 100)}%"
+        analysis = merged
     except Exception as err:
         datasource_errors["ollama"] = str(err)
         LOGGER.error("ollama request failed error=%s", err)
-        llm_result = {
-            "probable_root_cause": "LLM analysis unavailable",
-            "impact_level": "Medium",
-            "recommended_remediation": "Use metrics/logs/traces context for manual triage while Ollama is unavailable.",
-            "confidence_score": "35%",
-        }
         context["datasource_errors"] = datasource_errors
+        analysis = baseline_analysis
 
-    return {"context": context, "analysis": llm_result}
+    analysis["policy_note"] = "No auto-remediation was applied. Explicit approval required before any changes."
+    return {"context": context, "analysis": analysis}

@@ -19,8 +19,22 @@ uvicorn main:app --host 0.0.0.0 --port 8080
 - `JAEGER_URL` (default: `http://jaeger-query:16686`)
 - `OLLAMA_URL` (default: `http://host.minikube.internal:11434`)
 - `DEFAULT_NAMESPACE` (default: `dev`)
+- `SLO_TARGET` (default: `0.995`)
+- `OLLAMA_TIMEOUT_SECONDS` (default: `180`)
+- `OLLAMA_ATTEMPTS` (default: `1`)
+- `KNOWN_ERROR_SIGNATURES` (optional, comma-separated)
 
 ## Endpoints
 
 - `GET /healthz`
 - `POST /webhook/alertmanager`
+
+## Response highlights
+
+`POST /webhook/alertmanager` returns:
+- `context`: metrics + traces + logs + kubernetes + deployment + slo + datasource_errors
+- `analysis`:
+  - `probable_root_cause`, `impact_level`, `recommended_remediation`, `confidence_score`
+  - `causal_chain`, `corrective_actions`, `preventive_hardening`
+  - `risk_forecast`, `deployment_correlation`, `error_log_prediction`
+  - `missing_observability`, `policy_note`

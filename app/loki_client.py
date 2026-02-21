@@ -1,3 +1,5 @@
+import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
@@ -8,6 +10,16 @@ from utils import request_with_retry
 class LokiClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
+        known = os.getenv("KNOWN_ERROR_SIGNATURES", "")
+        self.known_signatures = {s.strip() for s in known.split(",") if s.strip()}
+
+    def _normalize_signature(self, line: str) -> str:
+        s = line.lower()
+        s = re.sub(r"0x[0-9a-f]+", "<hex>", s)
+        s = re.sub(r"\b\d+\b", "<num>", s)
+        s = re.sub(r"[a-f0-9]{16,}", "<id>", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        return s[:180]
 
     def query_errors(self, namespace: str, service: str, minutes: int = 5, limit: int = 20) -> dict[str, Any]:
         end = datetime.now(timezone.utc)
@@ -28,23 +40,36 @@ class LokiClient:
         streams = payload.get("data", {}).get("result", [])
 
         lines: list[str] = []
+        signature_counts: dict[str, int] = {}
         for stream in streams:
             for _, line in stream.get("values", []):
                 cleaned = line.strip()
-                if cleaned:
-                    lines.append(cleaned)
+                if not cleaned:
+                    continue
+                clipped = cleaned[:320]
+                lines.append(clipped)
+                sig = self._normalize_signature(clipped)
+                signature_counts[sig] = signature_counts.get(sig, 0) + 1
                 if len(lines) >= limit:
                     break
             if len(lines) >= limit:
                 break
 
+        top_signatures = sorted(signature_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_signature_rows = [{"signature": sig, "count": cnt} for sig, cnt in top_signatures]
+        new_signatures = [s for s, _ in top_signatures if s not in self.known_signatures]
+
         summary = "No ERROR logs found in last 5 minutes."
         if lines:
-            summary = f"Found {len(lines)} ERROR lines. Sample: " + " | ".join(lines[:5])
+            summary = f"Found {len(lines)} ERROR lines and {len(top_signatures)} clustered signatures."
+            if new_signatures:
+                summary += f" New signature candidates: {len(new_signatures)}."
 
         return {
             "query": query,
             "count": len(lines),
             "lines": lines,
+            "top_signatures": top_signature_rows,
+            "new_signatures": new_signatures,
             "summary": summary,
         }
