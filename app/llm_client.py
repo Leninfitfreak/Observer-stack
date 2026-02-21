@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Any
 
 from utils import parse_json_safe, request_with_retry
@@ -14,9 +15,21 @@ PROMPT_HEADER = (
 
 
 class LlmClient:
-    def __init__(self, base_url: str, model: str = "llama3:8b"):
+    def __init__(
+        self,
+        base_url: str,
+        model: str = "llama3:8b",
+        timeout_seconds: int | None = None,
+        attempts: int | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.model = model
+        # CPU-backed local models can take >60s for structured prompts.
+        self.timeout_seconds = timeout_seconds if timeout_seconds is not None else int(
+            os.getenv("OLLAMA_TIMEOUT_SECONDS", "180")
+        )
+        # Keep retries low to avoid very long webhook response times.
+        self.attempts = attempts if attempts is not None else int(os.getenv("OLLAMA_ATTEMPTS", "1"))
 
     def analyze(self, context: dict[str, Any]) -> dict[str, Any]:
         prompt = f"{PROMPT_HEADER}\nContext:\n{json.dumps(context, indent=2)}"
@@ -31,7 +44,8 @@ class LlmClient:
             f"{self.base_url}/api/generate",
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=60,
+            timeout=self.timeout_seconds,
+            attempts=self.attempts,
         )
         body = resp.json()
         raw = body.get("response", "")
