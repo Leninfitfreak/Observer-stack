@@ -48,6 +48,17 @@ class ReasoningService:
                 return True
         return False
 
+    @staticmethod
+    def _pods_for_service(service_name: str, wiring: dict[str, Any]) -> list[str]:
+        pods: list[str] = []
+        for edge in wiring.get("edges", []):
+            if edge.get("from") != service_name:
+                continue
+            target = str(edge.get("to", "")).strip()
+            if target:
+                pods.append(target)
+        return sorted(set(pods))
+
     def _baseline(self, context: dict[str, Any]) -> dict[str, Any]:
         metrics = context.get("metrics", {})
         error_rate = metrics.get("error_rate_5xx_5m", 0) or 0
@@ -156,8 +167,9 @@ class ReasoningService:
         component_metrics: dict[str, dict[str, Any]] = {}
         for comp in components:
             svc_name = comp["service"]
+            svc_pods = self._pods_for_service(svc_name, cluster_wiring)
             try:
-                svc_metrics = self.metrics_provider.collect(alert.namespace, svc_name)
+                svc_metrics = self.metrics_provider.collect(alert.namespace, svc_name, pod_names=svc_pods)
             except Exception as exc:
                 svc_metrics = {}
                 errors[f"prometheus:{svc_name}"] = str(exc)

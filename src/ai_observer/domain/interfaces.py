@@ -4,7 +4,13 @@ from typing import Any, Protocol
 
 
 class MetricsProvider(Protocol):
-    def collect(self, namespace: str, service: str) -> dict[str, Any]: ...
+    def collect(
+        self,
+        namespace: str,
+        service: str,
+        pod_names: list[str] | None = None,
+        workloads: list[str] | None = None,
+    ) -> dict[str, Any]: ...
 
 
 class LogsProvider(Protocol):
