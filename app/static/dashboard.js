@@ -148,10 +148,6 @@
     correlatedSignals: document.getElementById("correlatedSignals"),
     suggestedActions: document.getElementById("suggestedActions"),
     serviceBadges: document.getElementById("serviceBadges"),
-    dependencyMap: document.getElementById("dependencyMap"),
-    mapFitBtn: document.getElementById("mapFitBtn"),
-    mapResetBtn: document.getElementById("mapResetBtn"),
-    mapFullscreenBtn: document.getElementById("mapFullscreenBtn"),
     humanSummary: document.getElementById("humanSummary"),
     reasoningJson: document.getElementById("reasoningJson"),
     aiJson: document.getElementById("aiJson"),
@@ -255,7 +251,6 @@
         toggleFullscreen(btn.dataset.panel);
       } else if (btn.dataset.action === "reset") {
         if (btn.dataset.panel === "telemetry") resetZoomAll();
-        if (btn.dataset.panel === "ai") resetMapView();
       }
     });
 
@@ -570,18 +565,10 @@
         el.suggestedActions.appendChild(li);
       });
     }
-    const statsByService = {};
-    const componentMetrics = c.component_metrics || {};
-    (c.components || []).forEach((svc) => {
-      const h = state.serviceHistory[svc.service];
-      statsByService[svc.service] = buildServiceStats(svc.service, h, componentMetrics);
-    });
-    if (el.dependencyMap && el.dependencyMap.offsetParent !== null) {
-      renderDependencyMap(c.components || [], c.component_summary || {}, statsByService, c.cluster_wiring || {});
-    }
   }
 
   function renderDependencyMap(components, summary, statsByService, clusterWiring) {
+    if (!el.dependencyMap) return;
     const wiring = (clusterWiring && Array.isArray(clusterWiring.nodes) && clusterWiring.nodes.length)
       ? clusterWiring
       : { nodes: (components || []).map((c) => ({ id: c.service, kind: "service", status: c.status })), edges: [] };
@@ -736,6 +723,7 @@
   }
 
   function rerenderMap() {
+    if (!el.dependencyMap) return;
     const c = state.lastData?.context || {};
     const statsByService = {};
     const componentMetrics = c.component_metrics || {};
@@ -747,6 +735,7 @@
   }
 
   function resetMapView() {
+    if (!el.dependencyMap) return;
     state.mapView.scale = 1;
     state.mapView.tx = 0;
     state.mapView.ty = 0;
@@ -755,6 +744,7 @@
   }
 
   function fitMapView() {
+    if (!el.dependencyMap) return;
     const viewport = el.dependencyMap?.querySelector("#depViewport");
     if (!viewport) return;
     const bbox = viewport.getBBox();
@@ -1182,7 +1172,6 @@
     el.genTaskBtn.addEventListener("click", () => {
       alert("Instrumentation task generated.");
     });
-    bindMapInteractions();
   }
 
   function boot() {
