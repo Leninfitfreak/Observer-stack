@@ -9,6 +9,9 @@
   --warn: #f59e0b;
   --crit: #ef4444;
   --info: #3b82f6;
+  --pre-bg: #0a1730;
+  --pre-text: #dbeafe;
+  --pre-border: #2f4b7a;
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -19,6 +22,9 @@
     --muted: #607696;
     --border: #dbe5f2;
     --info: #2563eb;
+    --pre-bg: #0a1730;
+    --pre-text: #e6f0ff;
+    --pre-border: #3f5f96;
   }
 }
 * { box-sizing: border-box; }
@@ -237,11 +243,32 @@ pre {
   margin: 0;
   max-height: 300px;
   overflow: auto;
-  background: #10192b;
-  border: 1px solid var(--border);
+  background: var(--pre-bg);
+  color: var(--pre-text);
+  border: 1px solid var(--pre-border);
   border-radius: 8px;
   padding: 10px;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 500;
+  text-shadow: 0 0 1px rgba(0, 0, 0, 0.2);
+}
+pre::selection { background: rgba(59, 130, 246, 0.35); }
+
+/* Keep raw/json blocks readable even when browser theme overrides colors. */
+#datasourceErrors,
+#rawJson,
+#aiJson,
+#reasoningJson,
+#modalBody {
+  background: #06152c;
+  color: #f2f7ff;
+  -webkit-text-fill-color: #f2f7ff;
+  border: 1px solid #4a6da6;
+  font-size: 14px;
+  line-height: 1.55;
+  font-weight: 600;
+  opacity: 1;
 }
 
 .signature-modal {
