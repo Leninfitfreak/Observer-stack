@@ -155,6 +155,20 @@ h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
   align-items: start;
 }
 
+#coverageSection.split {
+  grid-template-columns: minmax(420px, 1.1fr) minmax(640px, 1.9fr);
+  align-items: stretch;
+}
+
+#coverageSection > div {
+  min-height: 360px;
+}
+
+#coverageSection > div:last-child {
+  display: flex;
+  flex-direction: column;
+}
+
 .telemetry-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .telemetry-card {
   background: var(--panel-soft);
@@ -325,6 +339,12 @@ pre::selection { background: rgba(59, 130, 246, 0.35); }
   line-height: 1.55;
   font-weight: 600;
   opacity: 1;
+}
+
+#datasourceErrors {
+  flex: 1;
+  min-height: 360px;
+  max-height: 620px;
 }
 
 .signature-modal {
