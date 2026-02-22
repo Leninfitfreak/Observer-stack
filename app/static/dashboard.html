@@ -6,6 +6,7 @@
   <title>LeninKart Incident Command Dashboard</title>
   <link rel="stylesheet" href="/static/dashboard.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 </head>
 <body>
   <header class="incident-header sev-warning" id="incidentHeader">
@@ -38,7 +39,7 @@
   </header>
 
   <main class="layout">
-    <section class="toolbar card sev-info">
+    <section class="toolbar card sev-info panel-wrapper" data-panel-id="toolbar">
       <div class="filters">
         <label>Namespace <input id="namespace" value="dev"></label>
         <label>Service Scope <input id="service" value="all"></label>
@@ -71,7 +72,7 @@
       <div id="liveStatus" class="status">idle</div>
     </section>
 
-    <section class="quick-nav card sev-info" id="quickNav">
+    <section class="quick-nav card sev-info panel-wrapper" id="quickNav" data-panel-id="quicknav">
       <button data-target="telemetrySection">Overview</button>
       <button data-target="telemetrySection">Telemetry</button>
       <button data-target="errorsSection">Errors</button>
@@ -79,7 +80,7 @@
       <button data-target="coverageSection">Coverage</button>
     </section>
 
-    <section id="telemetrySection" class="card sev-info">
+    <section id="telemetrySection" class="card sev-info panel-wrapper" data-panel-id="telemetry">
       <h2>Live Telemetry (Last 30 Minutes)</h2>
       <div class="split">
         <div class="panel">
@@ -98,7 +99,7 @@
       <div id="telemetryGrid" class="telemetry-grid"></div>
     </section>
 
-    <section id="errorsSection" class="card sev-warning split">
+    <section id="errorsSection" class="card sev-warning split panel-wrapper" data-panel-id="errors">
       <div>
         <h2>Error Signatures</h2>
         <div class="table-controls">
@@ -140,7 +141,7 @@
       </div>
     </section>
 
-    <section id="aiSection" class="card sev-info split">
+    <section id="aiSection" class="card sev-info split panel-wrapper" data-panel-id="ai">
       <div>
         <h2>AI Correlation</h2>
         <div class="ai-top-row">
@@ -183,16 +184,20 @@
       </div>
       <div>
         <h2>Blast Radius / Dependency Map</h2>
-        <svg id="dependencyMap" viewBox="0 0 700 320" class="dependency-map"></svg>
+        <div class="map-actions">
+          <button id="mapFitBtn" type="button">Fit To Screen</button>
+          <button id="mapResetBtn" type="button">Reset</button>
+        </div>
+        <svg id="dependencyMap" viewBox="0 0 700 420" class="dependency-map"></svg>
       </div>
     </section>
 
-    <section class="card sev-info">
+    <section class="card sev-info panel-wrapper" data-panel-id="timeline">
       <h2>Incident Timeline</h2>
       <div id="timeline" class="timeline"></div>
     </section>
 
-    <section id="coverageSection" class="card sev-warning split">
+    <section id="coverageSection" class="card sev-warning split panel-wrapper" data-panel-id="coverage">
       <div>
         <h2>Observability Coverage</h2>
         <div class="coverage-bar-wrap">
@@ -216,7 +221,7 @@
       </div>
     </section>
 
-    <section id="rawSection" class="card hidden sev-info">
+    <section id="rawSection" class="card hidden sev-info panel-wrapper" data-panel-id="raw">
       <h2>Raw Data</h2>
       <pre id="rawJson">-</pre>
     </section>

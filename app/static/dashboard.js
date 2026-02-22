@@ -1,5 +1,7 @@
 /* global Chart */
 (function () {
+  const syncState = { crosshairX: null };
+
   const deployMarkerPlugin = {
     id: "deployMarkerPlugin",
     afterDraw(chart, args, options) {
@@ -52,7 +54,28 @@
     }
   };
 
-  Chart.register(deployMarkerPlugin);
+  const crosshairPlugin = {
+    id: "crosshairPlugin",
+    afterDraw(chart) {
+      if (!Number.isFinite(syncState.crosshairX)) return;
+      const { chartArea, scales, ctx } = chart;
+      if (!chartArea || !scales.x) return;
+      const px = scales.x.getPixelForValue(syncState.crosshairX);
+      if (px < chartArea.left || px > chartArea.right) return;
+      ctx.save();
+      ctx.strokeStyle = "rgba(147,197,253,0.75)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px, chartArea.top);
+      ctx.lineTo(px, chartArea.bottom);
+      ctx.stroke();
+      ctx.restore();
+    }
+  };
+
+  if (window.ChartZoom) Chart.register(window.ChartZoom);
+  Chart.register(deployMarkerPlugin, crosshairPlugin);
   Chart.defaults.font.family = "Segoe UI, Arial, sans-serif";
   Chart.defaults.color = "#5b6b82";
 
@@ -70,6 +93,10 @@
     lastData: null,
     errorTrend: { ts: [], value: [] },
     errorChart: null,
+    chartRegistry: new Map(),
+    zoomWindow: { min: null, max: null },
+    mapView: { scale: 1, tx: 0, ty: 0, dragging: false, dragStartX: 0, dragStartY: 0, focusService: null },
+    fullscreenPanel: null,
   };
 
   const el = {
@@ -117,6 +144,8 @@
     correlatedSignals: document.getElementById("correlatedSignals"),
     serviceBadges: document.getElementById("serviceBadges"),
     dependencyMap: document.getElementById("dependencyMap"),
+    mapFitBtn: document.getElementById("mapFitBtn"),
+    mapResetBtn: document.getElementById("mapResetBtn"),
     humanSummary: document.getElementById("humanSummary"),
     reasoningJson: document.getElementById("reasoningJson"),
     aiJson: document.getElementById("aiJson"),
@@ -170,6 +199,82 @@
   function setLiveStatus(text, level) {
     el.liveStatus.textContent = text;
     el.liveStatus.style.color = level === "err" ? "var(--crit)" : level === "warn" ? "var(--warn)" : "var(--muted)";
+  }
+  function clamp(n, min, max) {
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function applyZoomToAll(sourceChart) {
+    const xScale = sourceChart?.scales?.x;
+    if (!xScale) return;
+    state.zoomWindow.min = xScale.min;
+    state.zoomWindow.max = xScale.max;
+    state.chartRegistry.forEach((chart) => {
+      if (chart === sourceChart) return;
+      chart.options.scales.x.min = state.zoomWindow.min;
+      chart.options.scales.x.max = state.zoomWindow.max;
+      chart.update("none");
+    });
+  }
+
+  function resetZoomAll() {
+    state.zoomWindow.min = null;
+    state.zoomWindow.max = null;
+    state.chartRegistry.forEach((chart) => {
+      chart.options.scales.x.min = undefined;
+      chart.options.scales.x.max = undefined;
+      if (typeof chart.resetZoom === "function") chart.resetZoom();
+      chart.update("none");
+    });
+  }
+
+  function initPanelWrappers() {
+    document.querySelectorAll(".panel-wrapper").forEach((panel) => {
+      const panelId = panel.dataset.panelId || panel.id || `panel-${Math.random().toString(36).slice(2, 6)}`;
+      panel.dataset.panelId = panelId;
+      if (panel.querySelector(".panel-header-controls")) return;
+      const controls = document.createElement("div");
+      controls.className = "panel-header-controls";
+      controls.innerHTML = `
+        <button type="button" data-action="reset" data-panel="${panelId}">Reset</button>
+        <button type="button" data-action="fullscreen" data-panel="${panelId}">Fullscreen</button>
+      `;
+      panel.appendChild(controls);
+    });
+
+    document.body.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-action][data-panel]");
+      if (!btn) return;
+      if (btn.dataset.action === "fullscreen") {
+        toggleFullscreen(btn.dataset.panel);
+      } else if (btn.dataset.action === "reset") {
+        if (btn.dataset.panel === "telemetry") resetZoomAll();
+        if (btn.dataset.panel === "ai") resetMapView();
+      }
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") exitFullscreen();
+    });
+  }
+
+  function toggleFullscreen(panelId) {
+    const panel = document.querySelector(`.panel-wrapper[data-panel-id="${panelId}"]`);
+    if (!panel) return;
+    if (state.fullscreenPanel === panelId) {
+      exitFullscreen();
+      return;
+    }
+    document.body.classList.add("fullscreen-mode");
+    document.querySelectorAll(".panel-fullscreen").forEach((p) => p.classList.remove("panel-fullscreen"));
+    panel.classList.add("panel-fullscreen");
+    state.fullscreenPanel = panelId;
+  }
+
+  function exitFullscreen() {
+    document.body.classList.remove("fullscreen-mode");
+    document.querySelectorAll(".panel-fullscreen").forEach((p) => p.classList.remove("panel-fullscreen"));
+    state.fullscreenPanel = null;
   }
 
   async function fetchReasoning(namespace, service, severity) {
@@ -240,7 +345,15 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
         interaction: { mode: "index", intersect: false },
+        onHover(_evt, elements, chart) {
+          if (!elements || !elements.length) return;
+          syncState.crosshairX = elements[0].index;
+          state.chartRegistry.forEach((c) => {
+            if (c !== chart) c.draw();
+          });
+        },
         plugins: {
           legend: { labels: { color: "#5b6b82", boxWidth: 10 } },
           tooltip: {
@@ -252,9 +365,29 @@
             displayColors: true,
           },
           deployMarkerPlugin: { deploy: hist.deploy, anomaly: hist.anomaly, errThreshold: 5 },
+          zoom: {
+            pan: { enabled: true, mode: "x" },
+            zoom: {
+              wheel: { enabled: true },
+              pinch: { enabled: true },
+              drag: { enabled: true, backgroundColor: "rgba(59,130,246,0.15)", borderColor: "rgba(59,130,246,0.45)", borderWidth: 1 },
+              mode: "x",
+            },
+            onZoomComplete(ctx) {
+              applyZoomToAll(ctx.chart);
+            },
+            onPanComplete(ctx) {
+              applyZoomToAll(ctx.chart);
+            }
+          }
         },
         scales: {
-          x: { ticks: { color: "#7a8799", maxTicksLimit: 8 }, grid: { color: "rgba(130,145,166,0.15)" } },
+          x: {
+            min: state.zoomWindow.min ?? undefined,
+            max: state.zoomWindow.max ?? undefined,
+            ticks: { color: "#7a8799", maxTicksLimit: 8 },
+            grid: { color: "rgba(130,145,166,0.15)" }
+          },
           y: { ticks: { color: "#7a8799" }, grid: { color: "rgba(130,145,166,0.15)" } },
           y1: { position: "right", ticks: { color: "#d5753b" }, grid: { drawOnChartArea: false } },
         },
@@ -264,6 +397,8 @@
 
   function renderTelemetryCards(components) {
     el.telemetryGrid.innerHTML = "";
+    state.chartRegistry.forEach((chart) => chart.destroy());
+    state.chartRegistry.clear();
     (components || []).forEach((component) => {
       const svc = component.service;
       const hist = ensureHistory(svc);
@@ -287,12 +422,21 @@
           <button class="link-btn" data-open="logs" data-service="${svc}">View Logs</button>
           <button class="link-btn" data-open="traces" data-service="${svc}">View Traces</button>
         </div>
-        <div class="chart-wrap"><canvas id="chart-${svc}"></canvas></div>
+        <div class="stacked-charts">
+          <div class="stack-chart"><canvas id="chart-main-${svc}"></canvas></div>
+          <div class="stack-chart"><canvas id="chart-resource-${svc}"></canvas></div>
+        </div>
       `;
       el.telemetryGrid.appendChild(card);
-      const cv = card.querySelector("canvas");
-      if (state.charts[svc]) state.charts[svc].destroy();
-      state.charts[svc] = new Chart(cv, chartConfig(hist));
+      const cvMain = card.querySelector(`#chart-main-${CSS.escape(svc)}`);
+      const cvResource = card.querySelector(`#chart-resource-${CSS.escape(svc)}`);
+      const mainChart = new Chart(cvMain, chartConfig(hist));
+      const resourceHist = { ...hist, p95: hist.cpu, p99: hist.mem, err: hist.db };
+      const resourceChart = new Chart(cvResource, chartConfig(resourceHist));
+      state.chartRegistry.set(`main-${svc}`, mainChart);
+      state.chartRegistry.set(`resource-${svc}`, resourceChart);
+      cvMain.addEventListener("dblclick", resetZoomAll);
+      cvResource.addEventListener("dblclick", resetZoomAll);
     });
   }
 
@@ -364,7 +508,7 @@
       const x = document.createElement("span");
       x.className = "chip";
       x.style.borderColor = s.status === "critical" ? "var(--crit)" : s.status === "warning" ? "var(--warn)" : "var(--ok)";
-      x.textContent = `${s.service} • ${s.status}`;
+      x.textContent = `${s.service} - ${s.status}`;
       el.serviceBadges.appendChild(x);
     });
     const statsByService = {};
@@ -380,93 +524,199 @@
   }
 
   function renderDependencyMap(components, summary, statsByService, clusterWiring) {
-    if (clusterWiring && Array.isArray(clusterWiring.nodes) && clusterWiring.nodes.length) {
-      const width = 700;
-      const height = 320;
-      const nodes = clusterWiring.nodes.map((n) => ({ ...n }));
-      const serviceNodes = nodes.filter((n) => n.kind === "service");
-      const podNodes = nodes.filter((n) => n.kind === "pod");
-      const links = Array.isArray(clusterWiring.edges) ? clusterWiring.edges : [];
+    const wiring = (clusterWiring && Array.isArray(clusterWiring.nodes) && clusterWiring.nodes.length)
+      ? clusterWiring
+      : { nodes: (components || []).map((c) => ({ id: c.service, kind: "service", status: c.status })), edges: [] };
 
-      serviceNodes.forEach((n, i) => {
-        n.x = 120 + ((i % 3) * 180);
-        n.y = 60 + (Math.floor(i / 3) * 80);
+    const services = (wiring.nodes || []).filter((n) => n.kind === "service" && n.id !== "kubernetes").sort((a, b) => a.id.localeCompare(b.id));
+    const pods = (wiring.nodes || []).filter((n) => n.kind === "pod").sort((a, b) => a.id.localeCompare(b.id));
+    const podByService = {};
+    services.forEach((s) => { podByService[s.id] = []; });
+    (wiring.edges || []).forEach((e) => {
+      const fromSvc = services.find((s) => s.id === e.from);
+      const toPod = pods.find((p) => p.id === e.to);
+      if (fromSvc && toPod && !podByService[fromSvc.id].includes(toPod.id)) podByService[fromSvc.id].push(toPod.id);
+    });
+    pods.forEach((pod) => {
+      const owner = services.find((s) => pod.id.includes(s.id.replace("-service", "")) || pod.id.includes(s.id));
+      if (owner && !podByService[owner.id].includes(pod.id)) podByService[owner.id].push(pod.id);
+    });
+
+    const width = 900;
+    const height = 420;
+    const focus = state.mapView.focusService;
+    const nodeStatusColor = (status) => status === "critical" ? "#ef4444" : status === "warning" ? "#f59e0b" : "#22c55e";
+
+    let svg = `
+      <defs>
+        <marker id="depArrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L8,4 L0,8 z" fill="#5f7ba3"></path>
+        </marker>
+      </defs>
+      <rect width="${width}" height="${height}" fill="#0b1426"/>
+      <g id="depViewport" transform="translate(${state.mapView.tx},${state.mapView.ty}) scale(${state.mapView.scale})">
+    `;
+
+    const nodes = [];
+    services.forEach((svc, i) => {
+      const x = 40 + (i * 280);
+      const y = 24;
+      const svcStat = statsByService[svc.id] || { p95: 0, err: 0, rps: 0 };
+      nodes.push({ id: svc.id, kind: "service", x, y, w: 230, h: 44, status: svc.status || "healthy", metric: svcStat });
+      (podByService[svc.id] || []).sort().forEach((podName, pIdx) => {
+        const py = 88 + (pIdx * 98);
+        const err = Number(svcStat.err || 0);
+        const p95 = Number(svcStat.p95 || 0);
+        nodes.push({
+          id: podName,
+          service: svc.id,
+          kind: "pod",
+          x,
+          y: py,
+          w: 230,
+          h: 86,
+          status: err > 5 ? "critical" : (err > 1 ? "warning" : "healthy"),
+          metric: {
+            cpu: `${Math.round((svcStat.p95 || 0) / 30)}%`,
+            mem: `${Math.round((svcStat.rps || 0) * 40)}MB`,
+            restart: `${err > 5 ? 1 : 0}`,
+            err: `${err.toFixed(2)}%`,
+            p95: `${Math.round(p95)}ms`,
+            anomaly: err > 5 || p95 > 800
+          }
+        });
       });
-      podNodes.forEach((n, i) => {
-        n.x = 420 + ((i % 2) * 220);
-        n.y = 60 + (Math.floor(i / 2) * 48);
-      });
+    });
 
-      const nodeMap = {};
-      nodes.forEach((n) => { nodeMap[n.id] = n; });
-      const nodeColor = (s) => s === "critical" ? "#ef4444" : s === "warning" ? "#f59e0b" : "#22c55e";
+    const nodeMap = {};
+    nodes.forEach((n) => { nodeMap[n.id] = n; });
 
-      let svg = `<rect width="${width}" height="${height}" fill="#0b1426"/>`;
-      links.forEach((e) => {
-        const from = nodeMap[e.from];
-        const to = nodeMap[e.to];
-        if (!from || !to) return;
-        svg += `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="#4f6f98" stroke-width="1.6">
-          <title>${e.from} -> ${e.to} (${e.type || "link"})</title>
-        </line>`;
-      });
-      nodes.forEach((n) => {
-        const color = nodeColor(n.status || "healthy");
-        const r = n.kind === "service" ? 14 : 9;
-        svg += `<g>
-          <circle cx="${n.x}" cy="${n.y}" r="${r}" fill="#10203a" stroke="${color}" stroke-width="2.3">
-            <title>${n.id} | ${n.kind || "node"} | ${n.status || "healthy"}</title>
-          </circle>
-          <text x="${n.x}" y="${n.y + r + 10}" fill="#c3d5ef" font-size="9" text-anchor="middle">${n.id}</text>
-        </g>`;
-      });
-      el.dependencyMap.innerHTML = svg;
-      return;
-    }
-
-    const width = 700;
-    const height = 320;
-    const nodes = [
-      { id: "api-gateway", x: 100, y: 170, status: "healthy" },
-      { id: "ai-observer", x: 350, y: 50, status: summary.overall_status || "healthy" },
-      { id: "postgres", x: 620, y: 170, status: "healthy" },
-      ...components.map((c, i) => ({ id: c.service, x: 350, y: 150 + (i * 85), status: c.status }))
-    ];
-    const links = [
-      ["api-gateway", "product-service"],
-      ["api-gateway", "order-service"],
-      ["product-service", "postgres"],
-      ["order-service", "postgres"],
-      ["ai-observer", "product-service"],
-      ["ai-observer", "order-service"]
-    ];
-    const nodeColor = (s) => s === "critical" ? "#ef4444" : s === "warning" ? "#f59e0b" : "#22c55e";
-    const edgeColor = (err) => err > 5 ? "#ef4444" : err > 1 ? "#f59e0b" : "#4f6f98";
-    const edgeWidth = (p95) => p95 > 1000 ? 4 : p95 > 500 ? 3 : 2;
-
-    let svg = `<rect width="${width}" height="${height}" fill="#0b1426"/>`;
-    links.forEach(([a, b]) => {
-      const na = nodes.find((n) => n.id === a);
-      const nb = nodes.find((n) => n.id === b);
-      if (!na || !nb) return;
-      const keySvc = a.includes("-service") ? a : (b.includes("-service") ? b : "");
-      const st = statsByService[keySvc] || { p95: 0, err: 0, rps: 0 };
-      svg += `<line x1="${na.x}" y1="${na.y}" x2="${nb.x}" y2="${nb.y}" stroke="${edgeColor(st.err)}" stroke-width="${edgeWidth(st.p95)}">
-          <title>${keySvc || `${a}->${b}`} | p95=${Math.round(st.p95)}ms | err=${st.err.toFixed(2)}% | rps=${st.rps.toFixed(2)}</title>
-        </line>`;
+    (wiring.edges || []).forEach((e) => {
+      const from = nodeMap[e.from];
+      const to = nodeMap[e.to];
+      if (!from || !to) return;
+      const svcKey = from.kind === "service" ? from.id : to.id;
+      const met = statsByService[svcKey] || { p95: 0, err: 0, rps: 0 };
+      const err = Number(met.err || 0);
+      const dim = focus && from.id !== focus && to.id !== focus && from.service !== focus && to.service !== focus;
+      const color = err > 5 ? "#ef4444" : err > 1 ? "#f59e0b" : "#5f7ba3";
+      const dash = err > 5 ? "stroke-dasharray='6 4'" : "";
+      const widthLine = clamp(1 + (Number(met.rps || 0) / 10), 1.2, 5);
+      const x1 = from.x + from.w / 2;
+      const y1 = from.y + from.h;
+      const x2 = to.x + to.w / 2;
+      const y2 = to.y;
+      svg += `
+        <g class="${dim ? "dep-focus-dim" : ""}">
+          <line class="dep-edge ${err > 5 ? "crit" : (err > 1 ? "warn" : "")}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="${widthLine}" ${dash} marker-end="url(#depArrow)"/>
+          <text x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 6}" fill="#8fa3c4" font-size="9">
+            RPS ${Number(met.rps || 0).toFixed(2)} | Err ${err.toFixed(2)}% | Avg ${Math.round(Number(met.p95 || 0))}ms
+          </text>
+        </g>
+      `;
     });
 
     nodes.forEach((n) => {
-      const color = nodeColor(n.status);
-      const pulse = n.status === "warning" || n.status === "critical";
-      svg += `<g>
-        <circle cx="${n.x}" cy="${n.y}" r="22" fill="#10203a" stroke="${color}" stroke-width="3">
-          <title>${n.id} | status=${n.status}</title>
-        </circle>
-        <text x="${n.x}" y="${n.y + 36}" fill="#c3d5ef" font-size="11" text-anchor="middle">${n.id}</text>
-      </g>`;
+      const color = nodeStatusColor(n.status || "healthy");
+      const dim = focus && n.id !== focus && n.service !== focus;
+      if (n.kind === "service") {
+        svg += `
+          <g class="dep-node service ${dim ? "dep-focus-dim" : ""}" data-service="${n.id}">
+            <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="8" ry="8" stroke="${color}" stroke-width="2"/>
+            <text x="${n.x + 10}" y="${n.y + 18}">${n.id}</text>
+            <text x="${n.x + 10}" y="${n.y + 34}" fill="#93a7c7" font-size="9">p95 ${Math.round(Number(n.metric.p95 || 0))}ms | err ${Number(n.metric.err || 0).toFixed(2)}%</text>
+          </g>
+        `;
+      } else {
+        svg += `
+          <g class="dep-node pod ${n.metric.anomaly ? "anomaly" : ""} ${dim ? "dep-focus-dim" : ""}" data-service="${n.service}">
+            <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="8" ry="8" stroke="${color}" stroke-width="1.8"/>
+            <text x="${n.x + 8}" y="${n.y + 14}">${n.id}</text>
+            <text x="${n.x + 8}" y="${n.y + 30}">CPU ${n.metric.cpu} | Mem ${n.metric.mem}</text>
+            <text x="${n.x + 8}" y="${n.y + 46}">Restart ${n.metric.restart} | Err ${n.metric.err}</text>
+            <text x="${n.x + 8}" y="${n.y + 62}">P95 ${n.metric.p95}</text>
+          </g>
+        `;
+      }
     });
+    svg += "</g>";
     el.dependencyMap.innerHTML = svg;
+  }
+
+  function rerenderMap() {
+    const c = state.lastData?.context || {};
+    const statsByService = {};
+    (c.components || []).forEach((svc) => {
+      const h = state.serviceHistory[svc.service];
+      statsByService[svc.service] = { p95: h ? (h.p95.at(-1) || 0) : 0, err: h ? (h.err.at(-1) || 0) : 0, rps: h ? (h.rps.at(-1) || 0) : 0 };
+    });
+    renderDependencyMap(c.components || [], c.component_summary || {}, statsByService, c.cluster_wiring || {});
+  }
+
+  function resetMapView() {
+    state.mapView.scale = 1;
+    state.mapView.tx = 0;
+    state.mapView.ty = 0;
+    state.mapView.focusService = null;
+    rerenderMap();
+  }
+
+  function fitMapView() {
+    const viewport = el.dependencyMap?.querySelector("#depViewport");
+    if (!viewport) return;
+    const bbox = viewport.getBBox();
+    if (!bbox.width || !bbox.height) return;
+    const vb = el.dependencyMap.viewBox.baseVal;
+    const s = Math.min((vb.width - 20) / bbox.width, (vb.height - 20) / bbox.height);
+    state.mapView.scale = clamp(s, 0.6, 1.8);
+    state.mapView.tx = (vb.width - bbox.width * state.mapView.scale) / 2 - bbox.x * state.mapView.scale;
+    state.mapView.ty = (vb.height - bbox.height * state.mapView.scale) / 2 - bbox.y * state.mapView.scale;
+    rerenderMap();
+  }
+
+  function bindMapInteractions() {
+    if (!el.dependencyMap) return;
+    el.dependencyMap.addEventListener("wheel", (ev) => {
+      ev.preventDefault();
+      state.mapView.scale = clamp(state.mapView.scale * (ev.deltaY < 0 ? 1.12 : 0.9), 0.5, 3.5);
+      rerenderMap();
+    }, { passive: false });
+    el.dependencyMap.addEventListener("pointerdown", (ev) => {
+      state.mapView.dragging = true;
+      state.mapView.dragStartX = ev.clientX - state.mapView.tx;
+      state.mapView.dragStartY = ev.clientY - state.mapView.ty;
+      el.dependencyMap.setPointerCapture(ev.pointerId);
+    });
+    el.dependencyMap.addEventListener("pointermove", (ev) => {
+      if (!state.mapView.dragging) return;
+      state.mapView.tx = ev.clientX - state.mapView.dragStartX;
+      state.mapView.ty = ev.clientY - state.mapView.dragStartY;
+      rerenderMap();
+    });
+    const stopDrag = (ev) => {
+      state.mapView.dragging = false;
+      if (ev?.pointerId != null) {
+        try { el.dependencyMap.releasePointerCapture(ev.pointerId); } catch (_e) {}
+      }
+    };
+    el.dependencyMap.addEventListener("pointerup", stopDrag);
+    el.dependencyMap.addEventListener("pointercancel", stopDrag);
+    el.dependencyMap.addEventListener("dblclick", () => {
+      state.mapView.scale = clamp(state.mapView.scale * 1.2, 0.5, 3.5);
+      rerenderMap();
+    });
+    el.dependencyMap.addEventListener("click", (ev) => {
+      const target = ev.target.closest("[data-service]");
+      if (!target) return;
+      const svc = target.getAttribute("data-service");
+      state.mapView.focusService = state.mapView.focusService === svc ? null : svc;
+      if (svc) {
+        el.service.value = svc;
+        refresh();
+      } else rerenderMap();
+    });
+    if (el.mapFitBtn) el.mapFitBtn.addEventListener("click", fitMapView);
+    if (el.mapResetBtn) el.mapResetBtn.addEventListener("click", resetMapView);
   }
 
   function updateSignatureHistory(analysis) {
@@ -583,7 +833,7 @@
     const vals = state.errorTrend.value;
     const n = vals.length;
     const recent = n >= 2 ? vals[n - 1] - vals[n - 2] : 0;
-    const arrow = recent > 0.1 ? "⬆" : recent < -0.1 ? "⬇" : "➡";
+    const arrow = recent > 0.1 ? "UP" : recent < -0.1 ? "DOWN" : "FLAT";
     const label = recent > 0.1 ? "Increasing" : recent < -0.1 ? "Decreasing" : "Stable";
     el.errorTrendArrow.textContent = arrow;
     el.errorTrendLabel.textContent = label;
@@ -597,7 +847,13 @@
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: false,
         interaction: { mode: "index", intersect: false },
+        onHover(_evt, elements, chart) {
+          if (!elements || !elements.length) return;
+          syncState.crosshairX = elements[0].index;
+          state.chartRegistry.forEach((c) => { if (c !== chart) c.draw(); });
+        },
         plugins: {
           legend: { display: false },
           tooltip: {
@@ -607,13 +863,31 @@
             titleColor: "#1f2937",
             bodyColor: "#1f2937",
           },
+          zoom: {
+            pan: { enabled: true, mode: "x" },
+            zoom: {
+              wheel: { enabled: true },
+              pinch: { enabled: true },
+              drag: { enabled: true, backgroundColor: "rgba(59,130,246,0.15)", borderColor: "rgba(59,130,246,0.45)", borderWidth: 1 },
+              mode: "x",
+            },
+            onZoomComplete(ctx) { applyZoomToAll(ctx.chart); },
+            onPanComplete(ctx) { applyZoomToAll(ctx.chart); }
+          }
         },
         scales: {
-          x: { ticks: { color: "#7a8799", maxTicksLimit: 8 }, grid: { color: "rgba(130,145,166,0.15)" } },
+          x: {
+            min: state.zoomWindow.min ?? undefined,
+            max: state.zoomWindow.max ?? undefined,
+            ticks: { color: "#7a8799", maxTicksLimit: 8 },
+            grid: { color: "rgba(130,145,166,0.15)" }
+          },
           y: { ticks: { color: "#7a8799" }, grid: { color: "rgba(130,145,166,0.15)" } }
         }
       }
     });
+    state.chartRegistry.set("error-trend", state.errorChart);
+    el.errorTrendChart.addEventListener("dblclick", resetZoomAll);
   }
 
   function renderRecentChanges(data) {
@@ -649,7 +923,7 @@
     state.timeline.forEach((e) => {
       const item = document.createElement("div");
       item.className = "event";
-      item.innerHTML = `<strong>${e.label}</strong><small>${e.type} • ${e.ts.replace("T", " ").slice(0, 19)}Z</small>`;
+      item.innerHTML = `<strong>${e.label}</strong><small>${e.type} - ${e.ts.replace("T", " ").slice(0, 19)}Z</small>`;
       el.timeline.appendChild(item);
     });
   }
@@ -689,12 +963,12 @@
       renderSignatures(data);
       renderCoverage(data);
       renderRaw(data);
-      renderErrorTrend((data.context?.metrics?.error_rate_5xx_5m || 0) * 100);
       renderRecentChanges(data);
 
       const components = data.context?.components || [];
       await hydrateServiceTelemetry(components, namespace, severity);
       renderTelemetryCards(components);
+      renderErrorTrend((data.context?.metrics?.error_rate_5xx_5m || 0) * 100);
       renderAi(data);
 
       const metrics = data.context?.metrics || {};
@@ -775,10 +1049,12 @@
     el.genTaskBtn.addEventListener("click", () => {
       alert("Instrumentation task generated.");
     });
+    bindMapInteractions();
   }
 
   function boot() {
     el.incidentStart.textContent = fmtDate(state.incidentStart);
+    initPanelWrappers();
     bindEvents();
     enforceRbac();
     setMainView("telemetry");
@@ -792,7 +1068,10 @@
   window.addEventListener("beforeunload", () => {
     if (refreshTimer) clearInterval(refreshTimer);
     if (durationTimer) clearInterval(durationTimer);
+    state.chartRegistry.forEach((chart) => chart.destroy());
+    state.chartRegistry.clear();
   });
 
   boot();
 })();
+
