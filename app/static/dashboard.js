@@ -555,10 +555,32 @@
       if (owner && !podByService[owner.id].includes(pod.id)) podByService[owner.id].push(pod.id);
     });
 
-    const width = 900;
-    const height = 420;
+    const containerWidth = Math.max(900, Math.floor(el.dependencyMap?.clientWidth || 900));
+    const serviceNodeW = 260;
+    const serviceNodeH = 52;
+    const podNodeW = 260;
+    const podNodeH = 102;
+    const colGap = 28;
+    const podGap = 14;
+    const topPad = 24;
+    const bottomPad = 24;
+    const leftPad = 24;
+    const rightPad = 24;
+    const minColWidth = serviceNodeW + colGap;
+    const columns = Math.max(1, Math.floor((containerWidth - leftPad - rightPad) / minColWidth));
+    const maxPodsInService = Math.max(1, ...services.map((s) => (podByService[s.id] || []).length));
+    const perServiceHeight = serviceNodeH + 18 + (maxPodsInService * (podNodeH + podGap));
+    const rowGap = 28;
+    const serviceRows = Math.max(1, Math.ceil(services.length / columns));
+    const width = Math.max(containerWidth, leftPad + rightPad + (Math.min(columns, Math.max(1, services.length)) * minColWidth));
+    const height = Math.max(460, topPad + bottomPad + (serviceRows * perServiceHeight) + ((serviceRows - 1) * rowGap));
     const focus = state.mapView.focusService;
     const nodeStatusColor = (status) => status === "critical" ? "#ef4444" : status === "warning" ? "#f59e0b" : "#22c55e";
+
+    if (el.dependencyMap) {
+      el.dependencyMap.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      el.dependencyMap.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    }
 
     let svg = `
       <defs>
@@ -572,12 +594,14 @@
 
     const nodes = [];
     services.forEach((svc, i) => {
-      const x = 40 + (i * 280);
-      const y = 24;
+      const col = i % columns;
+      const row = Math.floor(i / columns);
+      const x = leftPad + (col * minColWidth);
+      const y = topPad + (row * (perServiceHeight + rowGap));
       const svcStat = statsByService[svc.id] || { p95: 0, err: 0, rps: 0 };
-      nodes.push({ id: svc.id, kind: "service", x, y, w: 230, h: 44, status: svc.status || "healthy", metric: svcStat });
+      nodes.push({ id: svc.id, kind: "service", x, y, w: serviceNodeW, h: serviceNodeH, status: svc.status || "healthy", metric: svcStat });
       (podByService[svc.id] || []).sort().forEach((podName, pIdx) => {
-        const py = 88 + (pIdx * 98);
+        const py = y + serviceNodeH + 14 + (pIdx * (podNodeH + podGap));
         const err = Number(svcStat.err || 0);
         const p95 = Number(svcStat.p95 || 0);
         nodes.push({
@@ -586,8 +610,8 @@
           kind: "pod",
           x,
           y: py,
-          w: 230,
-          h: 86,
+          w: podNodeW,
+          h: podNodeH,
           status: err > 5 ? "critical" : (err > 1 ? "warning" : "healthy"),
           metric: {
             cpu: `${Math.round((svcStat.p95 || 0) / 30)}%`,
@@ -637,17 +661,17 @@
           <g class="dep-node service ${dim ? "dep-focus-dim" : ""}" data-service="${n.id}">
             <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="8" ry="8" stroke="${color}" stroke-width="2"/>
             <text x="${n.x + 10}" y="${n.y + 18}">${n.id}</text>
-            <text x="${n.x + 10}" y="${n.y + 34}" fill="#93a7c7" font-size="9">p95 ${Math.round(Number(n.metric.p95 || 0))}ms | err ${Number(n.metric.err || 0).toFixed(2)}%</text>
+            <text x="${n.x + 10}" y="${n.y + 34}" fill="#93a7c7" font-size="10">p95 ${Math.round(Number(n.metric.p95 || 0))}ms | err ${Number(n.metric.err || 0).toFixed(2)}%</text>
           </g>
         `;
       } else {
         svg += `
           <g class="dep-node pod ${n.metric.anomaly ? "anomaly" : ""} ${dim ? "dep-focus-dim" : ""}" data-service="${n.service}">
             <rect x="${n.x}" y="${n.y}" width="${n.w}" height="${n.h}" rx="8" ry="8" stroke="${color}" stroke-width="1.8"/>
-            <text x="${n.x + 8}" y="${n.y + 14}">${n.id}</text>
-            <text x="${n.x + 8}" y="${n.y + 30}">CPU ${n.metric.cpu} | Mem ${n.metric.mem}</text>
-            <text x="${n.x + 8}" y="${n.y + 46}">Restart ${n.metric.restart} | Err ${n.metric.err}</text>
-            <text x="${n.x + 8}" y="${n.y + 62}">P95 ${n.metric.p95}</text>
+            <text x="${n.x + 8}" y="${n.y + 16}">${n.id}</text>
+            <text x="${n.x + 8}" y="${n.y + 36}">CPU ${n.metric.cpu} | Mem ${n.metric.mem}</text>
+            <text x="${n.x + 8}" y="${n.y + 56}">Restart ${n.metric.restart} | Err ${n.metric.err}</text>
+            <text x="${n.x + 8}" y="${n.y + 76}">P95 ${n.metric.p95}</text>
           </g>
         `;
       }
