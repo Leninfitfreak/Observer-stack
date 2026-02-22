@@ -8,18 +8,18 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <header class="incident-header" id="incidentHeader">
+  <header class="incident-header sev-warning" id="incidentHeader">
     <div class="severity-strip" id="severityStrip"></div>
     <div class="header-grid">
       <div class="header-item"><span>Incident ID</span><strong id="incidentId">INC-000001</strong></div>
       <div class="header-item"><span>Status</span><strong id="incidentStatus">INVESTIGATING</strong></div>
-      <div class="header-item"><span>Severity</span><strong id="incidentSeverity">Medium</strong></div>
+      <div class="header-item"><span>Severity</span><strong id="incidentSeverity">MEDIUM</strong></div>
       <div class="header-item"><span>Start Time</span><strong id="incidentStart">-</strong></div>
       <div class="header-item"><span>Duration</span><strong id="incidentDuration">00:00:00</strong></div>
-      <div class="header-item"><span>Owner</span><strong id="incidentOwner">oncall-sre</strong></div>
+      <div class="header-item"><span>Assigned Owner</span><strong id="incidentOwner">oncall-sre</strong></div>
       <div class="header-item"><span>SLA Countdown</span><strong id="incidentSla">00:59:59</strong></div>
       <div class="header-item"><span>SLO Breach Risk</span><strong id="incidentRisk">0%</strong></div>
-      <div class="header-item"><span>Error Budget</span><strong id="incidentBudget">100%</strong></div>
+      <div class="header-item"><span>Error Budget Remaining</span><strong id="incidentBudget">100%</strong></div>
       <div class="header-item controls">
         <label for="roleSelect">Role</label>
         <select id="roleSelect">
@@ -29,10 +29,14 @@
         </select>
       </div>
     </div>
+    <div class="sla-progress-wrap">
+      <div class="sla-progress-label">SLA Window</div>
+      <div class="sla-progress"><span id="slaProgressBar"></span></div>
+    </div>
   </header>
 
   <main class="layout">
-    <section class="toolbar card">
+    <section class="toolbar card sev-info">
       <div class="filters">
         <label>Namespace <input id="namespace" value="dev"></label>
         <label>Service Scope <input id="service" value="all"></label>
@@ -54,43 +58,21 @@
       <div id="liveStatus" class="status">idle</div>
     </section>
 
-    <section id="telemetrySection" class="card">
+    <section class="quick-nav card sev-info" id="quickNav">
+      <button data-target="telemetrySection">Overview</button>
+      <button data-target="telemetrySection">Telemetry</button>
+      <button data-target="errorsSection">Errors</button>
+      <button data-target="aiSection">AI Analysis</button>
+      <button data-target="actionsSection">Actions</button>
+      <button data-target="coverageSection">Coverage</button>
+    </section>
+
+    <section id="telemetrySection" class="card sev-info">
       <h2>Live Telemetry (Last 30 Minutes)</h2>
       <div id="telemetryGrid" class="telemetry-grid"></div>
     </section>
 
-    <section id="aiSection" class="card split">
-      <div>
-        <h2>AI Correlation</h2>
-        <div class="kpi-row">
-          <div class="kpi"><span>Root Cause</span><strong id="rootCause">-</strong></div>
-          <div class="kpi"><span>Confidence</span><strong id="confidence">-</strong></div>
-          <div class="kpi"><span>Risk Window</span><strong id="riskWindow">-</strong></div>
-        </div>
-        <div class="panel">
-          <h3>Human Summary</h3>
-          <p id="humanSummary">-</p>
-        </div>
-        <div class="panel">
-          <h3>Confidence Breakdown</h3>
-          <div id="confidenceBreakdown" class="chips"></div>
-        </div>
-        <div class="panel">
-          <h3>Correlated Signals</h3>
-          <ul id="correlatedSignals"></ul>
-        </div>
-      </div>
-      <div>
-        <h2>Blast Radius / Dependency Map</h2>
-        <svg id="dependencyMap" viewBox="0 0 700 280" class="dependency-map"></svg>
-        <div class="panel">
-          <h3>Service Status Badges</h3>
-          <div id="serviceBadges" class="chips"></div>
-        </div>
-      </div>
-    </section>
-
-    <section class="card split">
+    <section id="errorsSection" class="card sev-warning split">
       <div>
         <h2>Error Signatures</h2>
         <div class="table-controls">
@@ -114,7 +96,7 @@
         </div>
       </div>
       <div>
-        <h2>Why Warning (Compact)</h2>
+        <h2>Why Warning</h2>
         <div class="table-wrap">
           <table>
             <thead>
@@ -132,38 +114,104 @@
       </div>
     </section>
 
-    <section class="card split">
+    <section id="aiSection" class="card sev-info split">
       <div>
-        <h2>Action Center</h2>
-        <div class="actions" id="actionCenter">
-          <button data-action="restart_pod">Restart Pod</button>
-          <button data-action="rollback_argocd">Rollback via ArgoCD</button>
-          <button data-action="open_runbook">Open Runbook</button>
-          <button data-action="create_jira">Create Jira Incident</button>
-          <button data-action="silence_alert">Silence Alert (Temp)</button>
+        <h2>AI Correlation</h2>
+        <div class="ai-top-row">
+          <div class="summary-two-line" id="rootCauseSummary">-</div>
+          <div class="kpi compact"><span>Confidence</span><strong id="confidence">-</strong></div>
+          <div class="kpi compact"><span>Risk Level</span><strong id="riskWindow">-</strong></div>
         </div>
-        <div class="panel">
-          <h3>Audit Trail</h3>
-          <ul id="auditTrail"></ul>
+        <div class="ai-tabs" id="aiTabs">
+          <button data-tab="signals" class="active">Signals</button>
+          <button data-tab="reasoning">Reasoning</button>
+          <button data-tab="json">JSON</button>
         </div>
+        <div id="aiTabSignals" class="ai-tab-content">
+          <div class="panel">
+            <h3>Confidence Breakdown</h3>
+            <div id="confidenceBreakdown" class="chips"></div>
+          </div>
+          <div class="panel">
+            <h3>Correlated Signals</h3>
+            <ul id="correlatedSignals"></ul>
+          </div>
+          <div class="panel">
+            <h3>Service Status Badges</h3>
+            <div id="serviceBadges" class="chips"></div>
+          </div>
+        </div>
+        <div id="aiTabReasoning" class="ai-tab-content hidden">
+          <details open>
+            <summary>Human Summary</summary>
+            <p id="humanSummary">-</p>
+          </details>
+          <details>
+            <summary>Detailed Reasoning</summary>
+            <pre id="reasoningJson">-</pre>
+          </details>
+        </div>
+        <div id="aiTabJson" class="ai-tab-content hidden">
+          <pre id="aiJson">-</pre>
+        </div>
+      </div>
+      <div>
+        <h2>Blast Radius / Dependency Map</h2>
+        <svg id="dependencyMap" viewBox="0 0 700 320" class="dependency-map"></svg>
       </div>
     </section>
 
-    <section class="card">
+    <section id="actionsSection" class="card sev-info split">
+      <div>
+        <h2>Action Center</h2>
+        <div class="action-groups" id="actionCenter">
+          <div class="action-group">
+            <h3>Recovery</h3>
+            <button data-action="restart_pod" class="action-blue">Restart Pod</button>
+            <button data-action="rollback_argocd" class="action-orange">Rollback via ArgoCD</button>
+          </div>
+          <div class="action-group">
+            <h3>Communication</h3>
+            <button data-action="create_jira" class="action-blue">Create Jira</button>
+            <button data-action="notify_slack" class="action-blue">Notify Slack</button>
+            <button data-action="open_runbook" class="action-blue">Open Runbook</button>
+          </div>
+          <div class="action-group">
+            <h3>Control</h3>
+            <button data-action="silence_alert" class="action-red">Silence Alert</button>
+            <button data-action="escalate_severity" class="action-orange">Escalate Severity</button>
+          </div>
+        </div>
+        <div class="last-action" id="lastAction">Last action: none</div>
+      </div>
+      <div>
+        <h2>Audit Trail</h2>
+        <ul id="auditTrail"></ul>
+      </div>
+    </section>
+
+    <section class="card sev-info">
       <h2>Incident Timeline</h2>
       <div id="timeline" class="timeline"></div>
     </section>
 
-    <section class="card split">
+    <section id="coverageSection" class="card sev-warning split">
       <div>
         <h2>Observability Coverage</h2>
-        <div class="kpi-row">
-          <div class="kpi"><span>Coverage Score</span><strong id="coverageScore">0%</strong></div>
-          <div class="kpi"><span>Missing Metrics</span><strong id="missingMetrics">0</strong></div>
-          <div class="kpi"><span>Missing Traces</span><strong id="missingTraces">0</strong></div>
-          <div class="kpi"><span>Missing Logs</span><strong id="missingLogs">0</strong></div>
+        <div class="coverage-bar-wrap">
+          <div class="coverage-bar"><span id="coverageBarFill"></span></div>
+          <div id="coverageScore" class="coverage-score">0%</div>
         </div>
-        <div class="panel"><h3>Instrumentation Gaps</h3><ul id="gapsList"></ul></div>
+        <details open>
+          <summary>Coverage Details</summary>
+          <div class="kpi-row">
+            <div class="kpi"><span>Missing Metrics</span><strong id="missingMetrics">0</strong></div>
+            <div class="kpi"><span>Missing Traces</span><strong id="missingTraces">0</strong></div>
+            <div class="kpi"><span>Missing Logs</span><strong id="missingLogs">0</strong></div>
+          </div>
+          <div class="panel"><h3>Instrumentation Gaps</h3><ul id="gapsList"></ul></div>
+        </details>
+        <button id="genTaskBtn" class="primary">Generate Instrumentation Task</button>
       </div>
       <div>
         <h2>Datasource Errors</h2>
@@ -171,11 +219,20 @@
       </div>
     </section>
 
-    <section id="rawSection" class="card hidden">
+    <section id="rawSection" class="card hidden sev-info">
       <h2>Raw Data</h2>
       <pre id="rawJson">-</pre>
     </section>
   </main>
+
+  <dialog id="signatureModal" class="signature-modal">
+    <h3 id="modalTitle">Signature Drilldown</h3>
+    <pre id="modalBody">-</pre>
+    <div class="modal-actions">
+      <button id="knownIssueBtn" class="action-blue">Mark as Known Issue</button>
+      <button id="closeModalBtn">Close</button>
+    </div>
+  </dialog>
 
   <script src="/static/dashboard.js"></script>
 </body>
