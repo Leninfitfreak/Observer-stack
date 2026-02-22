@@ -289,7 +289,7 @@
 
   function ensureHistory(service) {
     if (!state.serviceHistory[service]) {
-      state.serviceHistory[service] = { ts: [], rps: [], err: [], p95: [], p99: [], cpu: [], mem: [], db: [], kafka: [], anomaly: [], deploy: [] };
+      state.serviceHistory[service] = { ts: [], rps: [], err: [], p95: [], p99: [], cpu: [], mem: [], db: [], kafka: [], restarts: [], anomaly: [], deploy: [] };
     }
     return state.serviceHistory[service];
   }
@@ -325,6 +325,7 @@
     hist.mem.push((m.memory_usage_bytes || 0) / (1024 * 1024));
     hist.db.push((m.db_connection_pool_usage_5m || 0) * 100);
     hist.kafka.push(m.kafka_consumer_lag || 0);
+    hist.restarts.push(m.pod_restarts_10m || 0);
     hist.anomaly.push((m.anomalies || []).length > 0 ? 1 : 0);
     hist.deploy.push(d.deployment_changed_last_10m ? 1 : 0);
     capHistory(hist);
@@ -336,12 +337,22 @@
       const metrics = componentMetrics?.[svc] || {};
       if (hasMetricSignal(metrics)) {
         pushTelemetryPoint(svc, { metrics, deployment: fallbackContext?.deployment || {}, kubernetes: fallbackContext?.kubernetes || {} });
-      } else if (hasMetricSignal(fallbackContext?.metrics || {})) {
-        pushTelemetryPoint(svc, fallbackContext || {});
       } else {
         pushTelemetryPoint(svc, { metrics: {}, deployment: fallbackContext?.deployment || {}, kubernetes: fallbackContext?.kubernetes || {} });
       }
     });
+  }
+
+  function buildServiceStats(serviceName, history, componentMetrics) {
+    const m = componentMetrics?.[serviceName] || {};
+    const h = history || {};
+    const rps = Number(m.request_rate_rps_5m ?? h.rps?.at?.(-1) ?? 0) || 0;
+    const err = Number((m.error_rate_5xx_5m ?? 0) * 100 || h.err?.at?.(-1) || 0) || 0;
+    const p95 = Number((m.latency_p95_s_5m ?? 0) * 1000 || h.p95?.at?.(-1) || 0) || 0;
+    const cpu = Number((m.cpu_usage_cores_5m ?? 0) * 100 || h.cpu?.at?.(-1) || 0) || 0;
+    const mem = Number((m.memory_usage_bytes ?? 0) / (1024 * 1024) || h.mem?.at?.(-1) || 0) || 0;
+    const restarts = Number(m.pod_restarts_10m ?? h.restarts?.at?.(-1) ?? 0) || 0;
+    return { rps, err, p95, cpu, mem, restarts };
   }
 
   function chartConfig(hist) {
@@ -525,13 +536,10 @@
       el.serviceBadges.appendChild(x);
     });
     const statsByService = {};
+    const componentMetrics = c.component_metrics || {};
     (c.components || []).forEach((svc) => {
       const h = state.serviceHistory[svc.service];
-      statsByService[svc.service] = {
-        p95: h ? (h.p95.at(-1) || 0) : 0,
-        err: h ? (h.err.at(-1) || 0) : 0,
-        rps: h ? (h.rps.at(-1) || 0) : 0,
-      };
+      statsByService[svc.service] = buildServiceStats(svc.service, h, componentMetrics);
     });
     renderDependencyMap(c.components || [], c.component_summary || {}, statsByService, c.cluster_wiring || {});
   }
@@ -553,6 +561,10 @@
     pods.forEach((pod) => {
       const owner = services.find((s) => pod.id.includes(s.id.replace("-service", "")) || pod.id.includes(s.id));
       if (owner && !podByService[owner.id].includes(pod.id)) podByService[owner.id].push(pod.id);
+    });
+    const serviceForPod = {};
+    Object.entries(podByService).forEach(([svc, podNames]) => {
+      podNames.forEach((p) => { serviceForPod[p] = svc; });
     });
 
     const containerWidth = Math.max(900, Math.floor(el.dependencyMap?.clientWidth || 900));
@@ -598,7 +610,7 @@
       const row = Math.floor(i / columns);
       const x = leftPad + (col * minColWidth);
       const y = topPad + (row * (perServiceHeight + rowGap));
-      const svcStat = statsByService[svc.id] || { p95: 0, err: 0, rps: 0 };
+      const svcStat = statsByService[svc.id] || { p95: 0, err: 0, rps: 0, cpu: 0, mem: 0, restarts: 0 };
       nodes.push({ id: svc.id, kind: "service", x, y, w: serviceNodeW, h: serviceNodeH, status: svc.status || "healthy", metric: svcStat });
       (podByService[svc.id] || []).sort().forEach((podName, pIdx) => {
         const py = y + serviceNodeH + 14 + (pIdx * (podNodeH + podGap));
@@ -614,9 +626,9 @@
           h: podNodeH,
           status: err > 5 ? "critical" : (err > 1 ? "warning" : "healthy"),
           metric: {
-            cpu: `${Math.round((svcStat.p95 || 0) / 30)}%`,
-            mem: `${Math.round((svcStat.rps || 0) * 40)}MB`,
-            restart: `${err > 5 ? 1 : 0}`,
+            cpu: `${Math.round(svcStat.cpu || 0)}%`,
+            mem: `${Math.round(svcStat.mem || 0)}MB`,
+            restart: `${Math.round(svcStat.restarts || 0)}`,
             err: `${err.toFixed(2)}%`,
             p95: `${Math.round(p95)}ms`,
             anomaly: err > 5 || p95 > 800
@@ -628,12 +640,18 @@
     const nodeMap = {};
     nodes.forEach((n) => { nodeMap[n.id] = n; });
 
+    const renderedEdges = new Set();
     (wiring.edges || []).forEach((e) => {
       const from = nodeMap[e.from];
       const to = nodeMap[e.to];
       if (!from || !to) return;
-      const svcKey = from.kind === "service" ? from.id : to.id;
-      const met = statsByService[svcKey] || { p95: 0, err: 0, rps: 0 };
+      if (from.kind !== "service" || to.kind !== "pod") return;
+      const edgeKey = `${from.id}->${to.id}`;
+      if (renderedEdges.has(edgeKey)) return;
+      renderedEdges.add(edgeKey);
+      const svcKey = from.id || serviceForPod[to.id];
+      if (!svcKey || serviceForPod[to.id] !== svcKey) return;
+      const met = statsByService[svcKey] || { p95: 0, err: 0, rps: 0, cpu: 0, mem: 0, restarts: 0 };
       const err = Number(met.err || 0);
       const dim = focus && from.id !== focus && to.id !== focus && from.service !== focus && to.service !== focus;
       const color = err > 5 ? "#ef4444" : err > 1 ? "#f59e0b" : "#5f7ba3";
@@ -683,9 +701,10 @@
   function rerenderMap() {
     const c = state.lastData?.context || {};
     const statsByService = {};
+    const componentMetrics = c.component_metrics || {};
     (c.components || []).forEach((svc) => {
       const h = state.serviceHistory[svc.service];
-      statsByService[svc.service] = { p95: h ? (h.p95.at(-1) || 0) : 0, err: h ? (h.err.at(-1) || 0) : 0, rps: h ? (h.rps.at(-1) || 0) : 0 };
+      statsByService[svc.service] = buildServiceStats(svc.service, h, componentMetrics);
     });
     renderDependencyMap(c.components || [], c.component_summary || {}, statsByService, c.cluster_wiring || {});
   }
