@@ -40,6 +40,7 @@ class LlmClient:
         self.attempts = attempts if attempts is not None else int(os.getenv("LLM_ATTEMPTS", os.getenv("OLLAMA_ATTEMPTS", "1")))
         self.openai_base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        self.ollama_api_key = os.getenv("OLLAMA_API_KEY", self.openai_api_key)
 
     def analyze(self, context: dict[str, Any]) -> dict[str, Any]:
         prompt = f"{PROMPT_HEADER}\nContext:\n{json.dumps(context, indent=2)}"
@@ -54,11 +55,15 @@ class LlmClient:
             "stream": False,
             "format": "json",
         }
+        headers = {"Content-Type": "application/json"}
+        if self.ollama_api_key:
+            headers["Authorization"] = f"Bearer {self.ollama_api_key}"
+
         resp = request_with_retry(
             "POST",
             f"{self.base_url}/api/generate",
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             timeout=self.timeout_seconds,
             attempts=self.attempts,
         )
