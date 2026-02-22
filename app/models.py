@@ -26,6 +26,7 @@ class AlertmanagerWebhook(BaseModel):
 
 class AnalysisContext(BaseModel):
     alert: dict[str, Any]
+    time_window_minutes: int | None = None
     metrics: dict[str, Any]
     traces: dict[str, Any]
     logs: dict[str, Any]
