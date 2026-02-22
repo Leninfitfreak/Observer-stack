@@ -297,6 +297,20 @@
       if (Array.isArray(h[k]) && h[k].length > 90) h[k] = h[k].slice(-90);
     });
   }
+  function hasMetricSignal(metrics) {
+    if (!metrics || typeof metrics !== "object") return false;
+    const keys = [
+      "request_rate_rps_5m",
+      "error_rate_5xx_5m",
+      "latency_p95_s_5m",
+      "latency_p99_s_5m",
+      "cpu_usage_cores_5m",
+      "memory_usage_bytes",
+      "db_connection_pool_usage_5m",
+      "kafka_consumer_lag",
+    ];
+    return keys.some((k) => Number(metrics[k] || 0) > 0);
+  }
   function pushTelemetryPoint(service, context) {
     const hist = ensureHistory(service);
     const m = context.metrics || {};
@@ -315,17 +329,19 @@
     capHistory(hist);
   }
 
-  async function hydrateServiceTelemetry(components, namespace, severity) {
+  async function hydrateServiceTelemetry(components, namespace, severity, fallbackContext) {
     const jobs = (components || []).map(async (component) => {
       const svc = component.service;
       try {
         const data = await fetchReasoning(namespace, svc, severity);
-        pushTelemetryPoint(svc, data.context || {});
+        const ctx = data.context || {};
+        if (hasMetricSignal(ctx.metrics)) {
+          pushTelemetryPoint(svc, ctx);
+        } else {
+          pushTelemetryPoint(svc, fallbackContext || {});
+        }
       } catch (_e) {
-        const hist = ensureHistory(svc);
-        hist.ts.push(new Date().toLocaleTimeString());
-        ["rps", "err", "p95", "p99", "cpu", "mem", "db", "kafka", "anomaly", "deploy"].forEach((k) => hist[k].push(0));
-        capHistory(hist);
+        pushTelemetryPoint(svc, fallbackContext || {});
       }
     });
     await Promise.all(jobs);
@@ -966,7 +982,7 @@
       renderRecentChanges(data);
 
       const components = data.context?.components || [];
-      await hydrateServiceTelemetry(components, namespace, severity);
+      await hydrateServiceTelemetry(components, namespace, severity, data.context || {});
       renderTelemetryCards(components);
       renderErrorTrend((data.context?.metrics?.error_rate_5xx_5m || 0) * 100);
       renderAi(data);
