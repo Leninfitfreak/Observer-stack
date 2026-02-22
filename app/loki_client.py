@@ -22,7 +22,8 @@ class LokiClient:
             apps = [s.strip() for s in svc.split(",") if s.strip()]
 
         if apps:
-            escaped = "|".join(re.escape(a) for a in apps)
+            safe_apps = [re.sub(r'[^a-zA-Z0-9._-]', "", a) for a in apps]
+            escaped = "|".join(a for a in safe_apps if a)
             selector = (
                 f'{{namespace="{namespace}",pod=~".*({escaped}).*",container!="istio-proxy"}}'
             )
@@ -31,10 +32,10 @@ class LokiClient:
 
         return (
             f'{selector} |= "ERROR"'
-            ' |!= "loki-gateway"'
-            ' |!= "component=querier"'
-            ' |!= "component=frontend"'
-            ' |!= "query_range"'
+            ' != "loki-gateway"'
+            ' != "component=querier"'
+            ' != "component=frontend"'
+            ' != "query_range"'
         )
 
     def _normalize_signature(self, line: str) -> str:
