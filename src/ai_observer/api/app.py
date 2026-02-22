@@ -20,8 +20,12 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.state.container = build_container(cfg)
 
     repo_root = Path(__file__).resolve().parents[3]
-    static_dir = repo_root / "app" / "static"
-    if static_dir.exists():
+    static_candidates = [
+        repo_root / "app" / "static",  # local dev checkout
+        repo_root / "static",          # container image layout (/app/static)
+    ]
+    static_dir = next((p for p in static_candidates if p.exists()), None)
+    if static_dir is not None:
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
         @app.get("/dashboard")
