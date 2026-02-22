@@ -282,6 +282,7 @@ def _aggregate_snapshots(scope: str, alert: dict[str, str], snapshots: list[dict
         "deployment_generation_changes_10m": sum((snap["deployment"].get("deployment_generation_changes_10m") or 0) for snap in snapshots),
         "updated_replicas_changes_10m": sum((snap["deployment"].get("updated_replicas_changes_10m") or 0) for snap in snapshots),
         "ai_observer_frontend_changed_last_15m": any(bool(snap["deployment"].get("ai_observer_frontend_changed_last_15m")) for snap in snapshots) or app_boot_recent,
+        "ai_observer_started_at": APP_STARTED_AT.isoformat(),
         "argocd_deployment_history": "aggregated_multi_component",
         "cicd_pipeline_signals": "aggregated_multi_component",
     }

@@ -578,6 +578,13 @@
     const d = c.deployment || {};
     const list = [];
     if (d.ai_observer_frontend_changed_last_15m) list.push("AI Observer frontend deployment changed in last 15m.");
+    if (d.ai_observer_started_at) {
+      const started = new Date(d.ai_observer_started_at);
+      if (!Number.isNaN(started.getTime())) {
+        const ageMin = Math.max(0, Math.floor((Date.now() - started.getTime()) / 60000));
+        list.push(`AI Observer runtime age: ${ageMin}m since last pod start.`);
+      }
+    }
     if (d.deployment_changed_last_10m) list.push("Deployment change detected in last 10m.");
     if ((k.pod_restarts_10m || 0) > 0) list.push(`Pod restarts: ${k.pod_restarts_10m} in last 10m.`);
     if ((k.crashloop_pods || 0) > 0) list.push(`CrashLoopBackOff pods: ${k.crashloop_pods}.`);
