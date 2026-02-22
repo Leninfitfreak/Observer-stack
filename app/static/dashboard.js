@@ -509,7 +509,10 @@
     const c = data.context || {};
     const selectedService = (el.service?.value || c.alert?.service || "all").trim();
     const componentMetrics = c.component_metrics || {};
-    const services = Object.keys(componentMetrics);
+    const isInfra = (name) => ["ai-observer", "kafka", "postgres", "grafana", "prometheus", "jaeger", "loki", "vault", "argocd", "istio"].some((t) => String(name || "").toLowerCase().includes(t));
+    const servicesAll = Object.keys(componentMetrics);
+    const appServices = servicesAll.filter((s) => !isInfra(s));
+    const services = appServices.length ? appServices : servicesAll;
     const focusService = selectedService === "all" ? (services[0] || "all") : selectedService;
     const scopedMetrics = selectedService === "all"
       ? services.map((svc) => componentMetrics[svc] || {})
@@ -525,6 +528,8 @@
       .filter(([k]) => String(k).startsWith("prometheus"))
       .map(([, v]) => String(v));
     const hasSignal = rps > 0 || p95ms > 0 || errPct > 0 || cpuPct > 0 || memMb > 0;
+    const cpuUnavailable = rps > 0 && cpuPct === 0;
+    const memUnavailable = rps > 0 && memMb === 0;
 
     if (el.rootCauseSummary) el.rootCauseSummary.textContent = a.probable_root_cause || "-";
     if (el.confidence) el.confidence.textContent = a.confidence_score || "-";
@@ -543,8 +548,8 @@
         `Request rate: ${rps.toFixed(2)} rps ${rps > 0 ? "(active)" : "(low/no traffic)"}`,
         `p95 latency: ${p95ms}ms ${p95ms > 750 ? "(elevated)" : "(stable)"}`,
         `5xx error rate: ${errPct.toFixed(2)}% ${errPct > 5 ? "(elevated)" : "(stable)"}`,
-        `CPU usage: ${Math.round(cpuPct)}% ${(cpuPct > 80) ? "(high)" : "(normal)"}`,
-        `Memory usage: ${Math.round(memMb)}MB ${(memMb > 1024) ? "(high)" : "(normal)"}`,
+        `CPU usage: ${Math.round(cpuPct)}% ${cpuUnavailable ? "(unavailable from datasource)" : ((cpuPct > 80) ? "(high)" : "(normal)")}`,
+        `Memory usage: ${Math.round(memMb)}MB ${memUnavailable ? "(unavailable from datasource)" : ((memMb > 1024) ? "(high)" : "(normal)")}`,
       ];
       if (!hasSignal && promErrors.length) {
         metricLines.unshift(`Metrics source degraded: ${promErrors[0].slice(0, 160)}`);
