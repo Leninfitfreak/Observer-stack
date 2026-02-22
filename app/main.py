@@ -22,6 +22,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.minikube.internal:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 DEFAULT_NAMESPACE = os.getenv("DEFAULT_NAMESPACE", "dev")
 DEFAULT_SERVICE = os.getenv("DEFAULT_SERVICE", "all")
+ALL_SERVICES = [s.strip() for s in os.getenv("ALL_SERVICES", "product-service,order-service").split(",") if s.strip()]
 SLO_TARGET = float(os.getenv("SLO_TARGET", "0.995"))
 
 prom = PrometheusClient(PROMETHEUS_URL)
@@ -61,6 +62,8 @@ def _normalize_service_scope(namespace: str, service_value: str) -> tuple[str, l
         discovered = prom.discover_services(namespace)
         if discovered:
             return "all", discovered
+        if ALL_SERVICES:
+            return "all", ALL_SERVICES
         fallback = DEFAULT_SERVICE if DEFAULT_SERVICE not in {"all", "*"} else "order-service"
         return "single", [fallback]
 
