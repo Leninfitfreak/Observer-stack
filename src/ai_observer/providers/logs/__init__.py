@@ -1,0 +1,1 @@
+from .loki_provider import LokiLogsProvider
