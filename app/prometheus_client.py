@@ -97,12 +97,17 @@ class PrometheusClient:
         thread_pool_q = (
             f'sum(max_over_time(jvm_threads_live_threads{{{req_filter}}}[5m]))'
             f' / clamp_min(sum(max_over_time(jvm_threads_peak_threads{{{req_filter}}}[5m])), 1)'
+            f' or aiobserver:thread_pool_saturation_5m'
         )
         db_pool_q = (
             f'sum(max_over_time(hikaricp_connections_active{{{req_filter}}}[5m]))'
             f' / clamp_min(sum(max_over_time(hikaricp_connections_max{{{req_filter}}}[5m])), 1)'
+            f' or aiobserver:db_connection_pool_usage_5m'
         )
-        kafka_lag_q = f'sum(kafka_consumergroup_lag{{namespace="{namespace}"}})'
+        kafka_lag_q = (
+            f'sum(kafka_consumergroup_lag{{namespace="{namespace}"}})'
+            f' or aiobserver:kafka_consumer_lag{{namespace="{namespace}"}}'
+        )
 
         req_dev = self._baseline_deviation(
             req_rate_q,
