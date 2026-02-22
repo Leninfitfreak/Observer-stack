@@ -235,9 +235,13 @@ def _aggregate_snapshots(scope: str, alert: dict[str, str], snapshots: list[dict
     metrics = {
         "request_rate_rps_5m": sum((snap["metrics"].get("request_rate_rps_5m") or 0) for snap in snapshots),
         "latency_p95_s_5m": max((snap["metrics"].get("latency_p95_s_5m") or 0) for snap in snapshots),
+        "latency_p99_s_5m": max((snap["metrics"].get("latency_p99_s_5m") or 0) for snap in snapshots),
         "error_rate_5xx_5m": max((snap["metrics"].get("error_rate_5xx_5m") or 0) for snap in snapshots),
         "cpu_usage_cores_5m": sum((snap["metrics"].get("cpu_usage_cores_5m") or 0) for snap in snapshots),
         "memory_usage_bytes": sum((snap["metrics"].get("memory_usage_bytes") or 0) for snap in snapshots),
+        "thread_pool_saturation_5m": max((snap["metrics"].get("thread_pool_saturation_5m") or 0) for snap in snapshots),
+        "db_connection_pool_usage_5m": max((snap["metrics"].get("db_connection_pool_usage_5m") or 0) for snap in snapshots),
+        "kafka_consumer_lag": sum((snap["metrics"].get("kafka_consumer_lag") or 0) for snap in snapshots),
         "anomalies": sorted({a for snap in snapshots for a in (snap["metrics"].get("anomalies") or [])}),
     }
     traces = {
