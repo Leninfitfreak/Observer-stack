@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -35,6 +35,17 @@ llm = LlmClient(OLLAMA_URL, model=LLM_MODEL)
 app = FastAPI(title="AI Observer Agent", version="2.1.0")
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.middleware("http")
+async def dashboard_no_cache(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/dashboard" or path in {"/static/dashboard.js", "/static/dashboard.css", "/static/dashboard.html"}:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 def _extract_alert_fields(payload: AlertmanagerWebhook) -> dict[str, str]:
