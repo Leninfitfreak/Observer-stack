@@ -31,10 +31,17 @@ class PrometheusMetricsProvider:
 
     @staticmethod
     def _regex_union(values: list[str]) -> str:
-        escaped = [re.escape(v) for v in values if v]
-        if not escaped:
+        # PromQL label regex uses RE2 string escaping; escaping '-' as '\-'
+        # can produce parse errors. Keep literals simple and only escape
+        # backslash and quote for safety.
+        normalized = [
+            str(v).replace("\\", "\\\\").replace('"', '\\"')
+            for v in values
+            if v
+        ]
+        if not normalized:
             return ".*"
-        return f"^({'|'.join(escaped)})$"
+        return f"^({'|'.join(normalized)})$"
 
     @staticmethod
     def _derive_workload_from_pod(pod_name: str) -> str:

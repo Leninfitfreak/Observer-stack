@@ -508,12 +508,23 @@
     const a = data.analysis || {};
     const c = data.context || {};
     const selectedService = (el.service?.value || c.alert?.service || "all").trim();
-    const focusService = selectedService === "all" ? (c.components?.[0]?.service || "all") : selectedService;
-    const cm = c.component_metrics?.[focusService] || {};
-    const p95ms = Math.round(Number(cm.latency_p95_s_5m || 0) * 1000);
-    const errPct = Number(cm.error_rate_5xx_5m || 0) * 100;
-    const cpuPct = Number(cm.cpu_usage_cores_5m || 0) * 100;
-    const memMb = Number(cm.memory_usage_bytes || 0) / (1024 * 1024);
+    const componentMetrics = c.component_metrics || {};
+    const services = Object.keys(componentMetrics);
+    const focusService = selectedService === "all" ? (services[0] || "all") : selectedService;
+    const scopedMetrics = selectedService === "all"
+      ? services.map((svc) => componentMetrics[svc] || {})
+      : [componentMetrics[focusService] || {}];
+    const sumBy = (k) => scopedMetrics.reduce((acc, m) => acc + Number(m?.[k] || 0), 0);
+    const maxBy = (k) => scopedMetrics.reduce((acc, m) => Math.max(acc, Number(m?.[k] || 0)), 0);
+    const p95ms = Math.round(maxBy("latency_p95_s_5m") * 1000);
+    const errPct = maxBy("error_rate_5xx_5m") * 100;
+    const cpuPct = maxBy("cpu_usage_cores_5m") * 100;
+    const memMb = sumBy("memory_usage_bytes") / (1024 * 1024);
+    const rps = sumBy("request_rate_rps_5m");
+    const promErrors = Object.entries(c.datasource_errors || {})
+      .filter(([k]) => String(k).startsWith("prometheus"))
+      .map(([, v]) => String(v));
+    const hasSignal = rps > 0 || p95ms > 0 || errPct > 0 || cpuPct > 0 || memMb > 0;
 
     if (el.rootCauseSummary) el.rootCauseSummary.textContent = a.probable_root_cause || "-";
     if (el.confidence) el.confidence.textContent = a.confidence_score || "-";
@@ -522,18 +533,22 @@
     if (el.reasoningJson) el.reasoningJson.textContent = JSON.stringify({ causal_chain: a.causal_chain || [], corrective_actions: a.corrective_actions || [], preventive_hardening: a.preventive_hardening || [] }, null, 2);
     if (el.aiJson) el.aiJson.textContent = JSON.stringify({ analysis: a, component_summary: c.component_summary || {} }, null, 2);
     if (el.incidentSummaryText) {
-      el.incidentSummaryText.textContent = `Incident ${state.incidentId} | Severity ${String(el.severity?.value || "warning").toUpperCase()} | Service ${focusService}.`;
+      el.incidentSummaryText.textContent = `Incident ${state.incidentId} | Severity ${String(el.severity?.value || "warning").toUpperCase()} | Service ${selectedService === "all" ? "all-services" : focusService}.`;
     }
     if (el.rootCauseHypothesisText) {
       el.rootCauseHypothesisText.textContent = a.human_summary || a.probable_root_cause || "No dominant hypothesis generated.";
     }
     if (el.metricSummarySignals) {
       const metricLines = [
+        `Request rate: ${rps.toFixed(2)} rps ${rps > 0 ? "(active)" : "(low/no traffic)"}`,
         `p95 latency: ${p95ms}ms ${p95ms > 750 ? "(elevated)" : "(stable)"}`,
         `5xx error rate: ${errPct.toFixed(2)}% ${errPct > 5 ? "(elevated)" : "(stable)"}`,
         `CPU usage: ${Math.round(cpuPct)}% ${(cpuPct > 80) ? "(high)" : "(normal)"}`,
         `Memory usage: ${Math.round(memMb)}MB ${(memMb > 1024) ? "(high)" : "(normal)"}`,
       ];
+      if (!hasSignal && promErrors.length) {
+        metricLines.unshift(`Metrics source degraded: ${promErrors[0].slice(0, 160)}`);
+      }
       el.metricSummarySignals.innerHTML = "";
       metricLines.forEach((line) => {
         const li = document.createElement("li");
