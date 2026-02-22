@@ -31,10 +31,10 @@ class LokiClient:
 
         return (
             f'{selector} |= "ERROR"'
-            ' != "loki-gateway"'
-            ' != "component=querier"'
-            ' != "component=frontend"'
-            ' != "query_range"'
+            ' |!= "loki-gateway"'
+            ' |!= "component=querier"'
+            ' |!= "component=frontend"'
+            ' |!= "query_range"'
         )
 
     def _normalize_signature(self, line: str) -> str:
