@@ -47,6 +47,13 @@ body {
   border-bottom: 1px solid var(--border);
   box-shadow: 0 6px 18px var(--shadow);
 }
+.incident-header > .severity-strip,
+.incident-header > .header-grid,
+.incident-header > .sla-progress-wrap {
+  max-width: 1360px;
+  margin-left: auto;
+  margin-right: auto;
+}
 .severity-strip { height: 5px; background: var(--warn); }
 .header-grid {
   display: grid;
@@ -86,7 +93,13 @@ body {
   background: linear-gradient(90deg, var(--ok), var(--warn));
 }
 
-.layout { padding: 14px; display: grid; gap: 14px; }
+.layout {
+  padding: 14px;
+  display: grid;
+  gap: 14px;
+  max-width: 1360px;
+  margin: 0 auto;
+}
 .card {
   position: relative;
   background: linear-gradient(170deg, var(--panel), #111b2d);
@@ -398,7 +411,19 @@ pre::selection { background: rgba(59, 130, 246, 0.35); }
 @media (max-width: 1300px) {
   .header-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
+@media (max-width: 1540px) {
+  .header-grid { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  .layout { max-width: 1240px; }
+}
+@media (max-width: 1440px) {
+  .header-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .layout { max-width: 1120px; }
+}
+@media (max-width: 1280px) {
+  .layout { max-width: 1024px; }
+}
 @media (max-width: 960px) {
   .header-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .split, .telemetry-grid, .kpi-row, .ai-top-row { grid-template-columns: 1fr; }
+  .layout { max-width: none; }
 }
