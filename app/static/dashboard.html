@@ -63,6 +63,7 @@
         <label id="customWindowWrap" class="hidden">Custom (m) <input id="customWindow" type="number" min="5" max="360" value="30"></label>
         <label>Refresh (sec) <input id="interval" type="number" min="5" value="20"></label>
         <button id="refreshBtn" class="primary">Refresh</button>
+        <button id="rawToggleBtn" type="button">Raw JSON</button>
       </div>
       <div class="view-toggle" id="viewToggle">
         <button data-view="ai" class="active">AI View</button>
@@ -143,43 +144,37 @@
 
     <section id="aiSection" class="card sev-info split panel-wrapper" data-panel-id="ai">
       <div>
-        <h2>AI Correlation</h2>
+        <h2>Observability Agent</h2>
         <div class="ai-top-row">
           <div class="summary-two-line" id="rootCauseSummary">-</div>
           <div class="kpi compact"><span>Confidence</span><strong id="confidence">-</strong></div>
           <div class="kpi compact"><span>Risk Level</span><strong id="riskWindow">-</strong></div>
         </div>
-        <div class="ai-tabs" id="aiTabs">
-          <button data-tab="signals" class="active">Signals</button>
-          <button data-tab="reasoning">Reasoning</button>
-          <button data-tab="json">JSON</button>
-        </div>
         <div id="aiTabSignals" class="ai-tab-content">
+          <div class="panel">
+            <h3>Incident Summary</h3>
+            <p id="incidentSummaryText">-</p>
+          </div>
+          <div class="panel">
+            <h3>Root Cause Hypothesis</h3>
+            <p id="rootCauseHypothesisText">-</p>
+          </div>
+          <div class="panel">
+            <h3>Metric Summary (Last 15m)</h3>
+            <ul id="metricSummarySignals"></ul>
+          </div>
           <div class="panel">
             <h3>Confidence Breakdown</h3>
             <div id="confidenceBreakdown" class="chips"></div>
           </div>
           <div class="panel">
-            <h3>Correlated Signals</h3>
+            <h3>Supporting Signals</h3>
             <ul id="correlatedSignals"></ul>
           </div>
           <div class="panel">
-            <h3>Service Status Badges</h3>
-            <div id="serviceBadges" class="chips"></div>
+            <h3>Suggested Actions</h3>
+            <ol id="suggestedActions"></ol>
           </div>
-        </div>
-        <div id="aiTabReasoning" class="ai-tab-content hidden">
-          <details open>
-            <summary>Human Summary</summary>
-            <p id="humanSummary">-</p>
-          </details>
-          <details>
-            <summary>Detailed Reasoning</summary>
-            <pre id="reasoningJson">-</pre>
-          </details>
-        </div>
-        <div id="aiTabJson" class="ai-tab-content hidden">
-          <pre id="aiJson">-</pre>
         </div>
       </div>
       <div>

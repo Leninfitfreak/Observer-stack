@@ -151,8 +151,20 @@ h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
 .hidden { display: none; }
 
 #aiSection.split {
-  grid-template-columns: minmax(360px, 1.05fr) minmax(520px, 1.45fr);
+  grid-template-columns: minmax(720px, 1fr);
   align-items: start;
+}
+
+#aiSection.split > div:last-child {
+  display: none;
+}
+
+#telemetrySection,
+#errorsSection,
+#coverageSection,
+.quick-nav,
+#viewToggle {
+  display: none;
 }
 
 #coverageSection.split {
@@ -353,6 +365,19 @@ pre::selection { background: rgba(59, 130, 246, 0.35); }
   border-radius: 12px;
   background: var(--panel);
   color: var(--text);
+}
+
+#incidentSummaryText,
+#rootCauseHypothesisText {
+  margin: 0;
+  line-height: 1.5;
+}
+
+#metricSummarySignals,
+#suggestedActions {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.5;
 }
 .signature-modal::backdrop { background: rgba(0, 0, 0, 0.5); }
 .modal-actions { margin-top: 10px; display: flex; gap: 8px; justify-content: flex-end; }

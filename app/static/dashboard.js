@@ -122,6 +122,7 @@
     customWindow: document.getElementById("customWindow"),
     interval: document.getElementById("interval"),
     refreshBtn: document.getElementById("refreshBtn"),
+    rawToggleBtn: document.getElementById("rawToggleBtn"),
     roleSelect: document.getElementById("roleSelect"),
     viewToggle: document.getElementById("viewToggle"),
     quickNav: document.getElementById("quickNav"),
@@ -138,10 +139,14 @@
     recentChanges: document.getElementById("recentChanges"),
     liveStatus: document.getElementById("liveStatus"),
     rootCauseSummary: document.getElementById("rootCauseSummary"),
+    incidentSummaryText: document.getElementById("incidentSummaryText"),
+    rootCauseHypothesisText: document.getElementById("rootCauseHypothesisText"),
+    metricSummarySignals: document.getElementById("metricSummarySignals"),
     confidence: document.getElementById("confidence"),
     riskWindow: document.getElementById("riskWindow"),
     confidenceBreakdown: document.getElementById("confidenceBreakdown"),
     correlatedSignals: document.getElementById("correlatedSignals"),
+    suggestedActions: document.getElementById("suggestedActions"),
     serviceBadges: document.getElementById("serviceBadges"),
     dependencyMap: document.getElementById("dependencyMap"),
     mapFitBtn: document.getElementById("mapFitBtn"),
@@ -507,41 +512,73 @@
   function renderAi(data) {
     const a = data.analysis || {};
     const c = data.context || {};
-    el.rootCauseSummary.textContent = a.probable_root_cause || "-";
-    el.confidence.textContent = a.confidence_score || "-";
-    el.riskWindow.textContent = a.risk_forecast?.predicted_breach_window || "-";
-    el.humanSummary.textContent = a.human_summary || "-";
-    el.reasoningJson.textContent = JSON.stringify({ causal_chain: a.causal_chain || [], corrective_actions: a.corrective_actions || [], preventive_hardening: a.preventive_hardening || [] }, null, 2);
-    el.aiJson.textContent = JSON.stringify({ analysis: a, component_summary: c.component_summary || {} }, null, 2);
+    const selectedService = (el.service?.value || c.alert?.service || "all").trim();
+    const focusService = selectedService === "all" ? (c.components?.[0]?.service || "all") : selectedService;
+    const cm = c.component_metrics?.[focusService] || {};
+    const p95ms = Math.round(Number(cm.latency_p95_s_5m || 0) * 1000);
+    const errPct = Number(cm.error_rate_5xx_5m || 0) * 100;
+    const cpuPct = Number(cm.cpu_usage_cores_5m || 0) * 100;
+    const memMb = Number(cm.memory_usage_bytes || 0) / (1024 * 1024);
+
+    if (el.rootCauseSummary) el.rootCauseSummary.textContent = a.probable_root_cause || "-";
+    if (el.confidence) el.confidence.textContent = a.confidence_score || "-";
+    if (el.riskWindow) el.riskWindow.textContent = a.risk_forecast?.predicted_breach_window || "-";
+    if (el.humanSummary) el.humanSummary.textContent = a.human_summary || "-";
+    if (el.reasoningJson) el.reasoningJson.textContent = JSON.stringify({ causal_chain: a.causal_chain || [], corrective_actions: a.corrective_actions || [], preventive_hardening: a.preventive_hardening || [] }, null, 2);
+    if (el.aiJson) el.aiJson.textContent = JSON.stringify({ analysis: a, component_summary: c.component_summary || {} }, null, 2);
+    if (el.incidentSummaryText) {
+      el.incidentSummaryText.textContent = `Incident ${state.incidentId} | Severity ${String(el.severity?.value || "warning").toUpperCase()} | Service ${focusService}.`;
+    }
+    if (el.rootCauseHypothesisText) {
+      el.rootCauseHypothesisText.textContent = a.human_summary || a.probable_root_cause || "No dominant hypothesis generated.";
+    }
+    if (el.metricSummarySignals) {
+      const metricLines = [
+        `p95 latency: ${p95ms}ms ${p95ms > 750 ? "(elevated)" : "(stable)"}`,
+        `5xx error rate: ${errPct.toFixed(2)}% ${errPct > 5 ? "(elevated)" : "(stable)"}`,
+        `CPU usage: ${Math.round(cpuPct)}% ${(cpuPct > 80) ? "(high)" : "(normal)"}`,
+        `Memory usage: ${Math.round(memMb)}MB ${(memMb > 1024) ? "(high)" : "(normal)"}`,
+      ];
+      el.metricSummarySignals.innerHTML = "";
+      metricLines.forEach((line) => {
+        const li = document.createElement("li");
+        li.textContent = line;
+        el.metricSummarySignals.appendChild(li);
+      });
+    }
 
     const conf = deriveConfidenceBreakdown(data);
-    el.confidenceBreakdown.innerHTML = `
+    if (el.confidenceBreakdown) el.confidenceBreakdown.innerHTML = `
       <span class="chip">Metric ${conf.metric}%</span>
       <span class="chip">Logs ${conf.logs}%</span>
       <span class="chip">Trace ${conf.trace}%</span>
       <span class="chip">Historical ${conf.historical}%</span>
     `;
-    el.correlatedSignals.innerHTML = "";
+    if (el.correlatedSignals) el.correlatedSignals.innerHTML = "";
     (a.causal_chain || ["No strong multi-signal causal chain detected"]).forEach((line) => {
+      if (!el.correlatedSignals) return;
       const li = document.createElement("li");
       li.textContent = line;
       el.correlatedSignals.appendChild(li);
     });
-    el.serviceBadges.innerHTML = "";
-    (c.components || []).forEach((s) => {
-      const x = document.createElement("span");
-      x.className = "chip";
-      x.style.borderColor = s.status === "critical" ? "var(--crit)" : s.status === "warning" ? "var(--warn)" : "var(--ok)";
-      x.textContent = `${s.service} - ${s.status}`;
-      el.serviceBadges.appendChild(x);
-    });
+    if (el.suggestedActions) {
+      const steps = [...(a.corrective_actions || []), ...(a.recommended_remediation ? [a.recommended_remediation] : [])].slice(0, 4);
+      el.suggestedActions.innerHTML = "";
+      (steps.length ? steps : ["Continue monitoring and validate service dependencies."]).forEach((step) => {
+        const li = document.createElement("li");
+        li.textContent = step;
+        el.suggestedActions.appendChild(li);
+      });
+    }
     const statsByService = {};
     const componentMetrics = c.component_metrics || {};
     (c.components || []).forEach((svc) => {
       const h = state.serviceHistory[svc.service];
       statsByService[svc.service] = buildServiceStats(svc.service, h, componentMetrics);
     });
-    renderDependencyMap(c.components || [], c.component_summary || {}, statsByService, c.cluster_wiring || {});
+    if (el.dependencyMap && el.dependencyMap.offsetParent !== null) {
+      renderDependencyMap(c.components || [], c.component_summary || {}, statsByService, c.cluster_wiring || {});
+    }
   }
 
   function renderDependencyMap(components, summary, statsByService, clusterWiring) {
@@ -1009,10 +1046,14 @@
   }
 
   function setAiTab(tab) {
+    if (!el.aiTabs) return;
     el.aiTabs.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
-    document.getElementById("aiTabSignals").classList.toggle("hidden", tab !== "signals");
-    document.getElementById("aiTabReasoning").classList.toggle("hidden", tab !== "reasoning");
-    document.getElementById("aiTabJson").classList.toggle("hidden", tab !== "json");
+    const sig = document.getElementById("aiTabSignals");
+    const rea = document.getElementById("aiTabReasoning");
+    const jsn = document.getElementById("aiTabJson");
+    if (sig) sig.classList.toggle("hidden", tab !== "signals");
+    if (rea) rea.classList.toggle("hidden", tab !== "reasoning");
+    if (jsn) jsn.classList.toggle("hidden", tab !== "json");
   }
 
   function renderRaw(data) {
@@ -1035,15 +1076,25 @@
       renderRecentChanges(data);
 
       const components = data.context?.components || [];
-      await hydrateServiceTelemetry(
-        components,
-        namespace,
-        severity,
-        data.context || {},
-        data.context?.component_metrics || {}
-      );
-      renderTelemetryCards(components);
-      renderErrorTrend((data.context?.metrics?.error_rate_5xx_5m || 0) * 100);
+      if (el.telemetrySection && el.telemetrySection.offsetParent !== null) {
+        await hydrateServiceTelemetry(
+          components,
+          namespace,
+          severity,
+          data.context || {},
+          data.context?.component_metrics || {}
+        );
+        renderTelemetryCards(components);
+        renderErrorTrend((data.context?.metrics?.error_rate_5xx_5m || 0) * 100);
+      } else {
+        await hydrateServiceTelemetry(
+          components,
+          namespace,
+          severity,
+          data.context || {},
+          data.context?.component_metrics || {}
+        );
+      }
       renderAi(data);
 
       const metrics = data.context?.metrics || {};
@@ -1072,6 +1123,11 @@
     el.viewToggle.addEventListener("click", (e) => {
       if (e.target.tagName === "BUTTON") setMainView(e.target.dataset.view);
     });
+    if (el.rawToggleBtn) {
+      el.rawToggleBtn.addEventListener("click", () => {
+        el.rawSection.classList.toggle("hidden");
+      });
+    }
     el.timeWindow.addEventListener("change", () => {
       el.customWindowWrap.classList.toggle("hidden", el.timeWindow.value !== "custom");
       refresh();
@@ -1084,9 +1140,11 @@
       if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
       el.quickNav.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === e.target));
     });
-    el.aiTabs.addEventListener("click", (e) => {
-      if (e.target.tagName === "BUTTON") setAiTab(e.target.dataset.tab);
-    });
+    if (el.aiTabs) {
+      el.aiTabs.addEventListener("click", (e) => {
+        if (e.target.tagName === "BUTTON") setAiTab(e.target.dataset.tab);
+      });
+    }
     el.telemetryGrid.addEventListener("click", (e) => {
       const btn = e.target.closest("button[data-open]");
       if (!btn) return;
@@ -1132,7 +1190,7 @@
     initPanelWrappers();
     bindEvents();
     enforceRbac();
-    setMainView("telemetry");
+    setMainView("ai");
     setAiTab("signals");
     restartAutoRefresh();
     refresh();
