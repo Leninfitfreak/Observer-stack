@@ -21,6 +21,36 @@ class PrometheusClient:
             return None
         return clean_float(result[0]["value"][1])
 
+    def discover_services(self, namespace: str) -> list[str]:
+        queries = [
+            f'sum(kube_deployment_status_replicas{{namespace="{namespace}"}}) by (deployment)',
+            f'sum(kube_pod_container_status_ready{{namespace="{namespace}"}}) by (pod)',
+        ]
+        names: set[str] = set()
+        for q in queries:
+            try:
+                rows = self.query(q)
+            except Exception:
+                continue
+            for row in rows:
+                metric = row.get("metric", {})
+                dep = metric.get("deployment")
+                if dep:
+                    names.add(dep)
+                    continue
+                pod = metric.get("pod", "")
+                if pod:
+                    parts = pod.split("-")
+                    if len(parts) >= 3:
+                        names.add("-".join(parts[:-2]))
+
+        filtered = []
+        for name in sorted(names):
+            if name.startswith(("ai-observer", "prometheus", "grafana", "loki", "jaeger", "alertmanager")):
+                continue
+            filtered.append(name)
+        return filtered
+
     def _baseline_deviation(self, current_q: str, baseline_q: str) -> float | None:
         current = self.query_scalar(current_q)
         baseline = self.query_scalar(baseline_q)

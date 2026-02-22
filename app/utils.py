@@ -1,6 +1,7 @@
 import json
 import logging
 import math
+import re
 import time
 from typing import Any
 
@@ -47,8 +48,45 @@ def request_with_retry(
 
 
 def parse_json_safe(value: str) -> dict[str, Any]:
+    if not value:
+        return {}
+
+    def _try_parse(raw: str) -> dict[str, Any]:
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    parsed = _try_parse(value)
+    if parsed:
+        return parsed
+
+    cleaned = value.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+        parsed = _try_parse(cleaned)
+        if parsed:
+            return parsed
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        candidate = cleaned[start : end + 1]
+        parsed = _try_parse(candidate)
+        if parsed:
+            return parsed
+
+        repaired = candidate
+        repaired = repaired.replace("“", '"').replace("”", '"').replace("’", "'")
+        repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+        repaired = re.sub(r"\n\s*\n", "\n", repaired)
+        parsed = _try_parse(repaired)
+        if parsed:
+            return parsed
+
     try:
-        parsed = json.loads(value)
+        parsed = json.loads(cleaned)
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}

@@ -48,6 +48,58 @@ class LlmClient:
             return self._analyze_openai(prompt)
         return self._analyze_ollama(prompt)
 
+    def _repair_json_with_ollama(self, raw_text: str) -> dict[str, Any]:
+        payload = {
+            "model": self.model,
+            "prompt": (
+                "Convert the following text into one strict JSON object only. "
+                "Do not include markdown or explanation.\n\n"
+                f"{raw_text}"
+            ),
+            "stream": False,
+            "format": "json",
+        }
+        headers = {"Content-Type": "application/json"}
+        if self.ollama_api_key:
+            headers["Authorization"] = f"Bearer {self.ollama_api_key}"
+        resp = request_with_retry(
+            "POST",
+            f"{self.base_url}/api/generate",
+            json=payload,
+            headers=headers,
+            timeout=self.timeout_seconds,
+            attempts=1,
+        )
+        body = resp.json()
+        return parse_json_safe(body.get("response", ""))
+
+    def _repair_json_with_openai(self, raw_text: str) -> dict[str, Any]:
+        if not self.openai_api_key:
+            return {}
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "Return only valid JSON object. No prose."},
+                {"role": "user", "content": f"Fix this as strict JSON object:\n{raw_text}"},
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.0,
+        }
+        resp = request_with_retry(
+            "POST",
+            f"{self.openai_base_url}/chat/completions",
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.openai_api_key}",
+            },
+            timeout=self.timeout_seconds,
+            attempts=1,
+        )
+        body = resp.json()
+        content = (((body.get("choices") or [{}])[0]).get("message") or {}).get("content", "")
+        return parse_json_safe(content)
+
     def _analyze_ollama(self, prompt: str) -> dict[str, Any]:
         payload = {
             "model": self.model,
@@ -72,6 +124,9 @@ class LlmClient:
         parsed = parse_json_safe(raw)
         if parsed:
             return parsed
+        repaired = self._repair_json_with_ollama(raw)
+        if repaired:
+            return repaired
 
         return {"human_summary": "LLM response parsing failed"}
 
@@ -103,4 +158,7 @@ class LlmClient:
         parsed = parse_json_safe(content)
         if parsed:
             return parsed
+        repaired = self._repair_json_with_openai(content)
+        if repaired:
+            return repaired
         return {"human_summary": "Cloud LLM response parsing failed"}

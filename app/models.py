@@ -32,6 +32,8 @@ class AnalysisContext(BaseModel):
     kubernetes: dict[str, Any]
     deployment: dict[str, Any]
     slo: dict[str, Any]
+    components: list[dict[str, Any]] = Field(default_factory=list)
+    component_summary: dict[str, Any] = Field(default_factory=dict)
     datasource_errors: dict[str, str] = Field(default_factory=dict)
 
 

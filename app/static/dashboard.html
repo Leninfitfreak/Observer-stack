@@ -71,7 +71,7 @@
       </div>
       <div>
         <label>Service</label>
-        <input id="service" value="order-service">
+        <input id="service" value="all">
       </div>
       <div>
         <label>Severity</label>
@@ -101,6 +101,11 @@
       <div class="card kpi"><div class="title">Confidence</div><div class="val" id="confidence">-</div></div>
       <div class="card kpi"><div class="title">Risk Window</div><div class="val" id="risk">-</div></div>
 
+      <div class="card full">
+        <div class="title">Application / Component Status</div>
+        <pre id="componentSummary">-</pre>
+      </div>
+
       <div class="card wide">
         <div class="title">Human Summary</div>
         <div id="summary" style="margin-top:8px;">-</div>
@@ -126,6 +131,11 @@
       <div class="card wide">
         <div class="title">Datasource Errors / Missing Observability</div>
         <pre id="errors">-</pre>
+      </div>
+
+      <div class="card full">
+        <div class="title">Component Details</div>
+        <pre id="components">-</pre>
       </div>
 
       <div class="card full">
@@ -165,7 +175,7 @@
 
     async function load() {
       const ns = encodeURIComponent(document.getElementById("namespace").value.trim() || "dev");
-      const svc = encodeURIComponent(document.getElementById("service").value.trim() || "order-service");
+      const svc = encodeURIComponent(document.getElementById("service").value.trim() || "all");
       const sev = encodeURIComponent(document.getElementById("severity").value);
       setStatus("loading...", "warn");
       try {
@@ -186,6 +196,8 @@
         liFill("corrective", a.corrective_actions || []);
         liFill("preventive", a.preventive_hardening || []);
 
+        document.getElementById("componentSummary").textContent = JSON.stringify(c.component_summary || {}, null, 2);
+        document.getElementById("components").textContent = JSON.stringify(c.components || [], null, 2);
         document.getElementById("signatures").textContent = JSON.stringify(a.error_log_prediction || {}, null, 2);
         document.getElementById("errors").textContent = JSON.stringify({
           datasource_errors: c.datasource_errors || {},

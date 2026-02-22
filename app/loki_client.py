@@ -24,7 +24,10 @@ class LokiClient:
     def query_errors(self, namespace: str, service: str, minutes: int = 5, limit: int = 20) -> dict[str, Any]:
         end = datetime.now(timezone.utc)
         start = end - timedelta(minutes=minutes)
-        query = f'{{namespace="{namespace}"}} |= "ERROR" |= "{service}"'
+        if service.strip().lower() in {"", "*", "all"}:
+            query = f'{{namespace="{namespace}"}} |= "ERROR"'
+        else:
+            query = f'{{namespace="{namespace}"}} |= "ERROR" |= "{service}"'
         params = {
             "query": query,
             "start": str(int(start.timestamp() * 1e9)),
