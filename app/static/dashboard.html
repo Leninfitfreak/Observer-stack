@@ -76,7 +76,6 @@
       <button data-target="telemetrySection">Telemetry</button>
       <button data-target="errorsSection">Errors</button>
       <button data-target="aiSection">AI Analysis</button>
-      <button data-target="actionsSection">Actions</button>
       <button data-target="coverageSection">Coverage</button>
     </section>
 
@@ -185,35 +184,6 @@
       <div>
         <h2>Blast Radius / Dependency Map</h2>
         <svg id="dependencyMap" viewBox="0 0 700 320" class="dependency-map"></svg>
-      </div>
-    </section>
-
-    <section id="actionsSection" class="card sev-info split">
-      <div>
-        <h2>Action Center</h2>
-        <div class="action-groups" id="actionCenter">
-          <div class="action-group">
-            <h3>Recovery</h3>
-            <button data-action="restart_pod" class="action-blue">Restart Pod</button>
-            <button data-action="rollback_argocd" class="action-orange">Rollback via ArgoCD</button>
-          </div>
-          <div class="action-group">
-            <h3>Communication</h3>
-            <button data-action="create_jira" class="action-blue">Create Jira</button>
-            <button data-action="notify_slack" class="action-blue">Notify Slack</button>
-            <button data-action="open_runbook" class="action-blue">Open Runbook</button>
-          </div>
-          <div class="action-group">
-            <h3>Control</h3>
-            <button data-action="silence_alert" class="action-red">Silence Alert</button>
-            <button data-action="escalate_severity" class="action-orange">Escalate Severity</button>
-          </div>
-        </div>
-        <div class="last-action" id="lastAction">Last action: none</div>
-      </div>
-      <div>
-        <h2>Audit Trail</h2>
-        <ul id="auditTrail"></ul>
       </div>
     </section>
 

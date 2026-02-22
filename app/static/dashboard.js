@@ -101,7 +101,6 @@
     aiSection: document.getElementById("aiSection"),
     rawSection: document.getElementById("rawSection"),
     errorsSection: document.getElementById("errorsSection"),
-    actionsSection: document.getElementById("actionsSection"),
     coverageSection: document.getElementById("coverageSection"),
     telemetryGrid: document.getElementById("telemetryGrid"),
     errorTrendArrow: document.getElementById("errorTrendArrow"),
@@ -123,9 +122,6 @@
     risingOnly: document.getElementById("risingOnly"),
     hideLowFreq: document.getElementById("hideLowFreq"),
     whyWarningRows: document.getElementById("whyWarningRows"),
-    actionCenter: document.getElementById("actionCenter"),
-    lastAction: document.getElementById("lastAction"),
-    auditTrail: document.getElementById("auditTrail"),
     timeline: document.getElementById("timeline"),
     coverageScore: document.getElementById("coverageScore"),
     coverageBarFill: document.getElementById("coverageBarFill"),
@@ -585,34 +581,13 @@
     });
   }
 
-  function recordAudit(action, approved) {
-    const item = { action, approved, role: state.role, ts: new Date().toISOString() };
-    state.audit.unshift(item);
-    state.audit = state.audit.slice(0, 25);
-    el.auditTrail.innerHTML = "";
-    state.audit.forEach((a) => {
-      const li = document.createElement("li");
-      li.textContent = `${a.ts.replace("T", " ").slice(0, 19)}Z | ${a.role} | ${a.action} | ${a.approved ? "approved" : "cancelled"}`;
-      el.auditTrail.appendChild(li);
-    });
-    el.lastAction.textContent = `Last action executed ${approved ? "now" : "cancelled"} by ${state.role.toLowerCase()}`;
-    if (approved) pushTimeline(`Mitigation: ${action}`, "action");
-  }
-
-  function enforceRbac() {
-    el.actionCenter.querySelectorAll("button").forEach((btn) => {
-      const action = btn.dataset.action;
-      const allowed = state.role === "Admin" || (state.role === "Operator" && !["rollback_argocd", "silence_alert"].includes(action));
-      btn.disabled = !allowed;
-    });
-  }
+  function enforceRbac() {}
 
   function setMainView(view) {
     el.viewToggle.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     el.telemetrySection.classList.toggle("hidden", view === "raw");
     el.errorsSection.classList.toggle("hidden", view === "raw");
     el.aiSection.classList.toggle("hidden", view === "telemetry");
-    el.actionsSection.classList.toggle("hidden", view === "telemetry");
     el.coverageSection.classList.toggle("hidden", view === "telemetry");
     el.rawSection.classList.toggle("hidden", view !== "raw");
   }
@@ -690,12 +665,6 @@
     el.aiTabs.addEventListener("click", (e) => {
       if (e.target.tagName === "BUTTON") setAiTab(e.target.dataset.tab);
     });
-    el.actionCenter.addEventListener("click", (e) => {
-      if (e.target.tagName !== "BUTTON" || e.target.disabled) return;
-      const action = e.target.dataset.action;
-      const ok = window.confirm(`Confirm action: ${action.replaceAll("_", " ")}?`);
-      recordAudit(action, ok);
-    });
     el.telemetryGrid.addEventListener("click", (e) => {
       const btn = e.target.closest("button[data-open]");
       if (!btn) return;
@@ -728,12 +697,10 @@
     el.closeModalBtn.addEventListener("click", () => el.signatureModal.close());
     el.knownIssueBtn.addEventListener("click", () => {
       if (!state.selectedSignature) return;
-      recordAudit(`mark_known_issue:${state.selectedSignature.id}`, true);
       el.signatureModal.close();
     });
     el.genTaskBtn.addEventListener("click", () => {
-      recordAudit("generate_instrumentation_task", true);
-      alert("Instrumentation task generated and logged in audit trail.");
+      alert("Instrumentation task generated.");
     });
   }
 
