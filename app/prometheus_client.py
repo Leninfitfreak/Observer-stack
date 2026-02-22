@@ -216,6 +216,9 @@ class PrometheusClient:
         ai_observer_updated_q = (
             f'sum(changes(kube_deployment_status_replicas_updated{{namespace="{namespace}",deployment="ai-observer"}}[15m]))'
         )
+        ai_observer_recent_pod_q = (
+            f'sum((time() - kube_pod_start_time{{namespace="{namespace}",pod=~"ai-observer-.*"}}) < bool 900)'
+        )
 
         created_ts = self.query_scalar(created_ts_q)
         created_iso = None
@@ -228,6 +231,8 @@ class PrometheusClient:
         ai_observer_changed = ((self.query_scalar(ai_observer_changes_q) or 0) > 0) or (
             (self.query_scalar(ai_observer_updated_q) or 0) > 0
         )
+        if not ai_observer_changed:
+            ai_observer_changed = (self.query_scalar(ai_observer_recent_pod_q) or 0) > 0
 
         return {
             "deployment_changed_last_10m": recent_deploy,

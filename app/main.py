@@ -333,20 +333,60 @@ def _run_reasoning(alert: dict[str, str], window_minutes: int = 30) -> dict[str,
         "confidence_score", f"{round((baseline_analysis.get('confidence', 0.4)) * 100)}%"
     )
 
+    def _normalize_analysis_types(analysis_in: dict[str, Any]) -> dict[str, Any]:
+        out = dict(analysis_in or {})
+
+        if isinstance(out.get("recommended_remediation"), list):
+            out["recommended_remediation"] = " ".join(str(x) for x in out["recommended_remediation"])
+        elif out.get("recommended_remediation") is not None:
+            out["recommended_remediation"] = str(out["recommended_remediation"])
+
+        if not isinstance(out.get("deployment_correlation"), dict):
+            out["deployment_correlation"] = {"value": out.get("deployment_correlation")}
+        if not isinstance(out.get("error_log_prediction"), dict):
+            out["error_log_prediction"] = {"value": out.get("error_log_prediction")}
+
+        def _string_list(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            normalized: list[str] = []
+            for item in value:
+                if isinstance(item, str):
+                    normalized.append(item)
+                elif isinstance(item, dict):
+                    event = item.get("event") or item.get("cause") or item.get("effect") or item.get("consequence")
+                    normalized.append(str(event if event is not None else item))
+                else:
+                    normalized.append(str(item))
+            return normalized
+
+        out["causal_chain"] = _string_list(out.get("causal_chain"))
+        out["corrective_actions"] = _string_list(out.get("corrective_actions"))
+        out["preventive_hardening"] = _string_list(out.get("preventive_hardening"))
+        out["missing_observability"] = _string_list(out.get("missing_observability"))
+
+        if "confidence_score" not in out and out.get("confidence") is not None:
+            try:
+                out["confidence_score"] = f"{round(float(out['confidence']) * 100)}%"
+            except Exception:
+                pass
+        if out.get("confidence_score") is not None:
+            out["confidence_score"] = str(out["confidence_score"])
+
+        return out
+
     try:
         llm_input = {"telemetry": context, "baseline_reasoning": baseline_analysis}
         llm_result = llm.analyze(llm_input)
         merged = dict(baseline_analysis)
         merged.update({k: v for k, v in llm_result.items() if v is not None and v != ""})
-        if "confidence_score" not in merged and merged.get("confidence") is not None:
-            merged["confidence_score"] = f"{round(float(merged['confidence']) * 100)}%"
-        analysis = merged
+        analysis = _normalize_analysis_types(merged)
     except Exception as err:
         datasource_errors = dict(context.get("datasource_errors", {}))
         datasource_errors["llm"] = str(err)
         LOGGER.error("llm request failed error=%s", err)
         context["datasource_errors"] = datasource_errors
-        analysis = baseline_analysis
+        analysis = _normalize_analysis_types(baseline_analysis)
 
     analysis["policy_note"] = "No auto-remediation was applied. Explicit approval required before any changes."
     try:
