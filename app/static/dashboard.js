@@ -376,10 +376,54 @@
         rps: h ? (h.rps.at(-1) || 0) : 0,
       };
     });
-    renderDependencyMap(c.components || [], c.component_summary || {}, statsByService);
+    renderDependencyMap(c.components || [], c.component_summary || {}, statsByService, c.cluster_wiring || {});
   }
 
-  function renderDependencyMap(components, summary, statsByService) {
+  function renderDependencyMap(components, summary, statsByService, clusterWiring) {
+    if (clusterWiring && Array.isArray(clusterWiring.nodes) && clusterWiring.nodes.length) {
+      const width = 700;
+      const height = 320;
+      const nodes = clusterWiring.nodes.map((n) => ({ ...n }));
+      const serviceNodes = nodes.filter((n) => n.kind === "service");
+      const podNodes = nodes.filter((n) => n.kind === "pod");
+      const links = Array.isArray(clusterWiring.edges) ? clusterWiring.edges : [];
+
+      serviceNodes.forEach((n, i) => {
+        n.x = 120 + ((i % 3) * 180);
+        n.y = 60 + (Math.floor(i / 3) * 80);
+      });
+      podNodes.forEach((n, i) => {
+        n.x = 420 + ((i % 2) * 220);
+        n.y = 60 + (Math.floor(i / 2) * 48);
+      });
+
+      const nodeMap = {};
+      nodes.forEach((n) => { nodeMap[n.id] = n; });
+      const nodeColor = (s) => s === "critical" ? "#ef4444" : s === "warning" ? "#f59e0b" : "#22c55e";
+
+      let svg = `<rect width="${width}" height="${height}" fill="#0b1426"/>`;
+      links.forEach((e) => {
+        const from = nodeMap[e.from];
+        const to = nodeMap[e.to];
+        if (!from || !to) return;
+        svg += `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="#4f6f98" stroke-width="1.6">
+          <title>${e.from} -> ${e.to} (${e.type || "link"})</title>
+        </line>`;
+      });
+      nodes.forEach((n) => {
+        const color = nodeColor(n.status || "healthy");
+        const r = n.kind === "service" ? 14 : 9;
+        svg += `<g>
+          <circle cx="${n.x}" cy="${n.y}" r="${r}" fill="#10203a" stroke="${color}" stroke-width="2.3">
+            <title>${n.id} | ${n.kind || "node"} | ${n.status || "healthy"}</title>
+          </circle>
+          <text x="${n.x}" y="${n.y + r + 10}" fill="#c3d5ef" font-size="9" text-anchor="middle">${n.id}</text>
+        </g>`;
+      });
+      el.dependencyMap.innerHTML = svg;
+      return;
+    }
+
     const width = 700;
     const height = 320;
     const nodes = [

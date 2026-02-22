@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from ai_observer.domain.interfaces import LlmProvider, LogsProvider, MetricsProvider, TracesProvider
+from ai_observer.domain.interfaces import ClusterWiringProvider, LlmProvider, LogsProvider, MetricsProvider, TracesProvider
 from ai_observer.domain.models import AlertSignal, LiveReasoningResponse, ObservabilityContext, ReasoningResult
 
 
@@ -14,11 +14,13 @@ class ReasoningService:
         logs_provider: LogsProvider,
         traces_provider: TracesProvider,
         llm_provider: LlmProvider,
+        cluster_wiring_provider: ClusterWiringProvider,
     ):
         self.metrics_provider = metrics_provider
         self.logs_provider = logs_provider
         self.traces_provider = traces_provider
         self.llm_provider = llm_provider
+        self.cluster_wiring_provider = cluster_wiring_provider
         self.started_at = datetime.now(timezone.utc)
 
     def _baseline(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -105,6 +107,30 @@ class ReasoningService:
             traces = {"summary": "tracing datasource unavailable", "slow_traces": []}
             errors["jaeger"] = str(exc)
 
+        try:
+            cluster_wiring = self.cluster_wiring_provider.collect(alert.namespace)
+        except Exception as exc:
+            cluster_wiring = {"namespace": alert.namespace, "nodes": [], "edges": []}
+            errors["cluster_wiring"] = str(exc)
+
+        components: list[dict[str, Any]] = []
+        for node in cluster_wiring.get("nodes", []):
+            if node.get("kind") != "service":
+                continue
+            name = str(node.get("id"))
+            if name in {"kubernetes"}:
+                continue
+            components.append({"service": name, "status": node.get("status", "healthy"), "reasons": ["k8s service discovered"]})
+
+        component_summary = {
+            "scope": "all" if alert.service in {"all", "*"} else "single",
+            "overall_status": "healthy",
+            "total": len(components),
+            "healthy": sum(1 for c in components if c.get("status") == "healthy"),
+            "warning": sum(1 for c in components if c.get("status") == "warning"),
+            "critical": sum(1 for c in components if c.get("status") == "critical"),
+        }
+
         deployment = {
             "deployment_changed_last_10m": False,
             "ai_observer_frontend_changed_last_15m": (datetime.now(timezone.utc) - self.started_at).total_seconds() <= 900,
@@ -119,6 +145,9 @@ class ReasoningService:
             "traces": traces,
             "kubernetes": {},
             "deployment": deployment,
+            "components": components,
+            "component_summary": component_summary,
+            "cluster_wiring": cluster_wiring,
             "datasource_errors": errors,
         }
 

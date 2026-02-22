@@ -17,3 +17,7 @@ class TracesProvider(Protocol):
 
 class LlmProvider(Protocol):
     def analyze(self, payload: dict[str, Any]) -> dict[str, Any]: ...
+
+
+class ClusterWiringProvider(Protocol):
+    def collect(self, namespace: str) -> dict[str, Any]: ...

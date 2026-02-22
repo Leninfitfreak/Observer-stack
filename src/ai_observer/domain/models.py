@@ -21,6 +21,9 @@ class ObservabilityContext(BaseModel):
     traces: dict[str, Any] = Field(default_factory=dict)
     kubernetes: dict[str, Any] = Field(default_factory=dict)
     deployment: dict[str, Any] = Field(default_factory=dict)
+    components: list[dict[str, Any]] = Field(default_factory=list)
+    component_summary: dict[str, Any] = Field(default_factory=dict)
+    cluster_wiring: dict[str, Any] = Field(default_factory=dict)
     datasource_errors: dict[str, str] = Field(default_factory=dict)
 
 
