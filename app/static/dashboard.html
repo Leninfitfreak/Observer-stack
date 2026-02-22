@@ -39,7 +39,7 @@
   </header>
 
   <main class="layout">
-    <section class="toolbar card sev-info panel-wrapper" data-panel-id="toolbar">
+    <section class="toolbar card sev-info">
       <div class="filters">
         <label>Namespace <input id="namespace" value="dev"></label>
         <label>Service Scope <input id="service" value="all"></label>
@@ -72,7 +72,7 @@
       <div id="liveStatus" class="status">idle</div>
     </section>
 
-    <section class="quick-nav card sev-info panel-wrapper" id="quickNav" data-panel-id="quicknav">
+    <section class="quick-nav card sev-info" id="quickNav">
       <button data-target="telemetrySection">Overview</button>
       <button data-target="telemetrySection">Telemetry</button>
       <button data-target="errorsSection">Errors</button>
@@ -86,7 +86,7 @@
         <div class="panel">
           <h3>Error Rate Trend</h3>
           <div class="trend-line">
-            <span id="errorTrendArrow">➡</span>
+            <span id="errorTrendArrow">FLAT</span>
             <strong id="errorTrendLabel">Stable</strong>
           </div>
           <div class="trend-chart-wrap"><canvas id="errorTrendChart"></canvas></div>
@@ -187,6 +187,7 @@
         <div class="map-actions">
           <button id="mapFitBtn" type="button">Fit To Screen</button>
           <button id="mapResetBtn" type="button">Reset</button>
+          <button id="mapFullscreenBtn" type="button">Fullscreen</button>
         </div>
         <svg id="dependencyMap" viewBox="0 0 700 420" class="dependency-map"></svg>
       </div>

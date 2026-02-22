@@ -146,6 +146,7 @@
     dependencyMap: document.getElementById("dependencyMap"),
     mapFitBtn: document.getElementById("mapFitBtn"),
     mapResetBtn: document.getElementById("mapResetBtn"),
+    mapFullscreenBtn: document.getElementById("mapFullscreenBtn"),
     humanSummary: document.getElementById("humanSummary"),
     reasoningJson: document.getElementById("reasoningJson"),
     aiJson: document.getElementById("aiJson"),
@@ -329,22 +330,18 @@
     capHistory(hist);
   }
 
-  async function hydrateServiceTelemetry(components, namespace, severity, fallbackContext) {
-    const jobs = (components || []).map(async (component) => {
+  async function hydrateServiceTelemetry(components, _namespace, _severity, fallbackContext, componentMetrics) {
+    (components || []).forEach((component) => {
       const svc = component.service;
-      try {
-        const data = await fetchReasoning(namespace, svc, severity);
-        const ctx = data.context || {};
-        if (hasMetricSignal(ctx.metrics)) {
-          pushTelemetryPoint(svc, ctx);
-        } else {
-          pushTelemetryPoint(svc, fallbackContext || {});
-        }
-      } catch (_e) {
+      const metrics = componentMetrics?.[svc] || {};
+      if (hasMetricSignal(metrics)) {
+        pushTelemetryPoint(svc, { metrics, deployment: fallbackContext?.deployment || {}, kubernetes: fallbackContext?.kubernetes || {} });
+      } else if (hasMetricSignal(fallbackContext?.metrics || {})) {
         pushTelemetryPoint(svc, fallbackContext || {});
+      } else {
+        pushTelemetryPoint(svc, { metrics: {}, deployment: fallbackContext?.deployment || {}, kubernetes: fallbackContext?.kubernetes || {} });
       }
     });
-    await Promise.all(jobs);
   }
 
   function chartConfig(hist) {
@@ -733,6 +730,19 @@
     });
     if (el.mapFitBtn) el.mapFitBtn.addEventListener("click", fitMapView);
     if (el.mapResetBtn) el.mapResetBtn.addEventListener("click", resetMapView);
+    if (el.mapFullscreenBtn) {
+      el.mapFullscreenBtn.addEventListener("click", async () => {
+        const target = el.dependencyMap;
+        if (!target) return;
+        if (document.fullscreenElement) {
+          await document.exitFullscreen();
+          return;
+        }
+        if (typeof target.requestFullscreen === "function") {
+          await target.requestFullscreen();
+        }
+      });
+    }
   }
 
   function updateSignatureHistory(analysis) {
@@ -982,7 +992,13 @@
       renderRecentChanges(data);
 
       const components = data.context?.components || [];
-      await hydrateServiceTelemetry(components, namespace, severity, data.context || {});
+      await hydrateServiceTelemetry(
+        components,
+        namespace,
+        severity,
+        data.context || {},
+        data.context?.component_metrics || {}
+      );
       renderTelemetryCards(components);
       renderErrorTrend((data.context?.metrics?.error_rate_5xx_5m || 0) * 100);
       renderAi(data);

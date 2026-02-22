@@ -23,6 +23,31 @@ class ReasoningService:
         self.cluster_wiring_provider = cluster_wiring_provider
         self.started_at = datetime.now(timezone.utc)
 
+    @staticmethod
+    def _is_infra_service(name: str) -> bool:
+        lowered = (name or "").lower()
+        infra_tokens = [
+            "kubernetes",
+            "prometheus",
+            "grafana",
+            "loki",
+            "jaeger",
+            "otel",
+            "alertmanager",
+            "vault",
+            "argocd",
+            "kube-",
+            "istio",
+        ]
+        return any(token in lowered for token in infra_tokens)
+
+    @staticmethod
+    def _service_has_pods(service_name: str, wiring: dict[str, Any]) -> bool:
+        for edge in wiring.get("edges", []):
+            if edge.get("from") == service_name and str(edge.get("to", "")).strip():
+                return True
+        return False
+
     def _baseline(self, context: dict[str, Any]) -> dict[str, Any]:
         metrics = context.get("metrics", {})
         error_rate = metrics.get("error_rate_5xx_5m", 0) or 0
@@ -120,11 +145,42 @@ class ReasoningService:
             name = str(node.get("id"))
             if name in {"kubernetes"}:
                 continue
+            if alert.service not in {"all", "*"} and name != alert.service:
+                continue
+            if alert.service in {"all", "*"} and self._is_infra_service(name):
+                continue
+            if not self._service_has_pods(name, cluster_wiring):
+                continue
             components.append({"service": name, "status": node.get("status", "healthy"), "reasons": ["k8s service discovered"]})
+
+        component_metrics: dict[str, dict[str, Any]] = {}
+        for comp in components:
+            svc_name = comp["service"]
+            try:
+                svc_metrics = self.metrics_provider.collect(alert.namespace, svc_name)
+            except Exception as exc:
+                svc_metrics = {}
+                errors[f"prometheus:{svc_name}"] = str(exc)
+            component_metrics[svc_name] = svc_metrics
+
+            err_rate = svc_metrics.get("error_rate_5xx_5m", 0) or 0
+            p95 = svc_metrics.get("latency_p95_s_5m", 0) or 0
+            if err_rate > 0.05:
+                comp["status"] = "critical"
+                comp["reasons"] = ["5xx error rate > 5%"]
+            elif p95 > 0.75:
+                comp["status"] = "warning"
+                comp["reasons"] = ["p95 latency > 750ms"]
+            elif comp.get("status") not in {"warning", "critical"}:
+                comp["status"] = "healthy"
+                comp["reasons"] = ["telemetry within threshold"]
 
         component_summary = {
             "scope": "all" if alert.service in {"all", "*"} else "single",
-            "overall_status": "healthy",
+            "overall_status": "critical"
+            if any(c.get("status") == "critical" for c in components)
+            else "warning" if any(c.get("status") == "warning" for c in components)
+            else "healthy",
             "total": len(components),
             "healthy": sum(1 for c in components if c.get("status") == "healthy"),
             "warning": sum(1 for c in components if c.get("status") == "warning"),
@@ -146,6 +202,7 @@ class ReasoningService:
             "kubernetes": {},
             "deployment": deployment,
             "components": components,
+            "component_metrics": component_metrics,
             "component_summary": component_summary,
             "cluster_wiring": cluster_wiring,
             "datasource_errors": errors,
