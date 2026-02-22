@@ -210,6 +210,12 @@ class PrometheusClient:
             f'sum(changes(kube_deployment_status_replicas_updated{{namespace="{namespace}",deployment=~"{deploy_regex}"}}[10m]))'
         )
         created_ts_q = f'max(kube_deployment_created{{namespace="{namespace}",deployment=~"{deploy_regex}"}})'
+        ai_observer_changes_q = (
+            f'sum(changes(kube_deployment_status_observed_generation{{namespace="{namespace}",deployment="ai-observer"}}[15m]))'
+        )
+        ai_observer_updated_q = (
+            f'sum(changes(kube_deployment_status_replicas_updated{{namespace="{namespace}",deployment="ai-observer"}}[15m]))'
+        )
 
         created_ts = self.query_scalar(created_ts_q)
         created_iso = None
@@ -219,11 +225,15 @@ class PrometheusClient:
         recent_deploy = ((self.query_scalar(generation_changes_q) or 0) > 0) or (
             (self.query_scalar(updated_replicas_changes_q) or 0) > 0
         )
+        ai_observer_changed = ((self.query_scalar(ai_observer_changes_q) or 0) > 0) or (
+            (self.query_scalar(ai_observer_updated_q) or 0) > 0
+        )
 
         return {
             "deployment_changed_last_10m": recent_deploy,
             "deployment_generation_changes_10m": self.query_scalar(generation_changes_q),
             "updated_replicas_changes_10m": self.query_scalar(updated_replicas_changes_q),
+            "ai_observer_frontend_changed_last_15m": ai_observer_changed,
             "deployment_created_at": created_iso,
             "argocd_deployment_history": "unavailable_via_current_datasources",
             "cicd_pipeline_signals": "unavailable_via_current_datasources",
