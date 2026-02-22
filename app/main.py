@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ llm = LlmClient(OLLAMA_URL, model=LLM_MODEL)
 app = FastAPI(title="AI Observer Agent", version="2.1.0")
 STATIC_DIR = Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+APP_STARTED_AT = datetime.now(timezone.utc)
 
 
 @app.middleware("http")
@@ -274,11 +276,12 @@ def _aggregate_snapshots(scope: str, alert: dict[str, str], snapshots: list[dict
         "oom_killed_10m": sum((snap["kubernetes"].get("oom_killed_10m") or 0) for snap in snapshots),
         "cpu_throttled_rate_5m": sum((snap["kubernetes"].get("cpu_throttled_rate_5m") or 0) for snap in snapshots),
     }
+    app_boot_recent = (datetime.now(timezone.utc) - APP_STARTED_AT).total_seconds() <= 15 * 60
     deployment = {
         "deployment_changed_last_10m": any(bool(snap["deployment"].get("deployment_changed_last_10m")) for snap in snapshots),
         "deployment_generation_changes_10m": sum((snap["deployment"].get("deployment_generation_changes_10m") or 0) for snap in snapshots),
         "updated_replicas_changes_10m": sum((snap["deployment"].get("updated_replicas_changes_10m") or 0) for snap in snapshots),
-        "ai_observer_frontend_changed_last_15m": any(bool(snap["deployment"].get("ai_observer_frontend_changed_last_15m")) for snap in snapshots),
+        "ai_observer_frontend_changed_last_15m": any(bool(snap["deployment"].get("ai_observer_frontend_changed_last_15m")) for snap in snapshots) or app_boot_recent,
         "argocd_deployment_history": "aggregated_multi_component",
         "cicd_pipeline_signals": "aggregated_multi_component",
     }
