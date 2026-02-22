@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 from typing import Any
 
@@ -296,6 +297,23 @@ def _run_reasoning(alert: dict[str, str]) -> dict[str, Any]:
         analysis = baseline_analysis
 
     analysis["policy_note"] = "No auto-remediation was applied. Explicit approval required before any changes."
+    try:
+        LOGGER.info(
+            "ai_observer_summary %s",
+            json.dumps(
+                {
+                    "alertname": alert.get("alertname"),
+                    "namespace": alert.get("namespace"),
+                    "service_scope": context.get("alert", {}).get("service"),
+                    "component_summary": context.get("component_summary", {}),
+                    "impact_level": analysis.get("impact_level"),
+                    "confidence_score": analysis.get("confidence_score"),
+                },
+                separators=(",", ":"),
+            ),
+        )
+    except Exception:
+        pass
     return {"context": context, "analysis": analysis}
 
 

@@ -12,6 +12,30 @@ class LokiClient:
         self.base_url = base_url.rstrip("/")
         known = os.getenv("KNOWN_ERROR_SIGNATURES", "")
         self.known_signatures = {s.strip() for s in known.split(",") if s.strip()}
+        self.default_apps = [s.strip() for s in os.getenv("ALL_SERVICES", "product-service,order-service").split(",") if s.strip()]
+
+    def _build_query(self, namespace: str, service: str) -> str:
+        svc = (service or "").strip()
+        if svc.lower() in {"", "*", "all"}:
+            apps = self.default_apps
+        else:
+            apps = [s.strip() for s in svc.split(",") if s.strip()]
+
+        if apps:
+            escaped = "|".join(re.escape(a) for a in apps)
+            selector = (
+                f'{{namespace="{namespace}",pod=~".*({escaped}).*",container!="istio-proxy"}}'
+            )
+        else:
+            selector = f'{{namespace="{namespace}",container!="istio-proxy"}}'
+
+        return (
+            f'{selector} |= "ERROR"'
+            ' != "loki-gateway"'
+            ' != "component=querier"'
+            ' != "component=frontend"'
+            ' != "query_range"'
+        )
 
     def _normalize_signature(self, line: str) -> str:
         s = line.lower()
@@ -24,10 +48,7 @@ class LokiClient:
     def query_errors(self, namespace: str, service: str, minutes: int = 5, limit: int = 20) -> dict[str, Any]:
         end = datetime.now(timezone.utc)
         start = end - timedelta(minutes=minutes)
-        if service.strip().lower() in {"", "*", "all"}:
-            query = f'{{namespace="{namespace}"}} |= "ERROR"'
-        else:
-            query = f'{{namespace="{namespace}"}} |= "ERROR" |= "{service}"'
+        query = self._build_query(namespace=namespace, service=service)
         params = {
             "query": query,
             "start": str(int(start.timestamp() * 1e9)),
