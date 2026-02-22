@@ -29,6 +29,15 @@ class PrometheusMetricsProvider:
             return value
         return self._query_scalar(fallback)
 
+    def _query_first(self, *queries: str) -> float | None:
+        for query in queries:
+            if not query:
+                continue
+            value = self._query_scalar(query)
+            if value is not None:
+                return value
+        return None
+
     @staticmethod
     def _regex_union(values: list[str]) -> str:
         # PromQL label regex uses RE2 string escaping; escaping '-' as '\-'
@@ -111,6 +120,22 @@ class PrometheusMetricsProvider:
         job_filter = f'namespace="{namespace}",job=~"{job_regex}"'
         job_filter_all = f'namespace="{namespace}"'
 
+        cpu_usage = self._query_first(
+            f'sum(process_cpu_usage{{{job_filter}}})',
+            f'sum(process_cpu_usage{{{req_filter}}})',
+            f'sum(process_cpu_usage{{{job_filter_all}}})',
+            f'sum(rate(container_cpu_usage_seconds_total{{{pod_filter},container!="",container!="POD"}}[5m]))',
+            f'sum(rate(node_namespace_pod_container:container_cpu_usage_seconds_total:sum_irate{{{pod_filter}}}[5m]))',
+        )
+        memory_usage = self._query_first(
+            f'sum(jvm_memory_used_bytes{{{job_filter}}})',
+            f'sum(jvm_memory_used_bytes{{{req_filter}}})',
+            f'sum(jvm_memory_used_bytes{{{job_filter_all}}})',
+            f'sum(container_memory_working_set_bytes{{{pod_filter},container!="",container!="POD"}})',
+            f'sum(container_memory_usage_bytes{{{pod_filter},container!="",container!="POD"}})',
+            f'sum(node_namespace_pod_container:container_memory_working_set_bytes{{{pod_filter}}})',
+        )
+
         metrics = {
             "request_rate_rps_5m": self._query_with_fallback(
                 f'sum(rate(http_server_requests_seconds_count{{{job_filter}}}[5m]))',
@@ -130,12 +155,8 @@ class PrometheusMetricsProvider:
                 f'sum(rate(http_server_requests_seconds_count{{status=~"5..",{req_filter}}}[5m]))'
                 f' / clamp_min(sum(rate(http_server_requests_seconds_count{{{req_filter}}}[5m])), 0.000001)',
             ) or 0,
-            "cpu_usage_cores_5m": self._query_scalar(
-                f'sum(rate(container_cpu_usage_seconds_total{{{pod_filter},container!="",container!="POD"}}[5m]))'
-            ) or 0,
-            "memory_usage_bytes": self._query_scalar(
-                f'sum(container_memory_working_set_bytes{{{pod_filter},container!="",container!="POD"}})'
-            ) or 0,
+            "cpu_usage_cores_5m": cpu_usage or 0,
+            "memory_usage_bytes": memory_usage or 0,
             "pod_restarts_10m": self._query_scalar(
                 f'sum(increase(kube_pod_container_status_restarts_total{{{pod_filter}}}[10m]))'
             ) or 0,
