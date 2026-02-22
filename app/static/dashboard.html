@@ -56,6 +56,22 @@
       border-radius: 10px; padding: 10px; border: 1px solid #30363d; font-size: 12px;
     }
     .muted { color: var(--muted); font-size: 12px; }
+    .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .badge {
+      border: 1px solid #30363d;
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--soft);
+    }
+    .badge.healthy { color: var(--ok); border-color: #245f37; }
+    .badge.warning { color: var(--warn); border-color: #7f671a; }
+    .badge.critical { color: var(--crit); border-color: #7d2d2b; }
+    .table-wrap { overflow: auto; border: 1px solid #30363d; border-radius: 10px; background: var(--soft); margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #30363d; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
     @media (max-width: 900px) {
       .top { grid-template-columns: repeat(2, 1fr); }
       .kpi, .wide { grid-column: span 12; }
@@ -104,6 +120,29 @@
       <div class="card full">
         <div class="title">Application / Component Status</div>
         <pre id="componentSummary">-</pre>
+      </div>
+      <div class="card full">
+        <div class="title">Service Status Badges</div>
+        <div id="serviceBadges" class="badges"><span class="muted">none</span></div>
+      </div>
+      <div class="card full">
+        <div class="title">Why Warning (Compact)</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Service</th>
+                <th>Status</th>
+                <th>Reason</th>
+                <th>Datasource Error</th>
+                <th>Missing Observability</th>
+              </tr>
+            </thead>
+            <tbody id="whyRows">
+              <tr><td colspan="5" class="muted">none</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div class="card wide">
@@ -173,6 +212,52 @@
       return "ok";
     }
 
+    function renderBadges(components) {
+      const box = document.getElementById("serviceBadges");
+      box.innerHTML = "";
+      if (!components || !components.length) {
+        box.innerHTML = "<span class='muted'>none</span>";
+        return;
+      }
+      components.forEach((c) => {
+        const span = document.createElement("span");
+        const st = String(c.status || "unknown").toLowerCase();
+        span.className = `badge ${st}`;
+        span.textContent = `${c.service}: ${st}`;
+        box.appendChild(span);
+      });
+    }
+
+    function renderWhyTable(components, datasourceErrors, missingObs) {
+      const rows = document.getElementById("whyRows");
+      rows.innerHTML = "";
+      const byServiceErr = {};
+      Object.entries(datasourceErrors || {}).forEach(([k, v]) => {
+        const i = k.indexOf(":");
+        if (i > 0) {
+          byServiceErr[k.slice(0, i)] = String(v);
+        }
+      });
+      if (!components || !components.length) {
+        rows.innerHTML = "<tr><td colspan='5' class='muted'>none</td></tr>";
+        return;
+      }
+      components.forEach((c) => {
+        const tr = document.createElement("tr");
+        const reason = (c.reasons || []).join("; ") || "-";
+        const err = byServiceErr[c.service] || "-";
+        const miss = (missingObs || []).slice(0, 3).join("; ") || "-";
+        tr.innerHTML = `
+          <td>${c.service || "-"}</td>
+          <td>${c.status || "-"}</td>
+          <td>${reason}</td>
+          <td>${err}</td>
+          <td>${miss}</td>
+        `;
+        rows.appendChild(tr);
+      });
+    }
+
     async function load() {
       const ns = encodeURIComponent(document.getElementById("namespace").value.trim() || "dev");
       const svc = encodeURIComponent(document.getElementById("service").value.trim() || "all");
@@ -195,6 +280,8 @@
         liFill("chain", a.causal_chain || []);
         liFill("corrective", a.corrective_actions || []);
         liFill("preventive", a.preventive_hardening || []);
+        renderBadges(c.components || []);
+        renderWhyTable(c.components || [], c.datasource_errors || {}, a.missing_observability || []);
 
         document.getElementById("componentSummary").textContent = JSON.stringify(c.component_summary || {}, null, 2);
         document.getElementById("components").textContent = JSON.stringify(c.components || [], null, 2);
