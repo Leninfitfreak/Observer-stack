@@ -36,7 +36,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     async def no_cache_dashboard_assets(request: Request, call_next):
         response = await call_next(request)
         path = request.url.path
-        if path == "/dashboard" or path.startswith("/static/console/") or path in {"/static/dashboard.js", "/static/dashboard.css", "/static/dashboard.html"}:
+        if path == "/dashboard" or path in {"/static/dashboard.js", "/static/dashboard.css", "/static/dashboard.html"}:
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
