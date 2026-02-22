@@ -3,130 +3,118 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Observability Reasoning Dashboard</title>
-  <style>
-    :root {
-      --bg: #0d1117;
-      --panel: #161b22;
-      --soft: #21262d;
-      --text: #c9d1d9;
-      --muted: #8b949e;
-      --ok: #238636;
-      --warn: #d29922;
-      --crit: #da3633;
-      --accent: #58a6ff;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: radial-gradient(1000px 500px at 100% -10%, #1f304a 0, var(--bg) 55%);
-      color: var(--text);
-      font-family: "Segoe UI", "Trebuchet MS", sans-serif;
-    }
-    .wrap { max-width: 1200px; margin: 20px auto; padding: 0 16px; }
-    .top {
-      display: grid; gap: 10px;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      align-items: end;
-      margin-bottom: 14px;
-    }
-    .top label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
-    input, select, button {
-      width: 100%; border: 1px solid #30363d; background: var(--panel); color: var(--text);
-      border-radius: 8px; padding: 10px;
-    }
-    button { cursor: pointer; background: linear-gradient(120deg, #1f6feb, #388bfd); border: 0; font-weight: 600; }
-    .grid { display: grid; gap: 12px; grid-template-columns: repeat(12, minmax(0, 1fr)); }
-    .card {
-      background: linear-gradient(170deg, #161b22, #10151c);
-      border: 1px solid #30363d;
-      border-radius: 12px;
-      padding: 12px;
-    }
-    .kpi { grid-column: span 3; }
-    .wide { grid-column: span 6; }
-    .full { grid-column: span 12; }
-    .title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-    .val { font-size: 22px; font-weight: 700; margin-top: 8px; }
-    .ok { color: var(--ok); } .warn { color: var(--warn); } .crit { color: var(--crit); }
-    ul { margin: 8px 0 0; padding-left: 18px; }
-    li { margin-bottom: 6px; }
-    pre {
-      margin: 0; overflow: auto; max-height: 280px; background: var(--soft);
-      border-radius: 10px; padding: 10px; border: 1px solid #30363d; font-size: 12px;
-    }
-    .muted { color: var(--muted); font-size: 12px; }
-    .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-    .badge {
-      border: 1px solid #30363d;
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      font-weight: 600;
-      background: var(--soft);
-    }
-    .badge.healthy { color: var(--ok); border-color: #245f37; }
-    .badge.warning { color: var(--warn); border-color: #7f671a; }
-    .badge.critical { color: var(--crit); border-color: #7d2d2b; }
-    .table-wrap { overflow: auto; border: 1px solid #30363d; border-radius: 10px; background: var(--soft); margin-top: 8px; }
-    table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #30363d; vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
-    @media (max-width: 900px) {
-      .top { grid-template-columns: repeat(2, 1fr); }
-      .kpi, .wide { grid-column: span 12; }
-    }
-  </style>
+  <title>LeninKart Incident Command Dashboard</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <div class="wrap">
-    <div class="top">
-      <div>
-        <label>Namespace</label>
-        <input id="namespace" value="dev">
-      </div>
-      <div>
-        <label>Service</label>
-        <input id="service" value="all">
-      </div>
-      <div>
-        <label>Severity</label>
-        <select id="severity">
-          <option>warning</option>
-          <option>critical</option>
-          <option>info</option>
+  <header class="incident-header" id="incidentHeader">
+    <div class="severity-strip" id="severityStrip"></div>
+    <div class="header-grid">
+      <div class="header-item"><span>Incident ID</span><strong id="incidentId">INC-000001</strong></div>
+      <div class="header-item"><span>Status</span><strong id="incidentStatus">INVESTIGATING</strong></div>
+      <div class="header-item"><span>Severity</span><strong id="incidentSeverity">Medium</strong></div>
+      <div class="header-item"><span>Start Time</span><strong id="incidentStart">-</strong></div>
+      <div class="header-item"><span>Duration</span><strong id="incidentDuration">00:00:00</strong></div>
+      <div class="header-item"><span>Owner</span><strong id="incidentOwner">oncall-sre</strong></div>
+      <div class="header-item"><span>SLA Countdown</span><strong id="incidentSla">00:59:59</strong></div>
+      <div class="header-item"><span>SLO Breach Risk</span><strong id="incidentRisk">0%</strong></div>
+      <div class="header-item"><span>Error Budget</span><strong id="incidentBudget">100%</strong></div>
+      <div class="header-item controls">
+        <label for="roleSelect">Role</label>
+        <select id="roleSelect">
+          <option>Viewer</option>
+          <option>Operator</option>
+          <option>Admin</option>
         </select>
       </div>
-      <div>
-        <label>Refresh (sec)</label>
-        <input id="interval" type="number" min="5" value="20">
-      </div>
-      <div>
-        <label>Status</label>
-        <div id="status" class="muted">idle</div>
-      </div>
-      <div>
-        <label>Action</label>
-        <button id="refreshBtn">Refresh Now</button>
-      </div>
     </div>
+  </header>
 
-    <div class="grid">
-      <div class="card kpi"><div class="title">Root Cause</div><div class="val" id="root">-</div></div>
-      <div class="card kpi"><div class="title">Impact</div><div class="val" id="impact">-</div></div>
-      <div class="card kpi"><div class="title">Confidence</div><div class="val" id="confidence">-</div></div>
-      <div class="card kpi"><div class="title">Risk Window</div><div class="val" id="risk">-</div></div>
+  <main class="layout">
+    <section class="toolbar card">
+      <div class="filters">
+        <label>Namespace <input id="namespace" value="dev"></label>
+        <label>Service Scope <input id="service" value="all"></label>
+        <label>Severity
+          <select id="severity">
+            <option>warning</option>
+            <option>critical</option>
+            <option>info</option>
+          </select>
+        </label>
+        <label>Refresh (sec) <input id="interval" type="number" min="5" value="20"></label>
+        <button id="refreshBtn" class="primary">Refresh</button>
+      </div>
+      <div class="view-toggle" id="viewToggle">
+        <button data-view="ai" class="active">AI View</button>
+        <button data-view="telemetry">Telemetry View</button>
+        <button data-view="raw">Raw JSON View</button>
+      </div>
+      <div id="liveStatus" class="status">idle</div>
+    </section>
 
-      <div class="card full">
-        <div class="title">Application / Component Status</div>
-        <pre id="componentSummary">-</pre>
+    <section id="telemetrySection" class="card">
+      <h2>Live Telemetry (Last 30 Minutes)</h2>
+      <div id="telemetryGrid" class="telemetry-grid"></div>
+    </section>
+
+    <section id="aiSection" class="card split">
+      <div>
+        <h2>AI Correlation</h2>
+        <div class="kpi-row">
+          <div class="kpi"><span>Root Cause</span><strong id="rootCause">-</strong></div>
+          <div class="kpi"><span>Confidence</span><strong id="confidence">-</strong></div>
+          <div class="kpi"><span>Risk Window</span><strong id="riskWindow">-</strong></div>
+        </div>
+        <div class="panel">
+          <h3>Human Summary</h3>
+          <p id="humanSummary">-</p>
+        </div>
+        <div class="panel">
+          <h3>Confidence Breakdown</h3>
+          <div id="confidenceBreakdown" class="chips"></div>
+        </div>
+        <div class="panel">
+          <h3>Correlated Signals</h3>
+          <ul id="correlatedSignals"></ul>
+        </div>
       </div>
-      <div class="card full">
-        <div class="title">Service Status Badges</div>
-        <div id="serviceBadges" class="badges"><span class="muted">none</span></div>
+      <div>
+        <h2>Blast Radius / Dependency Map</h2>
+        <svg id="dependencyMap" viewBox="0 0 700 280" class="dependency-map"></svg>
+        <div class="panel">
+          <h3>Service Status Badges</h3>
+          <div id="serviceBadges" class="chips"></div>
+        </div>
       </div>
-      <div class="card full">
-        <div class="title">Why Warning (Compact)</div>
+    </section>
+
+    <section class="card split">
+      <div>
+        <h2>Error Signatures</h2>
+        <div class="table-controls">
+          <label><input type="checkbox" id="risingOnly"> Show Rising Only</label>
+          <label><input type="checkbox" id="hideLowFreq" checked> Hide Low Frequency</label>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Signature ID</th>
+                <th>Error Type</th>
+                <th>Count</th>
+                <th>First Seen</th>
+                <th>Last Seen</th>
+                <th>Growth Trend</th>
+              </tr>
+            </thead>
+            <tbody id="signatureRows"></tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <h2>Why Warning (Compact)</h2>
         <div class="table-wrap">
           <table>
             <thead>
@@ -138,175 +126,57 @@
                 <th>Missing Observability</th>
               </tr>
             </thead>
-            <tbody id="whyRows">
-              <tr><td colspan="5" class="muted">none</td></tr>
-            </tbody>
+            <tbody id="whyWarningRows"></tbody>
           </table>
         </div>
       </div>
+    </section>
 
-      <div class="card wide">
-        <div class="title">Human Summary</div>
-        <div id="summary" style="margin-top:8px;">-</div>
+    <section class="card split">
+      <div>
+        <h2>Action Center</h2>
+        <div class="actions" id="actionCenter">
+          <button data-action="restart_pod">Restart Pod</button>
+          <button data-action="rollback_argocd">Rollback via ArgoCD</button>
+          <button data-action="open_runbook">Open Runbook</button>
+          <button data-action="create_jira">Create Jira Incident</button>
+          <button data-action="silence_alert">Silence Alert (Temp)</button>
+        </div>
+        <div class="panel">
+          <h3>Audit Trail</h3>
+          <ul id="auditTrail"></ul>
+        </div>
       </div>
-      <div class="card wide">
-        <div class="title">Causal Chain</div>
-        <ul id="chain"></ul>
+    </section>
+
+    <section class="card">
+      <h2>Incident Timeline</h2>
+      <div id="timeline" class="timeline"></div>
+    </section>
+
+    <section class="card split">
+      <div>
+        <h2>Observability Coverage</h2>
+        <div class="kpi-row">
+          <div class="kpi"><span>Coverage Score</span><strong id="coverageScore">0%</strong></div>
+          <div class="kpi"><span>Missing Metrics</span><strong id="missingMetrics">0</strong></div>
+          <div class="kpi"><span>Missing Traces</span><strong id="missingTraces">0</strong></div>
+          <div class="kpi"><span>Missing Logs</span><strong id="missingLogs">0</strong></div>
+        </div>
+        <div class="panel"><h3>Instrumentation Gaps</h3><ul id="gapsList"></ul></div>
       </div>
-
-      <div class="card wide">
-        <div class="title">Corrective Actions</div>
-        <ul id="corrective"></ul>
+      <div>
+        <h2>Datasource Errors</h2>
+        <pre id="datasourceErrors">-</pre>
       </div>
-      <div class="card wide">
-        <div class="title">Preventive Hardening</div>
-        <ul id="preventive"></ul>
-      </div>
+    </section>
 
-      <div class="card wide">
-        <div class="title">Error Signature Prediction</div>
-        <pre id="signatures">-</pre>
-      </div>
-      <div class="card wide">
-        <div class="title">Datasource Errors / Missing Observability</div>
-        <pre id="errors">-</pre>
-      </div>
+    <section id="rawSection" class="card hidden">
+      <h2>Raw Data</h2>
+      <pre id="rawJson">-</pre>
+    </section>
+  </main>
 
-      <div class="card full">
-        <div class="title">Component Details</div>
-        <pre id="components">-</pre>
-      </div>
-
-      <div class="card full">
-        <div class="title">Raw Live Reasoning JSON</div>
-        <pre id="raw">-</pre>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    let timer = null;
-
-    function setStatus(text, cls) {
-      const el = document.getElementById("status");
-      el.textContent = text;
-      el.className = cls ? cls : "muted";
-    }
-
-    function liFill(id, arr) {
-      const ul = document.getElementById(id);
-      ul.innerHTML = "";
-      (arr || []).forEach((x) => {
-        const li = document.createElement("li");
-        li.textContent = x;
-        ul.appendChild(li);
-      });
-      if (!arr || !arr.length) ul.innerHTML = "<li class='muted'>none</li>";
-    }
-
-    function riskClass(v) {
-      if (!v) return "";
-      const s = String(v).toLowerCase();
-      if (s.includes("high") || s.includes("1h")) return "crit";
-      if (s.includes("medium") || s.includes("24h")) return "warn";
-      return "ok";
-    }
-
-    function renderBadges(components) {
-      const box = document.getElementById("serviceBadges");
-      box.innerHTML = "";
-      if (!components || !components.length) {
-        box.innerHTML = "<span class='muted'>none</span>";
-        return;
-      }
-      components.forEach((c) => {
-        const span = document.createElement("span");
-        const st = String(c.status || "unknown").toLowerCase();
-        span.className = `badge ${st}`;
-        span.textContent = `${c.service}: ${st}`;
-        box.appendChild(span);
-      });
-    }
-
-    function renderWhyTable(components, datasourceErrors, missingObs) {
-      const rows = document.getElementById("whyRows");
-      rows.innerHTML = "";
-      const byServiceErr = {};
-      Object.entries(datasourceErrors || {}).forEach(([k, v]) => {
-        const i = k.indexOf(":");
-        if (i > 0) {
-          byServiceErr[k.slice(0, i)] = String(v);
-        }
-      });
-      if (!components || !components.length) {
-        rows.innerHTML = "<tr><td colspan='5' class='muted'>none</td></tr>";
-        return;
-      }
-      components.forEach((c) => {
-        const tr = document.createElement("tr");
-        const reason = (c.reasons || []).join("; ") || "-";
-        const err = byServiceErr[c.service] || "-";
-        const miss = (missingObs || []).slice(0, 3).join("; ") || "-";
-        tr.innerHTML = `
-          <td>${c.service || "-"}</td>
-          <td>${c.status || "-"}</td>
-          <td>${reason}</td>
-          <td>${err}</td>
-          <td>${miss}</td>
-        `;
-        rows.appendChild(tr);
-      });
-    }
-
-    async function load() {
-      const ns = encodeURIComponent(document.getElementById("namespace").value.trim() || "dev");
-      const svc = encodeURIComponent(document.getElementById("service").value.trim() || "all");
-      const sev = encodeURIComponent(document.getElementById("severity").value);
-      setStatus("loading...", "warn");
-      try {
-        const r = await fetch(`/api/reasoning/live?namespace=${ns}&service=${svc}&severity=${sev}`);
-        const data = await r.json();
-        const a = data.analysis || {};
-        const c = data.context || {};
-
-        document.getElementById("root").textContent = a.probable_root_cause || "-";
-        document.getElementById("impact").textContent = a.impact_level || "-";
-        document.getElementById("impact").className = `val ${riskClass(a.impact_level)}`;
-        document.getElementById("confidence").textContent = a.confidence_score || "-";
-        document.getElementById("risk").textContent = (a.risk_forecast || {}).predicted_breach_window || "-";
-        document.getElementById("risk").className = `val ${riskClass((a.risk_forecast || {}).predicted_breach_window)}`;
-        document.getElementById("summary").textContent = a.human_summary || "-";
-
-        liFill("chain", a.causal_chain || []);
-        liFill("corrective", a.corrective_actions || []);
-        liFill("preventive", a.preventive_hardening || []);
-        renderBadges(c.components || []);
-        renderWhyTable(c.components || [], c.datasource_errors || {}, a.missing_observability || []);
-
-        document.getElementById("componentSummary").textContent = JSON.stringify(c.component_summary || {}, null, 2);
-        document.getElementById("components").textContent = JSON.stringify(c.components || [], null, 2);
-        document.getElementById("signatures").textContent = JSON.stringify(a.error_log_prediction || {}, null, 2);
-        document.getElementById("errors").textContent = JSON.stringify({
-          datasource_errors: c.datasource_errors || {},
-          missing_observability: a.missing_observability || []
-        }, null, 2);
-        document.getElementById("raw").textContent = JSON.stringify(data, null, 2);
-        setStatus("live", "ok");
-      } catch (e) {
-        setStatus(`error: ${e}`, "crit");
-      }
-    }
-
-    function restartTimer() {
-      if (timer) clearInterval(timer);
-      const sec = Math.max(5, Number(document.getElementById("interval").value || 20));
-      timer = setInterval(load, sec * 1000);
-    }
-
-    document.getElementById("refreshBtn").addEventListener("click", load);
-    document.getElementById("interval").addEventListener("change", restartTimer);
-    restartTimer();
-    load();
-  </script>
+  <script src="/static/dashboard.js"></script>
 </body>
 </html>

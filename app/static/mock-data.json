@@ -1,0 +1,47 @@
+{
+  "incident": {
+    "id": "INC-723941",
+    "status": "INVESTIGATING",
+    "severity": "critical",
+    "owner": "oncall-sre",
+    "start_time": "2026-02-22T05:00:00Z"
+  },
+  "context": {
+    "component_summary": {
+      "scope": "all",
+      "overall_status": "warning",
+      "total": 2,
+      "healthy": 0,
+      "warning": 2,
+      "critical": 0
+    },
+    "components": [
+      { "service": "product-service", "status": "warning", "reasons": ["datasource query issues"] },
+      { "service": "order-service", "status": "warning", "reasons": ["datasource query issues"] }
+    ],
+    "datasource_errors": {
+      "product-service:loki": "query timeout",
+      "order-service:loki": "query timeout"
+    }
+  },
+  "analysis": {
+    "probable_root_cause": "Telemetry gaps with no strong failure evidence",
+    "impact_level": "Low",
+    "confidence_score": "59%",
+    "human_summary": "No dominant fault domain identified from current telemetry.",
+    "causal_chain": ["No strong multi-signal causal chain detected from current telemetry."],
+    "error_log_prediction": {
+      "repeated_signatures": [
+        { "signature": "order-service timeout from db pool", "count": 12 }
+      ]
+    },
+    "missing_observability": [
+      "thread_pool_saturation metric missing",
+      "db_connection_pool_usage metric missing",
+      "kafka_consumer_lag metric missing"
+    ],
+    "risk_forecast": {
+      "predicted_breach_window": "likely_breach_within_24h"
+    }
+  }
+}

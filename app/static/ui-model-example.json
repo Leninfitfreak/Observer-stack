@@ -1,0 +1,91 @@
+{
+  "incidentHeader": {
+    "incident_id": "string",
+    "status": "INVESTIGATING|MITIGATING|RESOLVED|CRITICAL",
+    "severity": "Low|Medium|High|Critical",
+    "start_time_utc": "ISO-8601 string",
+    "duration_seconds": 0,
+    "assigned_owner": "string",
+    "sla_countdown_seconds": 0,
+    "slo_breach_risk_percent": 0,
+    "error_budget_remaining_percent": 100
+  },
+  "liveTelemetry": [
+    {
+      "service": "string",
+      "status": "healthy|warning|critical",
+      "timeseries": {
+        "timestamp": ["HH:mm:ss"],
+        "rps": [0],
+        "error_rate_pct": [0],
+        "latency_p95_ms": [0],
+        "latency_p99_ms": [0],
+        "cpu_pct": [0],
+        "memory_mb": [0],
+        "db_pool_pct": [0],
+        "kafka_lag": [0],
+        "anomaly_marker": [0],
+        "deployment_marker": [0]
+      }
+    }
+  ],
+  "aiCorrelation": {
+    "root_cause": "string",
+    "confidence_breakdown": {
+      "metric_percent": 0,
+      "logs_percent": 0,
+      "trace_percent": 0,
+      "historical_similarity_percent": 0
+    },
+    "correlated_signals": ["string"],
+    "blast_radius": {
+      "nodes": [{ "id": "string", "status": "healthy|warning|critical" }],
+      "edges": [{ "from": "string", "to": "string" }]
+    }
+  },
+  "errorSignatures": [
+    {
+      "signature_id": "SIG-XXXXXX",
+      "error_type": "string",
+      "count": 0,
+      "first_seen": "ISO-8601 string",
+      "last_seen": "ISO-8601 string",
+      "growth_trend": "Increasing|Stable|Decreasing"
+    }
+  ],
+  "actionCenter": {
+    "role": "Viewer|Operator|Admin",
+    "actions": [
+      "restart_pod",
+      "rollback_argocd",
+      "open_runbook",
+      "create_jira",
+      "silence_alert"
+    ],
+    "audit_trail": [
+      {
+        "action": "string",
+        "approved": true,
+        "role": "string",
+        "timestamp": "ISO-8601 string"
+      }
+    ]
+  },
+  "incidentTimeline": [
+    {
+      "label": "string",
+      "type": "telemetry|logs|deploy|ai|action",
+      "timestamp": "ISO-8601 string"
+    }
+  ],
+  "observabilityCoverage": {
+    "coverage_score_percent": 0,
+    "missing_metrics_count": 0,
+    "missing_traces_count": 0,
+    "missing_logs_count": 0,
+    "instrumentation_gaps": ["string"]
+  },
+  "rawData": {
+    "api_response": {}
+  }
+}

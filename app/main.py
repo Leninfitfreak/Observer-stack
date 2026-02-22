@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from jaeger_client import JaegerClient
 from llm_client import LlmClient
@@ -33,6 +34,7 @@ llm = LlmClient(OLLAMA_URL, model=LLM_MODEL)
 
 app = FastAPI(title="AI Observer Agent", version="2.1.0")
 STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 def _extract_alert_fields(payload: AlertmanagerWebhook) -> dict[str, str]:
