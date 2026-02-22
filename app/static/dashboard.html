@@ -20,6 +20,8 @@
       <div class="header-item"><span>SLA Countdown</span><strong id="incidentSla">00:59:59</strong></div>
       <div class="header-item"><span>SLO Breach Risk</span><strong id="incidentRisk">0%</strong></div>
       <div class="header-item"><span>Error Budget Remaining</span><strong id="incidentBudget">100%</strong></div>
+      <div class="header-item"><span>Impact Level</span><strong id="incidentImpact">Low</strong></div>
+      <div class="header-item"><span>Affected Services</span><strong id="affectedCount">0</strong></div>
       <div class="header-item controls">
         <label for="roleSelect">Role</label>
         <select id="roleSelect">
@@ -47,6 +49,17 @@
             <option>info</option>
           </select>
         </label>
+        <label>Time Window
+          <select id="timeWindow">
+            <option value="5m">5m</option>
+            <option value="15m">15m</option>
+            <option value="30m" selected>30m</option>
+            <option value="1h">1h</option>
+            <option value="6h">6h</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+        <label id="customWindowWrap" class="hidden">Custom (m) <input id="customWindow" type="number" min="5" max="360" value="30"></label>
         <label>Refresh (sec) <input id="interval" type="number" min="5" value="20"></label>
         <button id="refreshBtn" class="primary">Refresh</button>
       </div>
@@ -69,6 +82,20 @@
 
     <section id="telemetrySection" class="card sev-info">
       <h2>Live Telemetry (Last 30 Minutes)</h2>
+      <div class="split">
+        <div class="panel">
+          <h3>Error Rate Trend</h3>
+          <div class="trend-line">
+            <span id="errorTrendArrow">➡</span>
+            <strong id="errorTrendLabel">Stable</strong>
+          </div>
+          <div class="trend-chart-wrap"><canvas id="errorTrendChart"></canvas></div>
+        </div>
+        <div class="panel">
+          <h3>Recent Changes (Last 15m)</h3>
+          <ul id="recentChanges"></ul>
+        </div>
+      </div>
       <div id="telemetryGrid" class="telemetry-grid"></div>
     </section>
 

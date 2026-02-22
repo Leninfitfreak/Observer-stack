@@ -8,11 +8,19 @@ class JaegerClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
 
-    def query_slow_traces(self, service: str, limit: int = 5, min_duration_ms: int = 500) -> dict[str, Any]:
+    def query_slow_traces(
+        self,
+        service: str,
+        limit: int = 5,
+        min_duration_ms: int = 500,
+        lookback_minutes: int = 60,
+    ) -> dict[str, Any]:
+        lb = 60 if lookback_minutes <= 60 else 120 if lookback_minutes <= 120 else 240 if lookback_minutes <= 240 else 720 if lookback_minutes <= 720 else 1440 if lookback_minutes <= 1440 else 2880
+        lookback = "1h" if lb == 60 else "2h" if lb == 120 else "4h" if lb == 240 else "12h" if lb == 720 else "24h" if lb == 1440 else "2d"
         params = {
             "service": service,
             "limit": "30",
-            "lookback": "1h",
+            "lookback": lookback,
             "minDuration": f"{min_duration_ms}ms",
         }
         resp = request_with_retry("GET", f"{self.base_url}/api/traces?{urlencode(params)}")

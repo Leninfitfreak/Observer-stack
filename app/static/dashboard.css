@@ -40,7 +40,7 @@ body {
 .header-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(10, minmax(0, 1fr));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   padding: 10px 14px;
 }
 .header-item {
@@ -125,6 +125,15 @@ h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
 .telemetry-card.sev-critical { border-left-color: var(--crit); }
 .telemetry-card.sev-healthy { border-left-color: var(--ok); }
 .telemetry-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.telemetry-actions { display: flex; gap: 8px; margin: 6px 0 8px; }
+.telemetry-actions .link-btn {
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #122648;
+  color: #d7e3f7;
+}
 .pill {
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -135,6 +144,8 @@ h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
 .pill.warning { color: var(--warn); border-color: #8c6a12; }
 .pill.critical { color: var(--crit); border-color: #8e2523; }
 .chart-wrap { height: 260px; }
+.trend-line { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.trend-chart-wrap { height: 120px; }
 
 .ai-top-row { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
 .summary-two-line {
@@ -244,7 +255,7 @@ pre {
 .modal-actions { margin-top: 10px; display: flex; gap: 8px; justify-content: flex-end; }
 
 @media (max-width: 1300px) {
-  .header-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .header-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 }
 @media (max-width: 960px) {
   .header-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

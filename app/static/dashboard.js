@@ -66,6 +66,8 @@
     signatures: {},
     selectedSignature: null,
     lastData: null,
+    errorTrend: { ts: [], value: [] },
+    errorChart: null,
   };
 
   const el = {
@@ -80,10 +82,15 @@
     incidentSla: document.getElementById("incidentSla"),
     incidentRisk: document.getElementById("incidentRisk"),
     incidentBudget: document.getElementById("incidentBudget"),
+    incidentImpact: document.getElementById("incidentImpact"),
+    affectedCount: document.getElementById("affectedCount"),
     slaProgressBar: document.getElementById("slaProgressBar"),
     namespace: document.getElementById("namespace"),
     service: document.getElementById("service"),
     severity: document.getElementById("severity"),
+    timeWindow: document.getElementById("timeWindow"),
+    customWindowWrap: document.getElementById("customWindowWrap"),
+    customWindow: document.getElementById("customWindow"),
     interval: document.getElementById("interval"),
     refreshBtn: document.getElementById("refreshBtn"),
     roleSelect: document.getElementById("roleSelect"),
@@ -97,6 +104,10 @@
     actionsSection: document.getElementById("actionsSection"),
     coverageSection: document.getElementById("coverageSection"),
     telemetryGrid: document.getElementById("telemetryGrid"),
+    errorTrendArrow: document.getElementById("errorTrendArrow"),
+    errorTrendLabel: document.getElementById("errorTrendLabel"),
+    errorTrendChart: document.getElementById("errorTrendChart"),
+    recentChanges: document.getElementById("recentChanges"),
     liveStatus: document.getElementById("liveStatus"),
     rootCauseSummary: document.getElementById("rootCauseSummary"),
     confidence: document.getElementById("confidence"),
@@ -164,7 +175,9 @@
   }
 
   async function fetchReasoning(namespace, service, severity) {
-    const qs = new URLSearchParams({ namespace, service, severity }).toString();
+    let tw = (el.timeWindow.value || "30m").trim();
+    if (tw === "custom") tw = `${Math.max(5, Math.min(360, Number(el.customWindow.value || 30)))}m`;
+    const qs = new URLSearchParams({ namespace, service, severity, time_window: tw }).toString();
     const res = await fetch(`/api/reasoning/live?${qs}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
@@ -263,6 +276,10 @@
           <span class="pill">DB ${Math.round(hist.db.at(-1) || 0)}%</span>
           <span class="pill">Kafka ${Math.round(hist.kafka.at(-1) || 0)}</span>
         </div>
+        <div class="telemetry-actions">
+          <button class="link-btn" data-open="logs" data-service="${svc}">View Logs</button>
+          <button class="link-btn" data-open="traces" data-service="${svc}">View Traces</button>
+        </div>
         <div class="chart-wrap"><canvas id="chart-${svc}"></canvas></div>
       `;
       el.telemetryGrid.appendChild(card);
@@ -285,6 +302,8 @@
     el.incidentOwner.textContent = state.role === "Viewer" ? "oncall-sre" : `${state.role.toLowerCase()}-operator`;
     el.incidentRisk.textContent = `${riskPct}%`;
     el.incidentBudget.textContent = `${budget}%`;
+    el.incidentImpact.textContent = data.analysis?.impact_level || "Low";
+    el.affectedCount.textContent = String(data.context?.component_summary?.total || 0);
     el.incidentHeader.className = `incident-header sev-${sev}`;
     const color = sev === "critical" ? "var(--crit)" : sev === "warning" ? "var(--warn)" : sev === "healthy" ? "var(--ok)" : "var(--info)";
     el.severityStrip.style.background = color;
@@ -341,10 +360,19 @@
       x.textContent = `${s.service} • ${s.status}`;
       el.serviceBadges.appendChild(x);
     });
-    renderDependencyMap(c.components || [], c.component_summary || {}, c.metrics || {});
+    const statsByService = {};
+    (c.components || []).forEach((svc) => {
+      const h = state.serviceHistory[svc.service];
+      statsByService[svc.service] = {
+        p95: h ? (h.p95.at(-1) || 0) : 0,
+        err: h ? (h.err.at(-1) || 0) : 0,
+        rps: h ? (h.rps.at(-1) || 0) : 0,
+      };
+    });
+    renderDependencyMap(c.components || [], c.component_summary || {}, statsByService);
   }
 
-  function renderDependencyMap(components, summary, metrics) {
+  function renderDependencyMap(components, summary, statsByService) {
     const width = 700;
     const height = 320;
     const nodes = [
@@ -362,14 +390,19 @@
       ["ai-observer", "order-service"]
     ];
     const nodeColor = (s) => s === "critical" ? "#ef4444" : s === "warning" ? "#f59e0b" : "#22c55e";
-    const edgeColor = (m) => (m.latency_p95_s_5m || 0) > 0.75 ? "#ef4444" : "#4f6f98";
+    const edgeColor = (err) => err > 5 ? "#ef4444" : err > 1 ? "#f59e0b" : "#4f6f98";
+    const edgeWidth = (p95) => p95 > 1000 ? 4 : p95 > 500 ? 3 : 2;
 
     let svg = `<rect width="${width}" height="${height}" fill="#0b1426"/>`;
     links.forEach(([a, b]) => {
       const na = nodes.find((n) => n.id === a);
       const nb = nodes.find((n) => n.id === b);
       if (!na || !nb) return;
-      svg += `<line x1="${na.x}" y1="${na.y}" x2="${nb.x}" y2="${nb.y}" stroke="${edgeColor(metrics)}" stroke-width="2"/>`;
+      const keySvc = a.includes("-service") ? a : (b.includes("-service") ? b : "");
+      const st = statsByService[keySvc] || { p95: 0, err: 0, rps: 0 };
+      svg += `<line x1="${na.x}" y1="${na.y}" x2="${nb.x}" y2="${nb.y}" stroke="${edgeColor(st.err)}" stroke-width="${edgeWidth(st.p95)}">
+          <title>${keySvc || `${a}->${b}`} | p95=${Math.round(st.p95)}ms | err=${st.err.toFixed(2)}% | rps=${st.rps.toFixed(2)}</title>
+        </line>`;
     });
 
     nodes.forEach((n) => {
@@ -377,8 +410,7 @@
       const pulse = n.status === "warning" || n.status === "critical";
       svg += `<g>
         <circle cx="${n.x}" cy="${n.y}" r="22" fill="#10203a" stroke="${color}" stroke-width="3">
-          <title>${n.id} | status=${n.status} | error_rate=${(metrics.error_rate_5xx_5m || 0).toFixed(3)} | latency_p95=${Math.round((metrics.latency_p95_s_5m || 0) * 1000)}ms | last_deploy=${metrics.deployment_changed_last_10m ? "recent" : "none"}</title>
-          ${pulse ? '<animate attributeName="r" values="22;25;22" dur="1.3s" repeatCount="indefinite" />' : ""}
+          <title>${n.id} | status=${n.status}</title>
         </circle>
         <text x="${n.x}" y="${n.y + 36}" fill="#c3d5ef" font-size="11" text-anchor="middle">${n.id}</text>
       </g>`;
@@ -465,13 +497,80 @@
     el.missingMetrics.textContent = String(missingMetrics);
     el.missingTraces.textContent = String(missingTraces);
     el.missingLogs.textContent = String(missingLogs);
+    const gapInfo = {
+      "kafka_consumer_lag": { why: "Detect backlog growth before consumer outage.", sample: "kafka_consumergroup_lag" },
+      "thread_pool_saturation": { why: "Detect request queue pressure and saturation.", sample: "jvm_threads_live_threads / jvm_threads_peak_threads" },
+      "db_connection_pool_usage": { why: "Detect connection starvation and timeout risk.", sample: "hikaricp_connections_active / hikaricp_connections_max" },
+      "argocd deployment history": { why: "Correlate incidents with recent rollouts.", sample: "argocd_app_sync_total" },
+      "cicd pipeline signals": { why: "Correlate build failures with runtime degradation.", sample: "pipeline_run_status" },
+    };
     el.gapsList.innerHTML = "";
     (gaps.length ? gaps : ["No major instrumentation gaps detected"]).forEach((g) => {
+      let why = "";
+      let sample = "";
+      Object.keys(gapInfo).forEach((k) => {
+        if (String(g).toLowerCase().includes(k.toLowerCase())) {
+          why = gapInfo[k].why;
+          sample = gapInfo[k].sample;
+        }
+      });
       const li = document.createElement("li");
-      li.textContent = g;
+      li.textContent = why ? `${g} | Why: ${why} | Sample: ${sample}` : g;
       el.gapsList.appendChild(li);
     });
     el.datasourceErrors.textContent = JSON.stringify(ds, null, 2);
+  }
+
+  function renderErrorTrend(globalErrorPct) {
+    const now = new Date().toLocaleTimeString();
+    state.errorTrend.ts.push(now);
+    state.errorTrend.value.push(globalErrorPct || 0);
+    if (state.errorTrend.ts.length > 90) {
+      state.errorTrend.ts = state.errorTrend.ts.slice(-90);
+      state.errorTrend.value = state.errorTrend.value.slice(-90);
+    }
+    const vals = state.errorTrend.value;
+    const n = vals.length;
+    const recent = n >= 2 ? vals[n - 1] - vals[n - 2] : 0;
+    const arrow = recent > 0.1 ? "⬆" : recent < -0.1 ? "⬇" : "➡";
+    const label = recent > 0.1 ? "Increasing" : recent < -0.1 ? "Decreasing" : "Stable";
+    el.errorTrendArrow.textContent = arrow;
+    el.errorTrendLabel.textContent = label;
+    if (state.errorChart) state.errorChart.destroy();
+    state.errorChart = new Chart(el.errorTrendChart, {
+      type: "line",
+      data: {
+        labels: state.errorTrend.ts,
+        datasets: [{ label: "Error %", data: state.errorTrend.value, borderColor: "#f97316", borderWidth: 2, pointRadius: 0, tension: 0.2 }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "#8fa3c4", maxTicksLimit: 8 }, grid: { color: "rgba(138,160,194,0.18)" } },
+          y: { ticks: { color: "#8fa3c4" }, grid: { color: "rgba(138,160,194,0.18)" } }
+        }
+      }
+    });
+  }
+
+  function renderRecentChanges(data) {
+    const c = data.context || {};
+    const k = c.kubernetes || {};
+    const d = c.deployment || {};
+    const list = [];
+    if (d.deployment_changed_last_10m) list.push("Deployment change detected in last 10m.");
+    if ((k.pod_restarts_10m || 0) > 0) list.push(`Pod restarts: ${k.pod_restarts_10m} in last 10m.`);
+    if ((k.crashloop_pods || 0) > 0) list.push(`CrashLoopBackOff pods: ${k.crashloop_pods}.`);
+    if ((k.oom_killed_10m || 0) > 0) list.push(`OOMKilled events: ${k.oom_killed_10m}.`);
+    if (!list.length) list.push("No major deployment/restart/config change signal in last 15m.");
+    el.recentChanges.innerHTML = "";
+    list.forEach((x) => {
+      const li = document.createElement("li");
+      li.textContent = x;
+      el.recentChanges.appendChild(li);
+    });
   }
 
   function pushTimeline(label, type) {
@@ -538,15 +637,17 @@
       const data = await fetchReasoning(namespace, service, severity);
       state.lastData = data;
       renderHeader(data);
-      renderAi(data);
       updateSignatureHistory(data.analysis || {});
       renderSignatures(data);
       renderCoverage(data);
       renderRaw(data);
+      renderErrorTrend((data.context?.metrics?.error_rate_5xx_5m || 0) * 100);
+      renderRecentChanges(data);
 
       const components = data.context?.components || [];
       await hydrateServiceTelemetry(components, namespace, severity);
       renderTelemetryCards(components);
+      renderAi(data);
 
       const metrics = data.context?.metrics || {};
       if ((metrics.anomalies || []).length) pushTimeline("Metric anomaly start", "telemetry");
@@ -574,6 +675,11 @@
     el.viewToggle.addEventListener("click", (e) => {
       if (e.target.tagName === "BUTTON") setMainView(e.target.dataset.view);
     });
+    el.timeWindow.addEventListener("change", () => {
+      el.customWindowWrap.classList.toggle("hidden", el.timeWindow.value !== "custom");
+      refresh();
+    });
+    el.customWindow.addEventListener("change", refresh);
     el.quickNav.addEventListener("click", (e) => {
       if (e.target.tagName !== "BUTTON") return;
       const id = e.target.dataset.target;
@@ -589,6 +695,18 @@
       const action = e.target.dataset.action;
       const ok = window.confirm(`Confirm action: ${action.replaceAll("_", " ")}?`);
       recordAudit(action, ok);
+    });
+    el.telemetryGrid.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-open]");
+      if (!btn) return;
+      const svc = btn.dataset.service;
+      const ns = (el.namespace.value || "dev").trim();
+      if (btn.dataset.open === "logs") {
+        const q = `{namespace="${ns}",pod=~".*${svc}.*"} |= "ERROR"`;
+        window.open(`http://127.0.0.1:3100/loki/api/v1/query_range?query=${encodeURIComponent(q)}`, "_blank");
+      } else if (btn.dataset.open === "traces") {
+        window.open(`http://127.0.0.1:16686/search?service=${encodeURIComponent(svc)}&lookback=1h&limit=20&minDuration=500ms`, "_blank");
+      }
     });
     el.signatureRows.addEventListener("click", (e) => {
       const row = e.target.closest("tr.sig-row");
@@ -623,7 +741,7 @@
     el.incidentStart.textContent = fmtDate(state.incidentStart);
     bindEvents();
     enforceRbac();
-    setMainView("ai");
+    setMainView("telemetry");
     setAiTab("signals");
     restartAutoRefresh();
     refresh();

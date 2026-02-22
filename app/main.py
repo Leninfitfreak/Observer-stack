@@ -59,6 +59,29 @@ def _extract_alert_fields(payload: AlertmanagerWebhook) -> dict[str, str]:
     }
 
 
+def _parse_time_window_to_minutes(value: str) -> int:
+    raw = (value or "30m").strip().lower()
+    if raw.endswith("m"):
+        try:
+            return max(5, min(360, int(raw[:-1])))
+        except Exception:
+            return 30
+    if raw.endswith("h"):
+        try:
+            return max(5, min(360, int(raw[:-1]) * 60))
+        except Exception:
+            return 60
+    if raw.endswith("d"):
+        try:
+            return max(5, min(360, int(raw[:-1]) * 24 * 60))
+        except Exception:
+            return 360
+    try:
+        return max(5, min(360, int(raw)))
+    except Exception:
+        return 30
+
+
 def _normalize_service_scope(namespace: str, service_value: str) -> tuple[str, list[str]]:
     raw = (service_value or "").strip()
     if not raw or raw.lower() in {"all", "*"}:
@@ -117,7 +140,12 @@ def _component_status(
     return {"service": service, "status": level, "reasons": reasons[:4]}
 
 
-def _collect_component_snapshot(namespace: str, service: str, alert_base: dict[str, str]) -> dict[str, Any]:
+def _collect_component_snapshot(
+    namespace: str,
+    service: str,
+    alert_base: dict[str, str],
+    window_minutes: int,
+) -> dict[str, Any]:
     datasource_errors: dict[str, str] = {}
     metrics: dict[str, Any] = {}
     logs_data: dict[str, Any] = {"summary": "logs datasource unavailable", "lines": []}
@@ -162,13 +190,18 @@ def _collect_component_snapshot(namespace: str, service: str, alert_base: dict[s
         slo_signals = {}
 
     try:
-        logs_data = loki.query_errors(namespace=namespace, service=service, minutes=5, limit=20)
+        logs_data = loki.query_errors(namespace=namespace, service=service, minutes=window_minutes, limit=20)
     except Exception as err:
         datasource_errors["loki"] = str(err)
         LOGGER.error("loki query failed service=%s namespace=%s error=%s", service, namespace, err)
 
     try:
-        traces_data = jaeger.query_slow_traces(service=service, limit=5, min_duration_ms=500)
+        traces_data = jaeger.query_slow_traces(
+            service=service,
+            limit=5,
+            min_duration_ms=500,
+            lookback_minutes=window_minutes,
+        )
     except Exception as err:
         datasource_errors["jaeger"] = str(err)
         LOGGER.error("jaeger query failed service=%s error=%s", service, err)
@@ -266,11 +299,12 @@ def _aggregate_snapshots(scope: str, alert: dict[str, str], snapshots: list[dict
     }
 
 
-def _run_reasoning(alert: dict[str, str]) -> dict[str, Any]:
+def _run_reasoning(alert: dict[str, str], window_minutes: int = 30) -> dict[str, Any]:
     namespace = alert["namespace"]
     scope, services = _normalize_service_scope(namespace, alert["service"])
-    snapshots = [_collect_component_snapshot(namespace, service, alert) for service in services]
+    snapshots = [_collect_component_snapshot(namespace, service, alert, window_minutes) for service in services]
     context = _aggregate_snapshots(scope, alert, snapshots)
+    context["time_window_minutes"] = window_minutes
 
     baseline_analysis = build_rule_based_analysis(context)
     if "human_summary" not in baseline_analysis:
@@ -334,6 +368,7 @@ def live_reasoning(
     namespace: str = Query(default=DEFAULT_NAMESPACE),
     service: str = Query(default=DEFAULT_SERVICE),
     severity: str = Query(default="warning"),
+    time_window: str = Query(default="30m"),
 ) -> dict[str, Any]:
     alert = {
         "alertname": "LiveObservabilitySnapshot",
@@ -342,10 +377,11 @@ def live_reasoning(
         "severity": severity,
         "status": "firing",
     }
-    return _run_reasoning(alert)
+    window_minutes = _parse_time_window_to_minutes(time_window)
+    return _run_reasoning(alert, window_minutes=window_minutes)
 
 
 @app.post("/webhook/alertmanager", response_model=AlertAnalysisResponse)
 def analyze_alert(payload: AlertmanagerWebhook) -> dict[str, Any]:
     alert = _extract_alert_fields(payload)
-    return _run_reasoning(alert)
+    return _run_reasoning(alert, window_minutes=30)
