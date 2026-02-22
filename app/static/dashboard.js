@@ -53,6 +53,8 @@
   };
 
   Chart.register(deployMarkerPlugin);
+  Chart.defaults.font.family = "Segoe UI, Arial, sans-serif";
+  Chart.defaults.color = "#5b6b82";
 
   const state = {
     incidentId: `INC-${Math.floor(Date.now() / 1000).toString().slice(-6)}`,
@@ -230,22 +232,31 @@
       data: {
         labels: hist.ts,
         datasets: [
-          { label: "p95 (ms)", data: hist.p95, yAxisID: "y", borderColor: "#60a5fa", borderWidth: 2, pointRadius: 0, tension: 0.2 },
-          { label: "p99 (ms)", data: hist.p99, yAxisID: "y", borderColor: "#a78bfa", borderWidth: 2, pointRadius: 0, tension: 0.2 },
-          { label: "5xx (%)", data: hist.err, yAxisID: "y1", borderColor: "#f97316", borderWidth: 2, pointRadius: 0, tension: 0.2 },
+          { label: "p95 (ms)", data: hist.p95, yAxisID: "y", borderColor: "#56A64B", borderWidth: 2, pointRadius: 0, tension: 0.25 },
+          { label: "p99 (ms)", data: hist.p99, yAxisID: "y", borderColor: "#9BCB93", borderWidth: 2, pointRadius: 0, tension: 0.25 },
+          { label: "5xx (%)", data: hist.err, yAxisID: "y1", borderColor: "#F28B4B", borderWidth: 2, pointRadius: 0, tension: 0.25, borderDash: [6, 4] },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
         plugins: {
-          legend: { labels: { color: "#a6bad7", boxWidth: 10 } },
+          legend: { labels: { color: "#5b6b82", boxWidth: 10 } },
+          tooltip: {
+            backgroundColor: "#ffffff",
+            borderColor: "#d7dee9",
+            borderWidth: 1,
+            titleColor: "#1f2937",
+            bodyColor: "#1f2937",
+            displayColors: true,
+          },
           deployMarkerPlugin: { deploy: hist.deploy, anomaly: hist.anomaly, errThreshold: 5 },
         },
         scales: {
-          x: { ticks: { color: "#8fa3c4", maxTicksLimit: 8 }, grid: { color: "rgba(138,160,194,0.22)" } },
-          y: { ticks: { color: "#8fa3c4" }, grid: { color: "rgba(138,160,194,0.22)" } },
-          y1: { position: "right", ticks: { color: "#f2b26a" }, grid: { drawOnChartArea: false } },
+          x: { ticks: { color: "#7a8799", maxTicksLimit: 8 }, grid: { color: "rgba(130,145,166,0.15)" } },
+          y: { ticks: { color: "#7a8799" }, grid: { color: "rgba(130,145,166,0.15)" } },
+          y1: { position: "right", ticks: { color: "#d5753b" }, grid: { drawOnChartArea: false } },
         },
       },
     };
@@ -537,15 +548,25 @@
       type: "line",
       data: {
         labels: state.errorTrend.ts,
-        datasets: [{ label: "Error %", data: state.errorTrend.value, borderColor: "#f97316", borderWidth: 2, pointRadius: 0, tension: 0.2 }]
+        datasets: [{ label: "Error %", data: state.errorTrend.value, borderColor: "#56A64B", borderWidth: 2, pointRadius: 0, tension: 0.25 }]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: "#ffffff",
+            borderColor: "#d7dee9",
+            borderWidth: 1,
+            titleColor: "#1f2937",
+            bodyColor: "#1f2937",
+          },
+        },
         scales: {
-          x: { ticks: { color: "#8fa3c4", maxTicksLimit: 8 }, grid: { color: "rgba(138,160,194,0.18)" } },
-          y: { ticks: { color: "#8fa3c4" }, grid: { color: "rgba(138,160,194,0.18)" } }
+          x: { ticks: { color: "#7a8799", maxTicksLimit: 8 }, grid: { color: "rgba(130,145,166,0.15)" } },
+          y: { ticks: { color: "#7a8799" }, grid: { color: "rgba(130,145,166,0.15)" } }
         }
       }
     });
