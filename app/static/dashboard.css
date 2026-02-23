@@ -238,6 +238,7 @@ h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
 .trend-chart-wrap { height: 160px; }
 
 .ai-top-row { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+.ai-status-row { margin: 0 0 10px; }
 .summary-two-line {
   background: var(--panel-soft);
   border: 1px solid var(--border);
@@ -265,6 +266,10 @@ h3 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
   border-radius: 999px;
   padding: 4px 8px;
   font-size: 12px;
+}
+.chip.warning {
+  border-color: #8c6a12;
+  color: var(--warn);
 }
 .map-actions {
   display: flex;

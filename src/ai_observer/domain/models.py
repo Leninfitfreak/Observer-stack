@@ -43,6 +43,14 @@ class ReasoningResult(BaseModel):
     missing_observability: list[str] = Field(default_factory=list)
     human_summary: str | None = None
     policy_note: str | None = None
+    executive_summary: str | None = None
+    assessment: str | None = None
+    most_likely_scenario: str | None = None
+    why_not_resource_saturation: list[str] = Field(default_factory=list)
+    incident_classification: str | None = None
+    confidence_details: dict[str, Any] = Field(default_factory=dict)
+    ai_response_status: str | None = None
+    change_detection_context: list[str] = Field(default_factory=list)
 
 
 class LiveReasoningResponse(BaseModel):

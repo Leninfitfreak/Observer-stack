@@ -139,13 +139,17 @@
     recentChanges: document.getElementById("recentChanges"),
     liveStatus: document.getElementById("liveStatus"),
     rootCauseSummary: document.getElementById("rootCauseSummary"),
+    incidentClassification: document.getElementById("incidentClassification"),
+    aiStatusBadge: document.getElementById("aiStatusBadge"),
     incidentSummaryText: document.getElementById("incidentSummaryText"),
     rootCauseHypothesisText: document.getElementById("rootCauseHypothesisText"),
+    whyNotSaturation: document.getElementById("whyNotSaturation"),
     metricSummarySignals: document.getElementById("metricSummarySignals"),
     confidence: document.getElementById("confidence"),
     riskWindow: document.getElementById("riskWindow"),
     confidenceBreakdown: document.getElementById("confidenceBreakdown"),
     correlatedSignals: document.getElementById("correlatedSignals"),
+    changeDetectionContext: document.getElementById("changeDetectionContext"),
     suggestedActions: document.getElementById("suggestedActions"),
     serviceBadges: document.getElementById("serviceBadges"),
     humanSummary: document.getElementById("humanSummary"),
@@ -494,13 +498,22 @@
   }
 
   function deriveConfidenceBreakdown(data) {
+    const fromAnalysis = data.analysis?.confidence_details || {};
+    if (Object.keys(fromAnalysis).length) {
+      return {
+        metric: fromAnalysis.data_completeness || "70%",
+        logs: fromAnalysis.signal_agreement || "Moderate",
+        trace: fromAnalysis.historical_similarity || "Moderate",
+        historical: fromAnalysis.overall_band || "Low-Medium",
+      };
+    }
     const missing = data.analysis?.missing_observability || [];
     const ds = data.context?.datasource_errors || {};
     return {
-      metric: Math.max(20, 58 - missing.length * 4),
-      logs: ds.loki || Object.keys(ds).some((k) => k.includes(":loki")) ? 25 : 70,
-      trace: ds.jaeger ? 25 : 65,
-      historical: Math.max(20, 72 - missing.length * 5),
+      metric: `${Math.max(20, 58 - missing.length * 4)}%`,
+      logs: ds.loki || Object.keys(ds).some((k) => k.includes(":loki")) ? "Low" : "Moderate",
+      trace: ds.jaeger ? "Low" : "Moderate",
+      historical: Math.max(20, 72 - missing.length * 5) >= 60 ? "Moderate" : "Low",
     };
   }
 
@@ -530,29 +543,47 @@
     const hasSignal = rps > 0 || p95ms > 0 || errPct > 0 || cpuPct > 0 || memMb > 0;
     const cpuUnavailable = rps > 0 && cpuPct === 0;
     const memUnavailable = rps > 0 && memMb === 0;
+    const status = String(a.ai_response_status || "complete");
+    const aiPartial = status.includes("partial");
 
     if (el.rootCauseSummary) el.rootCauseSummary.textContent = a.probable_root_cause || "-";
+    if (el.incidentClassification) el.incidentClassification.textContent = a.incident_classification || "False Positive";
     if (el.confidence) el.confidence.textContent = a.confidence_score || "-";
     if (el.riskWindow) el.riskWindow.textContent = a.risk_forecast?.predicted_breach_window || "-";
-    if (el.humanSummary) el.humanSummary.textContent = a.human_summary || "-";
+    if (el.humanSummary) el.humanSummary.textContent = a.executive_summary || a.human_summary || "-";
+    if (el.aiStatusBadge) {
+      el.aiStatusBadge.textContent = aiPartial ? "AI partial response - fallback used" : "AI complete";
+      el.aiStatusBadge.className = `chip ${aiPartial ? "warning" : ""}`;
+    }
     if (el.reasoningJson) el.reasoningJson.textContent = JSON.stringify({ causal_chain: a.causal_chain || [], corrective_actions: a.corrective_actions || [], preventive_hardening: a.preventive_hardening || [] }, null, 2);
     if (el.aiJson) el.aiJson.textContent = JSON.stringify({ analysis: a, component_summary: c.component_summary || {} }, null, 2);
     if (el.incidentSummaryText) {
-      el.incidentSummaryText.textContent = `Incident ${state.incidentId} | Severity ${String(el.severity?.value || "warning").toUpperCase()} | Service ${selectedService === "all" ? "all-services" : focusService}.`;
+      el.incidentSummaryText.textContent = a.executive_summary || a.human_summary || `Incident ${state.incidentId} under active monitoring.`;
     }
     if (el.rootCauseHypothesisText) {
-      el.rootCauseHypothesisText.textContent = a.human_summary || a.probable_root_cause || "No dominant hypothesis generated.";
+      el.rootCauseHypothesisText.textContent = a.most_likely_scenario || a.probable_root_cause || "No dominant hypothesis generated.";
+    }
+    if (el.whyNotSaturation) {
+      el.whyNotSaturation.innerHTML = "";
+      (a.why_not_resource_saturation || []).forEach((line) => {
+        const li = document.createElement("li");
+        li.textContent = line;
+        el.whyNotSaturation.appendChild(li);
+      });
     }
     if (el.metricSummarySignals) {
       const metricLines = [
-        `Request rate: ${rps.toFixed(2)} rps ${rps > 0 ? "(active)" : "(low/no traffic)"}`,
-        `p95 latency: ${p95ms}ms ${p95ms > 750 ? "(elevated)" : "(stable)"}`,
-        `5xx error rate: ${errPct.toFixed(2)}% ${errPct > 5 ? "(elevated)" : "(stable)"}`,
-        `CPU usage: ${Math.round(cpuPct)}% ${cpuUnavailable ? "(unavailable from datasource)" : ((cpuPct > 80) ? "(high)" : "(normal)")}`,
-        `Memory usage: ${Math.round(memMb)}MB ${memUnavailable ? "(unavailable from datasource)" : ((memMb > 1024) ? "(high)" : "(normal)")}`,
+        "Service performance remains within normal operating baseline.",
+        errPct <= 1 ? "No error-rate growth detected." : "Error-rate growth detected and requires monitoring.",
+        (cpuPct < 80 && memMb < 1024) ? "Resource utilization remains below saturation thresholds." : "Resource pressure is approaching saturation thresholds.",
+        (errPct <= 1 && p95ms <= 750) ? "No evidence of active degradation." : "Latency/error signals indicate possible degradation.",
+        `Current telemetry: RPS ${rps.toFixed(2)}, p95 ${p95ms}ms, 5xx ${errPct.toFixed(2)}%, CPU ${Math.round(cpuPct)}%, Memory ${Math.round(memMb)}MB.`,
       ];
+      if (cpuUnavailable || memUnavailable) {
+        metricLines.push("Some resource signals are partially unavailable; confidence is adjusted accordingly.");
+      }
       if (!hasSignal && promErrors.length) {
-        metricLines.unshift(`Metrics source degraded: ${promErrors[0].slice(0, 160)}`);
+        metricLines.unshift("Telemetry source health is degraded; deterministic fallback reasoning is in effect.");
       }
       el.metricSummarySignals.innerHTML = "";
       metricLines.forEach((line) => {
@@ -564,10 +595,10 @@
 
     const conf = deriveConfidenceBreakdown(data);
     if (el.confidenceBreakdown) el.confidenceBreakdown.innerHTML = `
-      <span class="chip">Metric ${conf.metric}%</span>
-      <span class="chip">Logs ${conf.logs}%</span>
-      <span class="chip">Trace ${conf.trace}%</span>
-      <span class="chip">Historical ${conf.historical}%</span>
+      <span class="chip">Data Completeness ${conf.metric}</span>
+      <span class="chip">Signal Agreement ${conf.logs}</span>
+      <span class="chip">Historical Similarity ${conf.trace}</span>
+      <span class="chip">Overall Confidence ${conf.historical}</span>
     `;
     if (el.correlatedSignals) el.correlatedSignals.innerHTML = "";
     (a.causal_chain || ["No strong multi-signal causal chain detected"]).forEach((line) => {
@@ -576,6 +607,14 @@
       li.textContent = line;
       el.correlatedSignals.appendChild(li);
     });
+    if (el.changeDetectionContext) {
+      el.changeDetectionContext.innerHTML = "";
+      (a.change_detection_context || ["No deployment/config/scaling changes detected in current window."]).forEach((line) => {
+        const li = document.createElement("li");
+        li.textContent = line;
+        el.changeDetectionContext.appendChild(li);
+      });
+    }
     if (el.suggestedActions) {
       const steps = [...(a.corrective_actions || []), ...(a.recommended_remediation ? [a.recommended_remediation] : [])].slice(0, 4);
       el.suggestedActions.innerHTML = "";

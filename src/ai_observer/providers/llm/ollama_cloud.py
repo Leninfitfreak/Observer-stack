@@ -39,4 +39,4 @@ class OllamaCloudProvider:
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            return {"human_summary": "LLM response parsing failed"}
+            return {"_llm_partial": True}

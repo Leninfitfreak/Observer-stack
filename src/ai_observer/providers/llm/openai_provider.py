@@ -39,4 +39,4 @@ class OpenAIProvider:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            return {"human_summary": "Cloud LLM response parsing failed"}
+            return {"_llm_partial": True}

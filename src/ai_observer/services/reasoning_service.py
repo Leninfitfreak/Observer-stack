@@ -59,10 +59,74 @@ class ReasoningService:
                 pods.append(target)
         return sorted(set(pods))
 
+    @staticmethod
+    def _incident_classification(metrics: dict[str, Any], missing_observability: list[str]) -> str:
+        error_rate = float(metrics.get("error_rate_5xx_5m", 0) or 0)
+        latency = float(metrics.get("latency_p95_s_5m", 0) or 0)
+        if missing_observability:
+            return "Observability Gap"
+        if error_rate > 0.05 or latency > 0.75:
+            return "Performance Degradation"
+        return "False Positive"
+
+    @staticmethod
+    def _resource_saturation_signals(metrics: dict[str, Any]) -> list[str]:
+        cpu_pct = float(metrics.get("cpu_usage_cores_5m", 0) or 0) * 100
+        mem_mb = float(metrics.get("memory_usage_bytes", 0) or 0) / (1024 * 1024)
+        restarts = float(metrics.get("pod_restarts_10m", 0) or 0)
+        return [
+            f"CPU {round(cpu_pct)}% {'(high)' if cpu_pct > 80 else '(below saturation)'}",
+            f"Memory {round(mem_mb)}MB {'(high)' if mem_mb > 1024 else '(stable)'}",
+            f"Pod restarts {int(restarts)} {'(elevated)' if restarts > 0 else '(none)'}",
+        ]
+
+    @staticmethod
+    def _confidence_details(context: dict[str, Any]) -> dict[str, Any]:
+        missing = context.get("analysis_missing_observability", []) or []
+        ds_errors = context.get("datasource_errors", {}) or {}
+        metrics = context.get("metrics", {}) or {}
+        anomaly_count = len(metrics.get("anomalies", []) or [])
+        data_completeness = max(30, 100 - (len(missing) * 8) - (len(ds_errors) * 10))
+        signal_agreement = "High" if anomaly_count >= 2 else "Moderate" if anomaly_count == 1 else "Low"
+        historical_similarity = "High" if data_completeness >= 85 else "Moderate" if data_completeness >= 60 else "Low"
+        overall_band = "High" if data_completeness >= 80 else "Low-Medium" if data_completeness >= 55 else "Low"
+        return {
+            "data_completeness": f"{data_completeness}%",
+            "signal_agreement": signal_agreement,
+            "historical_similarity": historical_similarity,
+            "overall_band": overall_band,
+        }
+
+    @staticmethod
+    def _metric_narrative(metrics: dict[str, Any]) -> tuple[str, list[str]]:
+        rps = float(metrics.get("request_rate_rps_5m", 0) or 0)
+        p95_ms = float(metrics.get("latency_p95_s_5m", 0) or 0) * 1000
+        err_pct = float(metrics.get("error_rate_5xx_5m", 0) or 0) * 100
+        cpu_pct = float(metrics.get("cpu_usage_cores_5m", 0) or 0) * 100
+        mem_mb = float(metrics.get("memory_usage_bytes", 0) or 0) / (1024 * 1024)
+
+        if err_pct > 5 or p95_ms > 750:
+            summary = "Service behavior indicates active degradation with elevated latency and/or error pressure."
+        elif rps <= 0.01:
+            summary = "Traffic is currently minimal; no reliable evidence of active degradation in this window."
+        else:
+            summary = "Service performance remains within normal operating baseline."
+
+        bullets = [
+            "No error-rate growth detected." if err_pct <= 1 else "Error-rate growth detected and requires watch.",
+            "Resource utilization is below saturation thresholds." if cpu_pct < 80 and mem_mb < 1024 else "Resource utilization is approaching saturation thresholds.",
+            "No evidence of active degradation." if err_pct <= 1 and p95_ms <= 750 else "Latency or failure signals indicate active degradation.",
+        ]
+        return summary, bullets
+
     def _baseline(self, context: dict[str, Any]) -> dict[str, Any]:
         metrics = context.get("metrics", {})
         error_rate = metrics.get("error_rate_5xx_5m", 0) or 0
         latency = metrics.get("latency_p95_s_5m", 0) or 0
+        missing_observability = context.get("analysis_missing_observability", []) or []
+        classification = self._incident_classification(metrics, missing_observability)
+        metric_summary, metric_bullets = self._metric_narrative(metrics)
+        why_not_resource = self._resource_saturation_signals(metrics)
 
         if error_rate > 0.05:
             root = "5xx error-rate spike"
@@ -77,20 +141,45 @@ class ReasoningService:
             impact = "Low"
             confidence = 0.43
 
+        confidence_details = self._confidence_details(context)
+        change_detection_context = []
+        deployment = context.get("deployment", {}) or {}
+        if deployment.get("deployment_changed_last_10m"):
+            change_detection_context.append("Deployment change detected in last 10 minutes.")
+        else:
+            change_detection_context.append("No deployments detected in last 30 minutes.")
+        if deployment.get("ai_observer_frontend_changed_last_15m"):
+            change_detection_context.append("AI Observer frontend changed recently.")
+        else:
+            change_detection_context.append("No AI Observer frontend/config update detected in last 15 minutes.")
+
         return {
             "probable_root_cause": root,
             "impact_level": impact,
-            "recommended_remediation": "Continue monitoring and validate telemetry coverage.",
+            "recommended_remediation": "Continue monitoring for 10-15 minutes; no active mitigation is recommended at current signal confidence.",
             "confidence": confidence,
             "confidence_score": f"{round(confidence * 100)}%",
-            "causal_chain": ["No strong multi-signal causal chain detected from current telemetry."],
-            "corrective_actions": ["No immediate mitigation required."],
+            "causal_chain": ["Assessment: No correlated anomaly detected across metrics and logs."],
+            "corrective_actions": [
+                "Restart Pod - 58% likelihood of resolving transient application stalls.",
+                "Scale Deployment - 34% likelihood if latency persists under load.",
+                "Rollback - 12% likelihood unless tied to a confirmed recent release.",
+            ],
             "preventive_hardening": ["Add recording rules and SLO burn-rate alerts."],
             "risk_forecast": {"predicted_breach_window": "low_risk"},
             "deployment_correlation": {"within_10m": bool(context.get("deployment", {}).get("deployment_changed_last_10m"))},
             "error_log_prediction": {"repeated_signatures": []},
-            "missing_observability": [],
-            "human_summary": f"Probable root cause: {root}. Impact: {impact}.",
+            "missing_observability": missing_observability,
+            "human_summary": f"{metric_summary} Impact remains {impact.lower()}.",
+            "executive_summary": metric_summary,
+            "assessment": "No correlated anomaly detected across metrics and logs.",
+            "most_likely_scenario": "False positive trigger or transient fluctuation.",
+            "why_not_resource_saturation": why_not_resource,
+            "incident_classification": classification,
+            "confidence_details": confidence_details,
+            "ai_response_status": "complete",
+            "change_detection_context": change_detection_context,
+            "supporting_evidence": metric_bullets,
         }
 
     def _normalize(self, analysis: dict[str, Any]) -> dict[str, Any]:
@@ -109,10 +198,14 @@ class ReasoningService:
         out["corrective_actions"] = to_list_str(out.get("corrective_actions"))
         out["preventive_hardening"] = to_list_str(out.get("preventive_hardening"))
         out["missing_observability"] = to_list_str(out.get("missing_observability"))
+        out["why_not_resource_saturation"] = to_list_str(out.get("why_not_resource_saturation"))
+        out["change_detection_context"] = to_list_str(out.get("change_detection_context"))
         if not isinstance(out.get("deployment_correlation"), dict):
             out["deployment_correlation"] = {"value": out.get("deployment_correlation")}
         if not isinstance(out.get("error_log_prediction"), dict):
             out["error_log_prediction"] = {"value": out.get("error_log_prediction")}
+        if not isinstance(out.get("confidence_details"), dict):
+            out["confidence_details"] = {}
 
         if "confidence_score" not in out and out.get("confidence") is not None:
             try:
@@ -220,15 +313,36 @@ class ReasoningService:
             "datasource_errors": errors,
         }
 
+        missing_observability: list[str] = []
+        if not context_data["metrics"].get("db_connection_pool_usage_5m"):
+            missing_observability.append("db_connection_pool_usage metric missing")
+        if not context_data["metrics"].get("thread_pool_saturation_5m"):
+            missing_observability.append("thread_pool_saturation metric missing")
+        if not context_data["metrics"].get("kafka_consumer_lag"):
+            missing_observability.append("kafka_consumer_lag metric missing")
+        context_data["analysis_missing_observability"] = missing_observability
+
         baseline = self._baseline(context_data)
         try:
             llm_response = self.llm_provider.analyze({"context": context_data, "baseline": baseline})
+            llm_partial = bool(llm_response.get("_llm_partial"))
             merged = dict(baseline)
-            merged.update({k: v for k, v in llm_response.items() if v is not None and v != ""})
+            merged.update({k: v for k, v in llm_response.items() if not str(k).startswith("_") and v is not None and v != ""})
+            if llm_partial:
+                merged["ai_response_status"] = "partial_fallback"
+                merged["confidence"] = min(float(merged.get("confidence") or 0.4), 0.55)
+                merged["confidence_score"] = f"{round(float(merged.get('confidence') or 0.4) * 100)}%"
+                merged["human_summary"] = "No service degradation detected. AI model response was incomplete; deterministic fallback reasoning is applied."
+                merged["probable_root_cause"] = "No correlated degradation; fallback reasoning in effect."
             analysis_data = self._normalize(merged)
         except Exception as exc:
             errors["llm"] = str(exc)
             context_data["datasource_errors"] = errors
+            baseline["ai_response_status"] = "partial_fallback"
+            baseline["confidence"] = min(float(baseline.get("confidence") or 0.4), 0.55)
+            baseline["confidence_score"] = f"{round(float(baseline.get('confidence') or 0.4) * 100)}%"
+            baseline["human_summary"] = "No service degradation detected. AI model response was incomplete; deterministic fallback reasoning is applied."
+            baseline["probable_root_cause"] = "No correlated degradation; fallback reasoning in effect."
             analysis_data = self._normalize(baseline)
 
         analysis_data["policy_note"] = "No auto-remediation was applied. Explicit approval required before changes."

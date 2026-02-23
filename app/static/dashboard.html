@@ -147,34 +147,47 @@
         <h2>Observability Agent</h2>
         <div class="ai-top-row">
           <div class="summary-two-line" id="rootCauseSummary">-</div>
+          <div class="kpi compact"><span>Classification</span><strong id="incidentClassification">-</strong></div>
           <div class="kpi compact"><span>Confidence</span><strong id="confidence">-</strong></div>
           <div class="kpi compact"><span>Risk Level</span><strong id="riskWindow">-</strong></div>
         </div>
+        <div class="ai-status-row">
+          <span class="chip" id="aiStatusBadge">AI complete</span>
+        </div>
         <div id="aiTabSignals" class="ai-tab-content">
           <div class="panel">
-            <h3>Incident Summary</h3>
+            <h3>Executive Summary</h3>
             <p id="incidentSummaryText">-</p>
           </div>
           <div class="panel">
             <h3>Root Cause Hypothesis</h3>
             <p id="rootCauseHypothesisText">-</p>
+            <ul id="whyNotSaturation"></ul>
           </div>
           <div class="panel">
-            <h3>Metric Summary (Last 15m)</h3>
+            <h3>Supporting Evidence</h3>
             <ul id="metricSummarySignals"></ul>
           </div>
           <div class="panel">
-            <h3>Confidence Breakdown</h3>
+            <h3>Change Detection Context</h3>
+            <ul id="changeDetectionContext"></ul>
+          </div>
+          <div class="panel">
+            <h3>Confidence</h3>
             <div id="confidenceBreakdown" class="chips"></div>
           </div>
           <div class="panel">
-            <h3>Supporting Signals</h3>
+            <h3>Correlated Signals</h3>
             <ul id="correlatedSignals"></ul>
           </div>
           <div class="panel">
             <h3>Suggested Actions</h3>
             <ol id="suggestedActions"></ol>
           </div>
+          <details class="panel">
+            <summary>Raw JSON (collapsed)</summary>
+            <pre id="reasoningJson">-</pre>
+          </details>
         </div>
       </div>
     </section>
