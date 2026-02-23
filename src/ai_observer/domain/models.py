@@ -26,6 +26,9 @@ class ObservabilityContext(BaseModel):
     component_summary: dict[str, Any] = Field(default_factory=dict)
     cluster_wiring: dict[str, Any] = Field(default_factory=dict)
     datasource_errors: dict[str, str] = Field(default_factory=dict)
+    signal_scores: dict[str, Any] = Field(default_factory=dict)
+    causal_likelihoods: dict[str, Any] = Field(default_factory=dict)
+    incident_lifecycle: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReasoningResult(BaseModel):
@@ -51,6 +54,9 @@ class ReasoningResult(BaseModel):
     confidence_details: dict[str, Any] = Field(default_factory=dict)
     ai_response_status: str | None = None
     change_detection_context: list[str] = Field(default_factory=list)
+    signal_scores: dict[str, Any] = Field(default_factory=dict)
+    causal_likelihoods: dict[str, Any] = Field(default_factory=dict)
+    incident_lifecycle: dict[str, Any] = Field(default_factory=dict)
 
 
 class LiveReasoningResponse(BaseModel):

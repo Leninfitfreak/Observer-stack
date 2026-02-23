@@ -148,6 +148,7 @@
     confidence: document.getElementById("confidence"),
     riskWindow: document.getElementById("riskWindow"),
     confidenceBreakdown: document.getElementById("confidenceBreakdown"),
+    riskForecast15m: document.getElementById("riskForecast15m"),
     correlatedSignals: document.getElementById("correlatedSignals"),
     changeDetectionContext: document.getElementById("changeDetectionContext"),
     suggestedActions: document.getElementById("suggestedActions"),
@@ -600,6 +601,11 @@
       <span class="chip">Historical Similarity ${conf.trace}</span>
       <span class="chip">Overall Confidence ${conf.historical}</span>
     `;
+    if (el.riskForecast15m) {
+      const risk15 = Number(a.risk_forecast?.predicted_breach_next_15m_pct || 0);
+      const band = risk15 >= 70 ? "High" : risk15 >= 40 ? "Medium" : "Low";
+      el.riskForecast15m.textContent = `Probability of SLO breach in next 15 minutes: ${risk15.toFixed(1)}% (${band}).`;
+    }
     if (el.correlatedSignals) el.correlatedSignals.innerHTML = "";
     (a.causal_chain || ["No strong multi-signal causal chain detected"]).forEach((line) => {
       if (!el.correlatedSignals) return;

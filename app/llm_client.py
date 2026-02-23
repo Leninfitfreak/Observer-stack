@@ -129,7 +129,7 @@ class LlmClient:
         if repaired:
             return repaired
 
-        return {"human_summary": "LLM response parsing failed"}
+        return {"_llm_partial": True}
 
     def _analyze_openai(self, prompt: str) -> dict[str, Any]:
         if not self.openai_api_key:
@@ -162,4 +162,4 @@ class LlmClient:
         repaired = self._repair_json_with_openai(content)
         if repaired:
             return repaired
-        return {"human_summary": "Cloud LLM response parsing failed"}
+        return {"_llm_partial": True}

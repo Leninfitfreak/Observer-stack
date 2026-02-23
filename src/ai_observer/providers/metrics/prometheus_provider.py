@@ -39,6 +39,14 @@ class PrometheusMetricsProvider:
         return None
 
     @staticmethod
+    def _safe_ratio(num: float | None, den: float | None) -> float:
+        n = float(num or 0)
+        d = float(den or 0)
+        if d <= 0:
+            return 0.0
+        return n / d
+
+    @staticmethod
     def _regex_union(values: list[str]) -> str:
         # PromQL label regex uses RE2 string escaping; escaping '-' as '\-'
         # can produce parse errors. Keep literals simple and only escape
@@ -135,6 +143,30 @@ class PrometheusMetricsProvider:
             f'sum(container_memory_usage_bytes{{{pod_filter},container!="",container!="POD"}})',
             f'sum(node_namespace_pod_container:container_memory_working_set_bytes{{{pod_filter}}})',
         )
+        db_pool_usage = self._query_first(
+            f'sum(hikaricp_connections_active{{{job_filter}}}) / clamp_min(sum(hikaricp_connections_max{{{job_filter}}}), 1)',
+            f'sum(hikaricp_connections_active{{{job_filter_all}}}) / clamp_min(sum(hikaricp_connections_max{{{job_filter_all}}}), 1)',
+        )
+        thread_pool_saturation = self._query_first(
+            f'sum(jvm_threads_live_threads{{{job_filter}}}) / clamp_min(sum(jvm_threads_peak_threads{{{job_filter}}}), 1)',
+            f'sum(jvm_threads_live_threads{{{job_filter_all}}}) / clamp_min(sum(jvm_threads_peak_threads{{{job_filter_all}}}), 1)',
+        )
+        kafka_lag = self._query_first(
+            f'sum(kafka_consumergroup_lag{{{job_filter}}})',
+            f'sum(kafka_consumergroup_lag{{{job_filter_all}}})',
+        )
+        baseline_p95_7d = self._query_first(
+            f'avg_over_time((clamp_min(sum(rate(http_server_requests_seconds_sum{{{job_filter}}}[5m])) / clamp_min(sum(rate(http_server_requests_seconds_count{{{job_filter}}}[5m])), 0.000001), 0))[7d:5m])',
+            f'avg_over_time((clamp_min(sum(rate(http_server_requests_seconds_sum{{{job_filter_all}}}[5m])) / clamp_min(sum(rate(http_server_requests_seconds_count{{{job_filter_all}}}[5m])), 0.000001), 0))[7d:5m])',
+        )
+        p95_yesterday = self._query_first(
+            f'clamp_min(sum(rate(http_server_requests_seconds_sum{{{job_filter}}}[5m] offset 1d)) / clamp_min(sum(rate(http_server_requests_seconds_count{{{job_filter}}}[5m] offset 1d)), 0.000001), 0)',
+            f'clamp_min(sum(rate(http_server_requests_seconds_sum{{{job_filter_all}}}[5m] offset 1d)) / clamp_min(sum(rate(http_server_requests_seconds_count{{{job_filter_all}}}[5m] offset 1d)), 0.000001), 0)',
+        )
+        error_rate_prev_5m = self._query_first(
+            f'sum(rate(http_server_requests_seconds_count{{status=~"5..",{job_filter}}}[5m] offset 5m)) / clamp_min(sum(rate(http_server_requests_seconds_count{{{job_filter}}}[5m] offset 5m)), 0.000001)',
+            f'sum(rate(http_server_requests_seconds_count{{status=~"5..",{req_filter}}}[5m] offset 5m)) / clamp_min(sum(rate(http_server_requests_seconds_count{{{req_filter}}}[5m] offset 5m)), 0.000001)',
+        )
 
         metrics = {
             "request_rate_rps_5m": self._query_with_fallback(
@@ -157,10 +189,25 @@ class PrometheusMetricsProvider:
             ) or 0,
             "cpu_usage_cores_5m": cpu_usage or 0,
             "memory_usage_bytes": memory_usage or 0,
+            "db_connection_pool_usage_5m": db_pool_usage or 0,
+            "thread_pool_saturation_5m": thread_pool_saturation or 0,
+            "kafka_consumer_lag": kafka_lag or 0,
+            "baseline_p95_s_7d": baseline_p95_7d or 0,
+            "p95_yesterday_s_5m": p95_yesterday or 0,
+            "error_rate_prev_5m": error_rate_prev_5m or 0,
             "pod_restarts_10m": self._query_scalar(
                 f'sum(increase(kube_pod_container_status_restarts_total{{{pod_filter}}}[10m]))'
             ) or 0,
         }
+
+        base_p95 = metrics.get("baseline_p95_s_7d", 0) or 0
+        cur_p95 = metrics.get("latency_p95_s_5m", 0) or 0
+        prev_err = metrics.get("error_rate_prev_5m", 0) or 0
+        cur_err = metrics.get("error_rate_5xx_5m", 0) or 0
+        metrics["latency_deviation_7d_pct"] = (
+            ((cur_p95 - base_p95) / base_p95) * 100 if base_p95 > 0 else 0
+        )
+        metrics["error_growth_rate"] = cur_err - prev_err
 
         anomalies: list[str] = []
         if metrics["error_rate_5xx_5m"] > 0.05:
