@@ -35,6 +35,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 - `OLLAMA_TIMEOUT_SECONDS` (default: `180`)
 - `OLLAMA_ATTEMPTS` (default: `1`)
 - `KNOWN_ERROR_SIGNATURES` (optional, comma-separated)
+- `DATABASE_URL` (default: `postgresql+psycopg://postgres:postgres@postgres:5432/ai_observer`)
+- `DB_ECHO_SQL` (default: `false`)
 
 ## Endpoints
 
@@ -42,6 +44,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
 - `POST /webhook/alertmanager`
 - `GET /api/reasoning/live?namespace=dev&service=order-service&severity=warning`
 - `GET /dashboard`
+- `POST /incident-analysis`
+- `GET /incident-analysis?start_date=2026-02-20&end_date=2026-02-23&service_name=order-service&limit=50&offset=0`
+- `GET /incident-analysis/summary?start_date=2026-02-20&end_date=2026-02-23`
+- `PATCH /incident-analysis/{incident_id}/mitigation-result`
 
 ## Response highlights
 
@@ -52,3 +58,62 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080
   - `causal_chain`, `corrective_actions`, `preventive_hardening`
   - `risk_forecast`, `deployment_correlation`, `error_log_prediction`
   - `missing_observability`, `policy_note`
+
+## Incident Analysis Persistence
+
+The service now stores structured incident snapshots in PostgreSQL table `incident_analysis`.
+
+### Database initialization
+
+1. Ensure PostgreSQL is reachable from `DATABASE_URL`.
+2. Apply migration script:
+
+```bash
+psql "$DATABASE_URL" -f migrations/001_create_incident_analysis.sql
+```
+
+`create_app()` also runs `Base.metadata.create_all()` for safety at startup.
+
+### Example JSON payload
+
+```json
+{
+  "incident_id": "INC-803040",
+  "service_name": "product-service",
+  "anomaly_score": 0.18,
+  "confidence_score": 0.62,
+  "classification": "False Positive",
+  "root_cause": "No correlated anomaly detected across metrics/logs/traces",
+  "mitigation": {
+    "actions": ["Restart Pod", "Inspect DB pool config"]
+  },
+  "risk_forecast": 0.04,
+  "mitigation_success": null
+}
+```
+
+### Example curl requests
+
+```bash
+curl -X POST "http://127.0.0.1:8080/incident-analysis" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "incident_id":"INC-803040",
+    "service_name":"product-service",
+    "anomaly_score":0.18,
+    "confidence_score":0.62,
+    "classification":"False Positive",
+    "root_cause":"No correlated anomaly detected",
+    "mitigation":{"actions":["Restart Pod"]},
+    "risk_forecast":0.04,
+    "mitigation_success":null
+  }'
+
+curl "http://127.0.0.1:8080/incident-analysis?start_date=2026-02-20&end_date=2026-02-23&service_name=product-service&limit=20&offset=0"
+
+curl "http://127.0.0.1:8080/incident-analysis/summary?start_date=2026-02-20&end_date=2026-02-23"
+
+curl -X PATCH "http://127.0.0.1:8080/incident-analysis/INC-803040/mitigation-result" \
+  -H "Content-Type: application/json" \
+  -d '{"mitigation_success":true}'
+```

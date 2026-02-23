@@ -40,11 +40,18 @@ class ObservabilitySettings:
 
 
 @dataclass(frozen=True)
+class DatabaseSettings:
+    url: str = "postgresql+psycopg://postgres:postgres@postgres:5432/ai_observer"
+    echo_sql: bool = False
+
+
+@dataclass(frozen=True)
 class AppSettings:
     telemetry: TelemetrySettings
     llm: LlmSettings
     observability: ObservabilitySettings
     http: HttpSettings
+    database: DatabaseSettings
 
 
 def _to_int(value: str | None, default: int, min_value: int, max_value: int) -> int:
@@ -97,4 +104,9 @@ def load_settings() -> AppSettings:
         attempts=_to_int(os.getenv("HTTP_ATTEMPTS", os.getenv("LLM_ATTEMPTS", "3")), default=3, min_value=1, max_value=10),
     )
 
-    return AppSettings(telemetry=telemetry, llm=llm, observability=observability, http=http)
+    database = DatabaseSettings(
+        url=os.getenv("DATABASE_URL", "postgresql+psycopg://postgres:postgres@postgres:5432/ai_observer").strip(),
+        echo_sql=(os.getenv("DB_ECHO_SQL", "false").strip().lower() in {"1", "true", "yes", "on"}),
+    )
+
+    return AppSettings(telemetry=telemetry, llm=llm, observability=observability, http=http, database=database)

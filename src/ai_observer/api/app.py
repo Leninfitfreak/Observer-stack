@@ -6,10 +6,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from ai_observer.api.routes import health_router, reasoning_router
+from ai_observer.api.routes import health_router, incident_analysis_router, reasoning_router
 from ai_observer.core.di import build_container
 from ai_observer.core.logging import setup_logging
 from ai_observer.core.settings import AppSettings, load_settings
+from ai_observer.incident_analysis.database import init_database
 
 
 def create_app(settings: AppSettings | None = None) -> FastAPI:
@@ -18,6 +19,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     app = FastAPI(title="AI Observer Agent", version="3.0.0")
     app.state.container = build_container(cfg)
+    init_database(cfg.database.url, cfg.database.echo_sql)
 
     repo_root = Path(__file__).resolve().parents[3]
     static_candidates = [
@@ -44,4 +46,5 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(reasoning_router)
+    app.include_router(incident_analysis_router)
     return app
