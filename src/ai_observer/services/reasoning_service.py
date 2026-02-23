@@ -307,6 +307,9 @@ class ReasoningService:
         }
         most_likely = scenario_map.get(top_domain, "Transient runtime or traffic fluctuation is the most likely contributor.")
         risk_15m = self._risk_forecast_15m(metrics, lifecycle)
+        anomaly_score = float(signal_scores.get("overall_anomaly_score", 0) or 0)
+        anomaly_threshold = 0.65
+        anomaly_status = "Anomalous" if anomaly_score >= anomaly_threshold else "Normal"
 
         return {
             "probable_root_cause": root,
@@ -328,6 +331,7 @@ class ReasoningService:
             "risk_forecast": {
                 "predicted_breach_window": "likely_breach_within_1h" if risk_15m >= 70 else "likely_breach_within_24h" if risk_15m >= 40 else "low_risk",
                 "predicted_breach_next_15m_pct": risk_15m,
+                "context": "Based on current burn rate and latency stability.",
             },
             "deployment_correlation": {"within_10m": bool(context.get("deployment", {}).get("deployment_changed_last_10m"))},
             "error_log_prediction": {"repeated_signatures": []},
@@ -345,6 +349,12 @@ class ReasoningService:
             "signal_scores": signal_scores,
             "causal_likelihoods": causal_likelihoods,
             "incident_lifecycle": lifecycle,
+            "anomaly_summary": {
+                "score": round(anomaly_score, 3),
+                "threshold": anomaly_threshold,
+                "status": anomaly_status,
+            },
+            "engine_boundary_note": "Classification and scoring are computed by deterministic signal engine; LLM is used only for structured narrative generation.",
         }
 
     def _normalize(self, analysis: dict[str, Any]) -> dict[str, Any]:
@@ -377,6 +387,8 @@ class ReasoningService:
             out["causal_likelihoods"] = {}
         if not isinstance(out.get("incident_lifecycle"), dict):
             out["incident_lifecycle"] = {}
+        if not isinstance(out.get("anomaly_summary"), dict):
+            out["anomaly_summary"] = {}
 
         if "confidence_score" not in out and out.get("confidence") is not None:
             try:

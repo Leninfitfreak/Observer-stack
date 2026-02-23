@@ -57,6 +57,8 @@ class ReasoningResult(BaseModel):
     signal_scores: dict[str, Any] = Field(default_factory=dict)
     causal_likelihoods: dict[str, Any] = Field(default_factory=dict)
     incident_lifecycle: dict[str, Any] = Field(default_factory=dict)
+    anomaly_summary: dict[str, Any] = Field(default_factory=dict)
+    engine_boundary_note: str | None = None
 
 
 class LiveReasoningResponse(BaseModel):

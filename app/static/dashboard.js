@@ -149,6 +149,8 @@
     riskWindow: document.getElementById("riskWindow"),
     confidenceBreakdown: document.getElementById("confidenceBreakdown"),
     riskForecast15m: document.getElementById("riskForecast15m"),
+    anomalyScoreLine: document.getElementById("anomalyScoreLine"),
+    engineBoundaryNote: document.getElementById("engineBoundaryNote"),
     correlatedSignals: document.getElementById("correlatedSignals"),
     changeDetectionContext: document.getElementById("changeDetectionContext"),
     suggestedActions: document.getElementById("suggestedActions"),
@@ -601,10 +603,21 @@
       <span class="chip">Historical Similarity ${conf.trace}</span>
       <span class="chip">Overall Confidence ${conf.historical}</span>
     `;
+    if (el.anomalyScoreLine) {
+      const as = a.anomaly_summary || {};
+      const score = Number(as.score || 0);
+      const threshold = Number(as.threshold || 0.65);
+      const status = as.status || (score >= threshold ? "Anomalous" : "Normal");
+      el.anomalyScoreLine.textContent = `Anomaly Score: ${score.toFixed(2)} / 1.00 | Threshold: ${threshold.toFixed(2)} | Status: ${status}`;
+    }
+    if (el.engineBoundaryNote) {
+      el.engineBoundaryNote.textContent = a.engine_boundary_note || "Classification and scoring are deterministic; LLM is narrative-only.";
+    }
     if (el.riskForecast15m) {
       const risk15 = Number(a.risk_forecast?.predicted_breach_next_15m_pct || 0);
       const band = risk15 >= 70 ? "High" : risk15 >= 40 ? "Medium" : "Low";
-      el.riskForecast15m.textContent = `Probability of SLO breach in next 15 minutes: ${risk15.toFixed(1)}% (${band}).`;
+      const ctx = a.risk_forecast?.context || "Based on current burn rate and latency stability.";
+      el.riskForecast15m.textContent = `Probability of SLO breach in next 15 minutes: ${risk15.toFixed(1)}% (${band}). ${ctx}`;
     }
     if (el.correlatedSignals) el.correlatedSignals.innerHTML = "";
     (a.causal_chain || ["No strong multi-signal causal chain detected"]).forEach((line) => {

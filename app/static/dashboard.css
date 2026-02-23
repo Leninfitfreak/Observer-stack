@@ -407,6 +407,15 @@ pre::selection { background: rgba(59, 130, 246, 0.35); }
   font-size: 16px;
 }
 
+#anomalyScoreLine,
+#engineBoundaryNote,
+#riskForecast15m {
+  margin: 8px 0 0;
+  line-height: 1.55;
+  font-size: 14px;
+  color: var(--muted);
+}
+
 [data-panel-id="timeline"] {
   display: none;
 }
