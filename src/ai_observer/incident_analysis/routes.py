@@ -57,6 +57,10 @@ def get_incident_analysis(
     start_date: date = Query(...),
     end_date: date = Query(...),
     service_name: str | None = Query(default=None),
+    classification: str | None = Query(default=None),
+    min_confidence: float | None = Query(default=None, ge=0.0, le=100.0),
+    anomaly_score_min: float | None = Query(default=None, ge=0.0, le=1.0),
+    anomaly_score_max: float | None = Query(default=None, ge=0.0, le=1.0),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     service: IncidentAnalysisService = Depends(get_service),
@@ -65,6 +69,10 @@ def get_incident_analysis(
         start_date=start_date,
         end_date=end_date,
         service_name=service_name,
+        classification=classification,
+        min_confidence=(min_confidence / 100.0) if min_confidence is not None else None,
+        anomaly_score_min=anomaly_score_min,
+        anomaly_score_max=anomaly_score_max,
         limit=limit,
         offset=offset,
     )
@@ -82,12 +90,16 @@ def get_incident_analysis_summary(
     start_date: date = Query(...),
     end_date: date = Query(...),
     service_name: str | None = Query(default=None),
+    classification: str | None = Query(default=None),
+    min_confidence: float | None = Query(default=None, ge=0.0, le=100.0),
     service: IncidentAnalysisService = Depends(get_service),
 ) -> IncidentAnalysisSummaryResponse:
     query = IncidentAnalysisQuery(
         start_date=start_date,
         end_date=end_date,
         service_name=service_name,
+        classification=classification,
+        min_confidence=(min_confidence / 100.0) if min_confidence is not None else None,
     )
     summary = service.summary(query)
     return IncidentAnalysisSummaryResponse(**summary)

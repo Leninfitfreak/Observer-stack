@@ -52,6 +52,10 @@ class IncidentAnalysisQuery(BaseModel):
     start_date: date
     end_date: date
     service_name: str | None = None
+    classification: str | None = None
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    anomaly_score_min: float | None = Field(default=None, ge=0.0, le=1.0)
+    anomaly_score_max: float | None = Field(default=None, ge=0.0, le=1.0)
     limit: int = Field(default=50, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
 
@@ -59,6 +63,9 @@ class IncidentAnalysisQuery(BaseModel):
     def validate_date_range(self) -> "IncidentAnalysisQuery":
         if self.end_date < self.start_date:
             raise ValueError("end_date must be greater than or equal to start_date")
+        if self.anomaly_score_min is not None and self.anomaly_score_max is not None:
+            if self.anomaly_score_max < self.anomaly_score_min:
+                raise ValueError("anomaly_score_max must be >= anomaly_score_min")
         return self
 
     @property
@@ -82,6 +89,7 @@ class IncidentAnalysisSummaryResponse(BaseModel):
     avg_anomaly_score: float
     avg_confidence_score: float
     classification_distribution: dict[str, int]
+    top_mitigation: str
 
 
 class MitigationResultPatch(BaseModel):

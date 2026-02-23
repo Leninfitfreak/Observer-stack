@@ -24,11 +24,19 @@ class IncidentAnalysisService:
 
     def list_incidents(self, query: IncidentAnalysisQuery) -> tuple[int, list[IncidentAnalysis]]:
         conditions = [
-            func.date(IncidentAnalysis.created_at) >= query.start_date.isoformat(),
-            func.date(IncidentAnalysis.created_at) <= query.end_date.isoformat(),
+            IncidentAnalysis.created_at >= query.start_dt_utc,
+            IncidentAnalysis.created_at <= query.end_dt_utc,
         ]
         if query.service_name:
             conditions.append(IncidentAnalysis.service_name == query.service_name)
+        if query.classification:
+            conditions.append(IncidentAnalysis.classification == query.classification)
+        if query.min_confidence is not None:
+            conditions.append(IncidentAnalysis.confidence_score >= query.min_confidence)
+        if query.anomaly_score_min is not None:
+            conditions.append(IncidentAnalysis.anomaly_score >= query.anomaly_score_min)
+        if query.anomaly_score_max is not None:
+            conditions.append(IncidentAnalysis.anomaly_score <= query.anomaly_score_max)
 
         where_clause = and_(*conditions)
         total_stmt = select(func.count(IncidentAnalysis.id)).where(where_clause)
@@ -46,11 +54,15 @@ class IncidentAnalysisService:
 
     def summary(self, query: IncidentAnalysisQuery) -> dict[str, Any]:
         conditions = [
-            func.date(IncidentAnalysis.created_at) >= query.start_date.isoformat(),
-            func.date(IncidentAnalysis.created_at) <= query.end_date.isoformat(),
+            IncidentAnalysis.created_at >= query.start_dt_utc,
+            IncidentAnalysis.created_at <= query.end_dt_utc,
         ]
         if query.service_name:
             conditions.append(IncidentAnalysis.service_name == query.service_name)
+        if query.classification:
+            conditions.append(IncidentAnalysis.classification == query.classification)
+        if query.min_confidence is not None:
+            conditions.append(IncidentAnalysis.confidence_score >= query.min_confidence)
         where_clause = and_(*conditions)
 
         agg_stmt = select(
@@ -67,11 +79,29 @@ class IncidentAnalysisService:
         )
         distribution = {row[0]: int(row[1]) for row in self.db.execute(class_stmt).all()}
 
+        top_action = ""
+        rows = self.db.execute(select(IncidentAnalysis.mitigation).where(where_clause)).scalars().all()
+        action_counts: dict[str, int] = {}
+        for mitigation in rows:
+            if not isinstance(mitigation, dict):
+                continue
+            actions = mitigation.get("actions")
+            if not isinstance(actions, list):
+                continue
+            for action in actions:
+                action_name = str(action).strip()
+                if not action_name:
+                    continue
+                action_counts[action_name] = action_counts.get(action_name, 0) + 1
+        if action_counts:
+            top_action = max(action_counts.items(), key=lambda kv: kv[1])[0]
+
         return {
             "total_incidents": int(total or 0),
             "avg_anomaly_score": float(avg_anomaly or 0.0),
             "avg_confidence_score": float(avg_conf or 0.0),
             "classification_distribution": distribution,
+            "top_mitigation": top_action,
         }
 
     def update_mitigation_result(self, incident_id: str, mitigation_success: bool) -> int:
