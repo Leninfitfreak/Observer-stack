@@ -67,6 +67,41 @@ def ensure_enterprise_schema(engine: Engine) -> None:
             conn.execute(text("ALTER TABLE incident_analysis ADD COLUMN IF NOT EXISTS supporting_signals JSONB NOT NULL DEFAULT '{}'::jsonb"))
             conn.execute(text("ALTER TABLE incident_analysis ADD COLUMN IF NOT EXISTS suggested_actions JSONB NOT NULL DEFAULT '{}'::jsonb"))
             conn.execute(text("ALTER TABLE incident_analysis ADD COLUMN IF NOT EXISTS confidence_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb"))
+            # Backfill parent incident rows for legacy incident_analysis data before adding FK.
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO incidents (
+                      incident_id,
+                      status,
+                      severity,
+                      impact_level,
+                      slo_breach_risk,
+                      error_budget_remaining,
+                      affected_services,
+                      start_time,
+                      duration,
+                      created_at
+                    )
+                    SELECT
+                      ia.incident_id,
+                      'OPEN',
+                      'WARNING',
+                      'Low',
+                      COALESCE(ia.risk_forecast, 0) * 100.0,
+                      100.0,
+                      COALESCE(NULLIF(ia.service_name, ''), 'unknown'),
+                      COALESCE(ia.created_at, NOW()),
+                      '00:00:00',
+                      COALESCE(ia.created_at, NOW())
+                    FROM incident_analysis ia
+                    LEFT JOIN incidents i ON i.incident_id = ia.incident_id
+                    WHERE ia.incident_id IS NOT NULL
+                      AND ia.incident_id <> ''
+                      AND i.incident_id IS NULL;
+                    """
+                )
+            )
             conn.execute(
                 text(
                     """
