@@ -40,8 +40,8 @@ export function HistoryFilters({
       <div className="field">
         <label>Service</label>
         <select
-          value={filters.serviceName}
-          onChange={(e) => onChange({ ...filters, serviceName: e.target.value })}
+          value={filters.service}
+          onChange={(e) => onChange({ ...filters, service: e.target.value })}
         >
           <option value="">All Services</option>
           {services.map((service) => (

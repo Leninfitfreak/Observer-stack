@@ -6,14 +6,39 @@
   font-family: "Segoe UI", sans-serif;
 }
 
+.top-nav {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.top-nav a {
+  text-decoration: none;
+  color: #1d4ed8;
+  font-weight: 600;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #e8efff;
+}
+
+.top-nav a.active {
+  background: #1d4ed8;
+  color: #fff;
+}
+
 .history-header h1 {
   margin: 0 0 16px;
   font-size: 28px;
 }
 
+.detail-subtitle {
+  margin: -8px 0 16px;
+  color: #5b6b83;
+}
+
 .history-filters {
   display: grid;
-  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
   gap: 12px;
   margin-bottom: 16px;
   background: #fff;
@@ -46,7 +71,6 @@
 .export-btn,
 .view-btn,
 .pagination button,
-.drawer-header button,
 .raw-toggle {
   border: 0;
   border-radius: 8px;
@@ -158,43 +182,48 @@
   padding: 10px;
 }
 
-.drawer-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.45);
-  display: flex;
-  justify-content: flex-end;
-  z-index: 1000;
+.detail-layout {
+  display: grid;
+  gap: 12px;
 }
 
-.drawer {
-  width: 520px;
+.detail-card {
   background: #fff;
-  height: 100%;
+  border: 1px solid #d8e1ef;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.detail-card h3 {
+  margin: 0 0 8px;
+  color: #334155;
+}
+
+.detail-card p,
+.detail-card li {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.split-two {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.detail-card pre {
+  margin-top: 8px;
+  max-height: 320px;
   overflow: auto;
-  padding: 18px;
-  box-shadow: -6px 0 18px rgba(15, 23, 42, 0.2);
-}
-
-.drawer-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.drawer section {
-  margin-top: 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 10px;
-}
-
-.raw-json {
   background: #0f172a;
   color: #e2e8f0;
   border-radius: 8px;
   padding: 10px;
-  overflow: auto;
+}
+
+.raw-block summary {
+  cursor: pointer;
+  font-weight: 600;
 }
 
 .status {
@@ -212,5 +241,9 @@
 
   .summary-grid {
     grid-template-columns: repeat(2, minmax(150px, 1fr));
+  }
+
+  .split-two {
+    grid-template-columns: 1fr;
   }
 }

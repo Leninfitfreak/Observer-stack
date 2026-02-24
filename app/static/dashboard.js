@@ -83,7 +83,6 @@
     incidentId: `INC-${Math.floor(Date.now() / 1000).toString().slice(-6)}`,
     incidentStart: new Date(),
     slaMinutes: 60,
-    role: "Viewer",
     timeline: [],
     audit: [],
     charts: {},
@@ -125,7 +124,6 @@
     incidentHistoryLink: document.getElementById("incidentHistoryLink"),
     exportExcelLink: document.getElementById("exportExcelLink"),
     rawToggleBtn: document.getElementById("rawToggleBtn"),
-    roleSelect: document.getElementById("roleSelect"),
     viewToggle: document.getElementById("viewToggle"),
     quickNav: document.getElementById("quickNav"),
     aiTabs: document.getElementById("aiTabs"),
@@ -244,17 +242,17 @@
       const historyParams = new URLSearchParams();
       historyParams.set("start_date", startDate);
       historyParams.set("end_date", endDate);
-      if (service && service !== "all") historyParams.set("service_name", service);
-      if (severity) historyParams.set("classification", severity);
+      if (service && service !== "all") historyParams.set("service", service);
       el.incidentHistoryLink.href = `/history?${historyParams.toString()}`;
     }
     if (el.exportExcelLink) {
       const reportParams = new URLSearchParams();
       reportParams.set("start_date", startDate);
       reportParams.set("end_date", endDate);
-      if (service && service !== "all") reportParams.set("service_name", service);
+      if (service && service !== "all") reportParams.set("service", service);
+      if (severity) reportParams.set("classification", severity);
       reportParams.set("min_confidence", "0");
-      el.exportExcelLink.href = `/incident-analysis/report?${reportParams.toString()}`;
+      el.exportExcelLink.href = `/api/incidents/export?${reportParams.toString()}`;
     }
   }
 
@@ -526,7 +524,7 @@
     el.incidentStatus.textContent = riskPct > 80 ? "CRITICAL" : riskPct > 45 ? "INVESTIGATING" : "MITIGATING";
     el.incidentSeverity.textContent = String(el.severity.value || "medium").toUpperCase();
     el.incidentStart.textContent = fmtDate(state.incidentStart);
-    el.incidentOwner.textContent = state.role === "Viewer" ? "oncall-sre" : `${state.role.toLowerCase()}-operator`;
+    el.incidentOwner.textContent = "oncall-sre";
     el.incidentRisk.textContent = `${riskPct}%`;
     el.incidentBudget.textContent = `${budget}%`;
     el.incidentImpact.textContent = data.analysis?.impact_level || "Low";
@@ -1147,8 +1145,6 @@
     });
   }
 
-  function enforceRbac() {}
-
   function setMainView(view) {
     el.viewToggle.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     el.telemetrySection.classList.toggle("hidden", view === "raw");
@@ -1235,7 +1231,6 @@
     el.severity.addEventListener("change", updateDashboardLinks);
     el.timeWindow.addEventListener("change", updateDashboardLinks);
     el.customWindow.addEventListener("change", updateDashboardLinks);
-    el.roleSelect.addEventListener("change", () => { state.role = el.roleSelect.value; enforceRbac(); });
     el.risingOnly.addEventListener("change", () => renderSignatures(state.lastData || { context: {}, analysis: {} }));
     el.hideLowFreq.addEventListener("change", () => renderSignatures(state.lastData || { context: {}, analysis: {} }));
     el.viewToggle.addEventListener("click", (e) => {
@@ -1307,7 +1302,6 @@
     updateDashboardLinks();
     initPanelWrappers();
     bindEvents();
-    enforceRbac();
     setMainView("ai");
     setAiTab("signals");
     restartAutoRefresh();

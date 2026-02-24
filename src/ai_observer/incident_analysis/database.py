@@ -6,6 +6,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+import ai_observer.backend.models  # noqa: F401 - ensure model metadata is registered
+from ai_observer.backend.utils.schema_migration import ensure_enterprise_schema
 from ai_observer.incident_analysis.models import Base
 
 
@@ -20,6 +22,7 @@ def init_database(url: str, echo_sql: bool = False) -> None:
     _engine = create_engine(url, echo=echo_sql, future=True)
     _session_factory = sessionmaker(bind=_engine, autoflush=False, autocommit=False, future=True)
     Base.metadata.create_all(bind=_engine)
+    ensure_enterprise_schema(_engine)
 
 
 def get_session() -> Session:

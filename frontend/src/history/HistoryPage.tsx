@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { fetchIncidentAnalysis, fetchIncidentSummary, getReportExcel } from "./api";
 import { HistoryFilters } from "./HistoryFilters";
 import { HistorySummary } from "./HistorySummary";
 import { HistoryTable } from "./HistoryTable";
-import { IncidentDetailDrawer } from "./IncidentDetailDrawer";
 import type { HistoryFiltersState, IncidentAnalysis, IncidentSummaryResponse } from "../types";
 import "./history.css";
 
@@ -27,12 +27,20 @@ const DEFAULT_CLASSIFICATIONS = [
 ];
 
 export default function HistoryPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const queryStart = searchParams.get("start_date");
+  const queryEnd = searchParams.get("end_date");
+  const queryService = searchParams.get("service");
+  const queryClassification = searchParams.get("classification");
+  const queryMinConfidence = Number(searchParams.get("min_confidence") || "0");
+
   const [filters, setFilters] = useState<HistoryFiltersState>({
-    startDate: sevenDaysAgoIso(),
-    endDate: todayIso(),
-    serviceName: "",
-    classification: "",
-    minConfidence: 0,
+    startDate: queryStart || sevenDaysAgoIso(),
+    endDate: queryEnd || todayIso(),
+    service: queryService || "",
+    classification: queryClassification || "",
+    minConfidence: Number.isFinite(queryMinConfidence) ? queryMinConfidence : 0,
   });
   const [appliedFilters, setAppliedFilters] = useState<HistoryFiltersState>(filters);
   const [incidents, setIncidents] = useState<IncidentAnalysis[]>([]);
@@ -43,8 +51,6 @@ export default function HistoryPage() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedIncident, setSelectedIncident] = useState<IncidentAnalysis | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
 
   const loadData = async (activeFilters: HistoryFiltersState, nextOffset: number) => {
@@ -55,7 +61,7 @@ export default function HistoryPage() {
         fetchIncidentAnalysis({
           start_date: activeFilters.startDate,
           end_date: activeFilters.endDate,
-          service_name: activeFilters.serviceName || undefined,
+          service: activeFilters.service || undefined,
           classification: activeFilters.classification || undefined,
           min_confidence: activeFilters.minConfidence,
           limit,
@@ -64,13 +70,13 @@ export default function HistoryPage() {
         fetchIncidentSummary({
           start_date: activeFilters.startDate,
           end_date: activeFilters.endDate,
-          service_name: activeFilters.serviceName || undefined,
+          service: activeFilters.service || undefined,
           classification: activeFilters.classification || undefined,
           min_confidence: activeFilters.minConfidence,
         }),
       ]);
-      setIncidents(listData.items);
-      setTotal(listData.total);
+      setIncidents(listData.data);
+      setTotal(listData.total_count);
       setSummary(summaryData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
@@ -85,7 +91,13 @@ export default function HistoryPage() {
 
   const services = useMemo(() => {
     const values = new Set<string>();
-    incidents.forEach((item) => values.add(item.service_name));
+    incidents.forEach((item) => {
+      item.affected_services
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .forEach((svc) => values.add(svc));
+    });
     return Array.from(values).sort();
   }, [incidents]);
 
@@ -101,6 +113,10 @@ export default function HistoryPage() {
 
   return (
     <main className="history-page">
+      <nav className="top-nav">
+        <a href="/dashboard">Dashboard</a>
+        <a href="/history" className="active">Incident History</a>
+      </nav>
       <header className="history-header">
         <h1>Incident History</h1>
       </header>
@@ -120,7 +136,7 @@ export default function HistoryPage() {
             const blob = await getReportExcel({
               start_date: appliedFilters.startDate,
               end_date: appliedFilters.endDate,
-              service_name: appliedFilters.serviceName || undefined,
+              service: appliedFilters.service || undefined,
               classification: appliedFilters.classification || undefined,
               min_confidence: appliedFilters.minConfidence,
             });
@@ -155,19 +171,7 @@ export default function HistoryPage() {
         sortDirection={sortDirection}
         onSortToggle={() => setSortDirection((prev) => (prev === "desc" ? "asc" : "desc"))}
         onPageChange={setOffset}
-        onView={(incident) => {
-          setSelectedIncident(incident);
-          setDrawerOpen(true);
-        }}
-      />
-
-      <IncidentDetailDrawer
-        incident={selectedIncident}
-        open={drawerOpen}
-        onClose={() => {
-          setDrawerOpen(false);
-          setSelectedIncident(null);
-        }}
+        onView={(incidentId) => navigate(`/incident/${encodeURIComponent(incidentId)}`)}
       />
     </main>
   );

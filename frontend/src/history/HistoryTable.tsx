@@ -10,7 +10,7 @@ interface Props {
   sortDirection: SortDirection;
   onSortToggle: () => void;
   onPageChange: (offset: number) => void;
-  onView: (incident: IncidentAnalysis) => void;
+  onView: (incidentId: string) => void;
 }
 
 function classificationClass(classification: string): string {
@@ -23,17 +23,7 @@ function classificationClass(classification: string): string {
 }
 
 function mitigationText(incident: IncidentAnalysis): string {
-  const actions = incident.mitigation?.actions;
-  if (Array.isArray(actions) && actions.length > 0) {
-    return String(actions[0]);
-  }
-  return "-";
-}
-
-function mitigationIcon(value: boolean | undefined): string {
-  if (value === true) return "🟢";
-  if (value === false) return "🔴";
-  return "⚪";
+  return incident.root_cause || "-";
 }
 
 export function HistoryTable({
@@ -57,7 +47,7 @@ export function HistoryTable({
         <thead>
           <tr>
             <th className="sortable" onClick={onSortToggle}>
-              Timestamp {sortDirection === "desc" ? "↓" : "↑"}
+              Timestamp {sortDirection === "desc" ? "?" : "?"}
             </th>
             <th>Service</th>
             <th>Classification</th>
@@ -78,19 +68,21 @@ export function HistoryTable({
             </tr>
           ) : (
             incidents.map((incident) => (
-              <tr key={incident.id}>
+              <tr key={incident.incident_id}>
                 <td>{new Date(incident.created_at).toLocaleString()}</td>
-                <td>{incident.service_name}</td>
+                <td>{incident.affected_services}</td>
                 <td>
-                  <span className={`badge ${classificationClass(incident.classification)}`}>{incident.classification}</span>
+                  <span className={`badge ${classificationClass(incident.classification || "Unknown")}`}>
+                    {incident.classification || "Unknown"}
+                  </span>
                 </td>
-                <td>{incident.anomaly_score.toFixed(2)}</td>
-                <td>{Math.round(incident.confidence_score * 100)}%</td>
-                <td>{Math.round(incident.risk_forecast * 100)}%</td>
+                <td>-</td>
+                <td>{Math.round((incident.confidence_score || 0) * 100)}%</td>
+                <td>{Math.round((incident.risk_forecast || 0) * 100)}%</td>
                 <td>{mitigationText(incident)}</td>
-                <td>{mitigationIcon(incident.mitigation_success)}</td>
+                <td>N/A</td>
                 <td>
-                  <button className="view-btn" onClick={() => onView(incident)}>
+                  <button className="view-btn" onClick={() => onView(incident.incident_id)}>
                     View
                   </button>
                 </td>

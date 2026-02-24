@@ -23,14 +23,6 @@
       <div class="header-item"><span>Error Budget Remaining</span><strong id="incidentBudget">100%</strong></div>
       <div class="header-item"><span>Impact Level</span><strong id="incidentImpact">Low</strong></div>
       <div class="header-item"><span>Affected Services</span><strong id="affectedCount">0</strong></div>
-      <div class="header-item controls">
-        <label for="roleSelect">Role</label>
-        <select id="roleSelect">
-          <option>Viewer</option>
-          <option>Operator</option>
-          <option>Admin</option>
-        </select>
-      </div>
     </div>
     <div class="sla-progress-wrap">
       <div class="sla-progress-label">SLA Window</div>
@@ -64,7 +56,7 @@
         <label>Refresh (sec) <input id="interval" type="number" min="5" value="20"></label>
         <button id="refreshBtn" class="primary">Refresh</button>
         <a id="incidentHistoryLink" class="primary nav-btn" href="/history">Incident History</a>
-        <a id="exportExcelLink" class="primary nav-btn" href="/incident-analysis/report" target="_blank" rel="noopener noreferrer">Export Excel</a>
+        <a id="exportExcelLink" class="primary nav-btn" href="/api/incidents/export" target="_blank" rel="noopener noreferrer">Export Excel</a>
         <button id="rawToggleBtn" type="button">Raw JSON</button>
       </div>
       <div class="view-toggle" id="viewToggle">
