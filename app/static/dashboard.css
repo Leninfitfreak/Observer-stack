@@ -152,6 +152,13 @@ input, select, button {
   background: var(--panel-soft);
   color: var(--text);
 }
+.nav-btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
 button { cursor: pointer; font-weight: 600; }
 .primary { background: linear-gradient(120deg, #1d4ed8, #3b82f6); border: 0; color: #fff; }
 .status { min-width: 100px; text-align: right; color: var(--muted); font-size: 12px; }

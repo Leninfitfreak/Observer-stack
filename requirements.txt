@@ -5,3 +5,5 @@ pydantic==2.9.2
 SQLAlchemy==2.0.36
 psycopg[binary]==3.2.13
 pytest==8.3.3
+pandas==3.0.1
+openpyxl==3.1.5

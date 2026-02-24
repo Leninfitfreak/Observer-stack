@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import io
 from datetime import date
 
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ai_observer.incident_analysis.database import get_db_session
@@ -103,6 +106,73 @@ def get_incident_analysis_summary(
     )
     summary = service.summary(query)
     return IncidentAnalysisSummaryResponse(**summary)
+
+
+@router.get("/report")
+def get_incident_analysis_report(
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    service_name: str | None = Query(default=None),
+    classification: str | None = Query(default=None),
+    min_confidence: float | None = Query(default=None, ge=0.0, le=100.0),
+    service: IncidentAnalysisService = Depends(get_service),
+) -> StreamingResponse:
+    query = IncidentAnalysisQuery(
+        start_date=start_date,
+        end_date=end_date,
+        service_name=service_name,
+        classification=classification,
+        min_confidence=(min_confidence / 100.0) if min_confidence is not None else None,
+        limit=500,
+        offset=0,
+    )
+    rows = service.report_rows(query)
+
+    def mitigation_suggested(mitigation: dict) -> str:
+        actions = mitigation.get("actions") if isinstance(mitigation, dict) else None
+        if isinstance(actions, list) and actions:
+            return str(actions[0])
+        return ""
+
+    records = [
+        {
+            "timestamp": row.created_at.isoformat(),
+            "service_name": row.service_name,
+            "classification": row.classification,
+            "anomaly_score": row.anomaly_score,
+            "confidence_score": row.confidence_score,
+            "risk_forecast": row.risk_forecast,
+            "mitigation_suggested": mitigation_suggested(row.mitigation or {}),
+            "mitigation_success": row.mitigation_success,
+        }
+        for row in rows
+    ]
+    df = pd.DataFrame(
+        records,
+        columns=[
+            "timestamp",
+            "service_name",
+            "classification",
+            "anomaly_score",
+            "confidence_score",
+            "risk_forecast",
+            "mitigation_suggested",
+            "mitigation_success",
+        ],
+    )
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="incident_history")
+    output.seek(0)
+
+    filename = f"incident_report_{date.today().strftime('%Y%m%d')}.xlsx"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
 
 
 @router.patch("/{incident_id}/mitigation-result", response_model=MitigationPatchResponse)

@@ -122,6 +122,8 @@
     customWindow: document.getElementById("customWindow"),
     interval: document.getElementById("interval"),
     refreshBtn: document.getElementById("refreshBtn"),
+    incidentHistoryLink: document.getElementById("incidentHistoryLink"),
+    exportExcelLink: document.getElementById("exportExcelLink"),
     rawToggleBtn: document.getElementById("rawToggleBtn"),
     roleSelect: document.getElementById("roleSelect"),
     viewToggle: document.getElementById("viewToggle"),
@@ -211,6 +213,49 @@
   }
   function clamp(n, min, max) {
     return Math.max(min, Math.min(max, n));
+  }
+
+  function isoDate(d) {
+    return d.toISOString().slice(0, 10);
+  }
+
+  function deriveHistoryDateRange() {
+    let minutes = 30;
+    let tw = (el.timeWindow?.value || "30m").trim().toLowerCase();
+    if (tw === "custom") {
+      minutes = Math.max(5, Math.min(360, Number(el.customWindow?.value || 30)));
+    } else if (tw.endsWith("m")) {
+      minutes = Number(tw.slice(0, -1)) || 30;
+    } else if (tw.endsWith("h")) {
+      minutes = (Number(tw.slice(0, -1)) || 1) * 60;
+    } else if (tw.endsWith("d")) {
+      minutes = (Number(tw.slice(0, -1)) || 1) * 24 * 60;
+    }
+    const end = new Date();
+    const start = new Date(end.getTime() - (minutes * 60 * 1000));
+    return { startDate: isoDate(start), endDate: isoDate(end) };
+  }
+
+  function updateDashboardLinks() {
+    const service = (el.service?.value || "").trim();
+    const severity = (el.severity?.value || "").trim();
+    const { startDate, endDate } = deriveHistoryDateRange();
+    if (el.incidentHistoryLink) {
+      const historyParams = new URLSearchParams();
+      historyParams.set("start_date", startDate);
+      historyParams.set("end_date", endDate);
+      if (service && service !== "all") historyParams.set("service_name", service);
+      if (severity) historyParams.set("classification", severity);
+      el.incidentHistoryLink.href = `/history?${historyParams.toString()}`;
+    }
+    if (el.exportExcelLink) {
+      const reportParams = new URLSearchParams();
+      reportParams.set("start_date", startDate);
+      reportParams.set("end_date", endDate);
+      if (service && service !== "all") reportParams.set("service_name", service);
+      reportParams.set("min_confidence", "0");
+      el.exportExcelLink.href = `/incident-analysis/report?${reportParams.toString()}`;
+    }
   }
 
   function applyZoomToAll(sourceChart) {
@@ -1130,6 +1175,7 @@
 
   async function refresh() {
     setLiveStatus("loading...", "warn");
+    updateDashboardLinks();
     const namespace = (el.namespace.value || "dev").trim();
     const service = (el.service.value || "all").trim();
     const severity = (el.severity.value || "warning").trim();
@@ -1185,6 +1231,10 @@
   function bindEvents() {
     el.refreshBtn.addEventListener("click", refresh);
     el.interval.addEventListener("change", restartAutoRefresh);
+    el.service.addEventListener("change", updateDashboardLinks);
+    el.severity.addEventListener("change", updateDashboardLinks);
+    el.timeWindow.addEventListener("change", updateDashboardLinks);
+    el.customWindow.addEventListener("change", updateDashboardLinks);
     el.roleSelect.addEventListener("change", () => { state.role = el.roleSelect.value; enforceRbac(); });
     el.risingOnly.addEventListener("change", () => renderSignatures(state.lastData || { context: {}, analysis: {} }));
     el.hideLowFreq.addEventListener("change", () => renderSignatures(state.lastData || { context: {}, analysis: {} }));
@@ -1254,6 +1304,7 @@
 
   function boot() {
     el.incidentStart.textContent = fmtDate(state.incidentStart);
+    updateDashboardLinks();
     initPanelWrappers();
     bindEvents();
     enforceRbac();

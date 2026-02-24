@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchIncidentAnalysis, fetchIncidentSummary } from "./api";
+import { fetchIncidentAnalysis, fetchIncidentSummary, getReportExcel } from "./api";
 import { HistoryFilters } from "./HistoryFilters";
 import { HistorySummary } from "./HistorySummary";
 import { HistoryTable } from "./HistoryTable";
@@ -45,6 +45,7 @@ export default function HistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedIncident, setSelectedIncident] = useState<IncidentAnalysis | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
 
   const loadData = async (activeFilters: HistoryFiltersState, nextOffset: number) => {
     setLoading(true);
@@ -113,6 +114,32 @@ export default function HistoryPage() {
           setOffset(0);
           setAppliedFilters(filters);
         }}
+        onExport={async () => {
+          setExportLoading(true);
+          try {
+            const blob = await getReportExcel({
+              start_date: appliedFilters.startDate,
+              end_date: appliedFilters.endDate,
+              service_name: appliedFilters.serviceName || undefined,
+              classification: appliedFilters.classification || undefined,
+              min_confidence: appliedFilters.minConfidence,
+            });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+            link.href = url;
+            link.download = `incident_report_${stamp}.xlsx`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to export report");
+          } finally {
+            setExportLoading(false);
+          }
+        }}
+        exportLoading={exportLoading}
       />
 
       {loading && <div className="status">Loading incident history...</div>}

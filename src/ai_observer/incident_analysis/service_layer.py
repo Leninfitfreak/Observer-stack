@@ -22,8 +22,8 @@ class IncidentAnalysisService:
         self.db.refresh(entity)
         return entity
 
-    def list_incidents(self, query: IncidentAnalysisQuery) -> tuple[int, list[IncidentAnalysis]]:
-        conditions = [
+    def _build_conditions(self, query: IncidentAnalysisQuery) -> list[Any]:
+        conditions: list[Any] = [
             IncidentAnalysis.created_at >= query.start_dt_utc,
             IncidentAnalysis.created_at <= query.end_dt_utc,
         ]
@@ -37,6 +37,10 @@ class IncidentAnalysisService:
             conditions.append(IncidentAnalysis.anomaly_score >= query.anomaly_score_min)
         if query.anomaly_score_max is not None:
             conditions.append(IncidentAnalysis.anomaly_score <= query.anomaly_score_max)
+        return conditions
+
+    def list_incidents(self, query: IncidentAnalysisQuery) -> tuple[int, list[IncidentAnalysis]]:
+        conditions = self._build_conditions(query)
 
         where_clause = and_(*conditions)
         total_stmt = select(func.count(IncidentAnalysis.id)).where(where_clause)
@@ -53,16 +57,7 @@ class IncidentAnalysisService:
         return total, rows
 
     def summary(self, query: IncidentAnalysisQuery) -> dict[str, Any]:
-        conditions = [
-            IncidentAnalysis.created_at >= query.start_dt_utc,
-            IncidentAnalysis.created_at <= query.end_dt_utc,
-        ]
-        if query.service_name:
-            conditions.append(IncidentAnalysis.service_name == query.service_name)
-        if query.classification:
-            conditions.append(IncidentAnalysis.classification == query.classification)
-        if query.min_confidence is not None:
-            conditions.append(IncidentAnalysis.confidence_score >= query.min_confidence)
+        conditions = self._build_conditions(query)
         where_clause = and_(*conditions)
 
         agg_stmt = select(
@@ -103,6 +98,11 @@ class IncidentAnalysisService:
             "classification_distribution": distribution,
             "top_mitigation": top_action,
         }
+
+    def report_rows(self, query: IncidentAnalysisQuery) -> list[IncidentAnalysis]:
+        where_clause = and_(*self._build_conditions(query))
+        rows_stmt = select(IncidentAnalysis).where(where_clause).order_by(desc(IncidentAnalysis.created_at))
+        return list(self.db.execute(rows_stmt).scalars().all())
 
     def update_mitigation_result(self, incident_id: str, mitigation_success: bool) -> int:
         latest_stmt = (

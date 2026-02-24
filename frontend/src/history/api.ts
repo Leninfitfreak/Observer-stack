@@ -46,3 +46,18 @@ export async function fetchIncidentSummary(params: {
   }
   return res.json();
 }
+
+export async function getReportExcel(params: {
+  start_date: string;
+  end_date: string;
+  service_name?: string;
+  classification?: string;
+  min_confidence?: number;
+}): Promise<Blob> {
+  const query = buildQuery(params);
+  const res = await fetch(`${API_BASE}/incident-analysis/report?${query}`);
+  if (!res.ok) {
+    throw new Error(`Failed generating report: ${res.status}`);
+  }
+  return res.blob();
+}

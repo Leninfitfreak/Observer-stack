@@ -6,9 +6,19 @@ interface Props {
   classifications: string[];
   onChange: (next: HistoryFiltersState) => void;
   onApply: () => void;
+  onExport: () => void;
+  exportLoading: boolean;
 }
 
-export function HistoryFilters({ filters, services, classifications, onChange, onApply }: Props) {
+export function HistoryFilters({
+  filters,
+  services,
+  classifications,
+  onChange,
+  onApply,
+  onExport,
+  exportLoading,
+}: Props) {
   return (
     <div className="history-filters">
       <div className="field">
@@ -68,6 +78,9 @@ export function HistoryFilters({ filters, services, classifications, onChange, o
       </div>
       <button className="apply-btn" onClick={onApply}>
         Apply
+      </button>
+      <button className="export-btn" onClick={onExport} disabled={exportLoading}>
+        {exportLoading ? "Generating..." : "Export to Excel"}
       </button>
     </div>
   );

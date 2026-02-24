@@ -1,0 +1,24 @@
+.availability-page {
+  padding: 24px;
+  font-family: "Segoe UI", sans-serif;
+}
+
+.availability-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.availability-header h1 {
+  margin: 0;
+}
+
+.availability-history-link {
+  text-decoration: none;
+  background: #295dff;
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-weight: 600;
+}

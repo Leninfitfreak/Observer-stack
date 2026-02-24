@@ -43,6 +43,7 @@
 }
 
 .apply-btn,
+.export-btn,
 .view-btn,
 .pagination button,
 .drawer-header button,
@@ -53,6 +54,15 @@
   color: #fff;
   padding: 8px 14px;
   cursor: pointer;
+}
+
+.export-btn {
+  background: #0f766e;
+}
+
+.export-btn:disabled {
+  opacity: 0.75;
+  cursor: not-allowed;
 }
 
 .summary-grid {
