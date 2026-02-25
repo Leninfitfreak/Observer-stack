@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -74,6 +75,7 @@ class IncidentsService:
                     "confidence_breakdown": a.confidence_breakdown,
                     "created_at": a.created_at,
                     "classification": a.classification,
+                    "mitigation": a.mitigation,
                 }
                 for a in row["analysis"]
             ],
@@ -104,63 +106,106 @@ class IncidentsService:
         }
 
     def export_excel(self, query: IncidentFilterQuery) -> bytes:
-        total, data = self.list(query)
+        _total, data = self.list(query)
         ids = [item["incident_id"] for item in data]
         detail_rows = [self.details(incident_id) for incident_id in ids]
         detail_rows = [d for d in detail_rows if d is not None]
 
-        sheet1 = pd.DataFrame(
-            [
-                {
-                    "Incident ID": item["incident_id"],
-                    "Start Time": item["start_time"],
-                    "Duration": item["duration"],
-                    "Severity": item["severity"],
-                    "Status": item["status"],
-                    "Impact Level": item["impact_level"],
-                    "SLO Breach Risk": item["slo_breach_risk"],
-                    "Error Budget Remaining": item["error_budget_remaining"],
-                    "Affected Services": item["affected_services"],
-                }
-                for item in data
-            ]
-        )
-        sheet2_rows: list[dict[str, Any]] = []
-        sheet3_rows: list[dict[str, Any]] = []
+        def _safe_json(value: Any) -> str:
+            if value is None:
+                return ""
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, ensure_ascii=False, default=str)
+            return str(value)
+
+        def _sla_countdown(start_time: Any, window_minutes: int = 60) -> str:
+            if not isinstance(start_time, datetime):
+                return ""
+            start = start_time if start_time.tzinfo else start_time.replace(tzinfo=timezone.utc)
+            elapsed = int((datetime.now(timezone.utc) - start).total_seconds())
+            remaining = max(0, (window_minutes * 60) - max(0, elapsed))
+            hh = str(remaining // 3600).zfill(2)
+            mm = str((remaining % 3600) // 60).zfill(2)
+            ss = str(remaining % 60).zfill(2)
+            return f"{hh}:{mm}:{ss}"
+
+        incident_core_rows: list[dict[str, Any]] = [
+            {
+                "Incident ID": item["incident_id"],
+                "Status": item["status"],
+                "Severity": item["severity"],
+                "Impact Level": item["impact_level"],
+                "SLA Countdown": _sla_countdown(item["start_time"]),
+                "SLO Breach Risk": item["slo_breach_risk"],
+                "Error Budget Remaining": item["error_budget_remaining"],
+                "Affected Services": item["affected_services"],
+                "Start Time": item["start_time"],
+                "Duration": item["duration"],
+            }
+            for item in data
+        ]
+
+        ai_analysis_rows: list[dict[str, Any]] = []
+        metrics_rows: list[dict[str, Any]] = []
+        raw_json_rows: list[dict[str, Any]] = []
+
         for item in detail_rows:
-            for analysis in item["analysis"]:
-                sheet2_rows.append(
+            incident_obj = item.get("incident", {})
+            incident_id = incident_obj.get("incident_id", "")
+
+            for analysis in item.get("analysis", []):
+                supporting_signals = analysis.get("supporting_signals")
+                mitigation = analysis.get("mitigation")
+                change_context = []
+                if isinstance(mitigation, dict):
+                    change_context = mitigation.get("change_detection_context") or []
+                if not change_context and isinstance(supporting_signals, dict):
+                    change_context = supporting_signals.get("change_detection_context") or []
+
+                ai_analysis_rows.append(
                     {
-                        "Incident ID": analysis["incident_id"],
-                        "Executive Summary": analysis["executive_summary"],
-                        "Root Cause": analysis["root_cause"],
-                        "Supporting Signals": str(analysis["supporting_signals"]),
-                        "Risk Forecast": analysis["risk_forecast"],
-                        "Suggested Actions": str(analysis["suggested_actions"]),
-                        "Confidence Score": analysis["confidence_score"],
-                        "Confidence Breakdown": str(analysis["confidence_breakdown"]),
-                    }
-                )
-            for metrics in item["metrics_snapshot"]:
-                sheet3_rows.append(
-                    {
-                        "Incident ID": metrics["incident_id"],
-                        "CPU Usage": metrics["cpu_usage"],
-                        "Memory Usage": metrics["memory_usage"],
-                        "Latency P95": metrics["latency_p95"],
-                        "Error Rate": metrics["error_rate"],
-                        "Thread Pool Saturation": metrics["thread_pool_saturation"],
-                        "Raw JSON Snapshot": str(metrics["raw_metrics_json"]),
+                        "Incident ID": incident_id or analysis.get("incident_id", ""),
+                        "Executive Summary": _safe_json(analysis.get("executive_summary")),
+                        "Root Cause": _safe_json(analysis.get("root_cause")),
+                        "Supporting Signals": _safe_json(supporting_signals),
+                        "Change Detection Context": _safe_json(change_context),
+                        "Risk Forecast": analysis.get("risk_forecast"),
+                        "Suggested Actions": _safe_json(analysis.get("suggested_actions")),
+                        "Confidence Score": analysis.get("confidence_score"),
+                        "Confidence Breakdown": _safe_json(analysis.get("confidence_breakdown")),
                     }
                 )
 
-        sheet2 = pd.DataFrame(sheet2_rows)
-        sheet3 = pd.DataFrame(sheet3_rows)
+            for metrics in item.get("metrics_snapshot", []):
+                metrics_rows.append(
+                    {
+                        "Incident ID": incident_id or metrics.get("incident_id", ""),
+                        "CPU Usage": metrics.get("cpu_usage"),
+                        "Memory Usage": metrics.get("memory_usage"),
+                        "Latency P95": metrics.get("latency_p95"),
+                        "Error Rate": metrics.get("error_rate"),
+                        "Thread Pool Saturation": metrics.get("thread_pool_saturation"),
+                        "Raw Metrics JSON": _safe_json(metrics.get("raw_metrics_json")),
+                    }
+                )
+
+            raw_json_rows.append({"Incident JSON": _safe_json(item)})
+
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            sheet1.to_excel(writer, index=False, sheet_name="Incident Summary")
-            sheet2.to_excel(writer, index=False, sheet_name="AI Analysis")
-            sheet3.to_excel(writer, index=False, sheet_name="Metrics Snapshot")
+            if not incident_core_rows:
+                pd.DataFrame([{"message": "No data available"}]).to_excel(
+                    writer, index=False, sheet_name="No data available"
+                )
+            else:
+                pd.DataFrame(incident_core_rows).to_excel(writer, index=False, sheet_name="Incident Core")
+                pd.DataFrame(ai_analysis_rows or [{"Incident ID": "", "Executive Summary": "", "Root Cause": ""}]).to_excel(
+                    writer, index=False, sheet_name="AI Analysis"
+                )
+                pd.DataFrame(metrics_rows or [{"Incident ID": "", "CPU Usage": "", "Memory Usage": ""}]).to_excel(
+                    writer, index=False, sheet_name="Metrics Snapshot"
+                )
+                pd.DataFrame(raw_json_rows).to_excel(writer, index=False, sheet_name="Raw JSON")
         output.seek(0)
         return output.getvalue()
 
