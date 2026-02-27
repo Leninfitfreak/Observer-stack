@@ -28,11 +28,11 @@ def ensure_enterprise_schema(engine: Engine) -> None:
                     );
                     CREATE INDEX IF NOT EXISTS ix_incidents_created_at ON incidents(created_at);
                     CREATE INDEX IF NOT EXISTS ix_incidents_start_time ON incidents(start_time);
-                    CREATE INDEX IF NOT EXISTS ix_incidents_cluster_id ON incidents(cluster_id);
                     """
                 )
             )
             conn.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS cluster_id VARCHAR(128) NOT NULL DEFAULT ''"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_incidents_cluster_id ON incidents(cluster_id)"))
             conn.execute(
                 text(
                     """
