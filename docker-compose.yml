@@ -1,0 +1,66 @@
+services:
+  backend:
+    build:
+      context: .
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      DB_ECHO_SQL: ${DB_ECHO_SQL}
+      AGENT_TOKEN: ${AGENT_TOKEN}
+      CLUSTER_ID: ${CLUSTER_ID}
+      DEFAULT_NAMESPACE: ${DEFAULT_NAMESPACE}
+      DEFAULT_SERVICE: ${DEFAULT_SERVICE}
+      DEFAULT_SEVERITY: ${DEFAULT_SEVERITY}
+      DEFAULT_WINDOW_MINUTES: ${DEFAULT_WINDOW_MINUTES}
+      PROMETHEUS_URL: ${PROMETHEUS_URL}
+      LOKI_URL: ${LOKI_URL}
+      JAEGER_URL: ${JAEGER_URL}
+      LLM_PROVIDER: ${LLM_PROVIDER}
+      LLM_MODEL: ${LLM_MODEL}
+      OLLAMA_URL: ${OLLAMA_URL}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      HTTP_TIMEOUT_SECONDS: ${HTTP_TIMEOUT_SECONDS}
+      HTTP_ATTEMPTS: ${HTTP_ATTEMPTS}
+    ports:
+      - "8080:8080"
+    networks:
+      default:
+      minikube:
+        ipv4_address: 192.168.49.10
+    depends_on:
+      - postgres
+
+  observer-agent:
+    profiles: ["local-agent"]
+    build:
+      context: .
+      dockerfile: Dockerfile.observer-agent
+    environment:
+      CLUSTER_ID: ${AGENT_CLUSTER_ID}
+      CENTRAL_URL: ${AGENT_CENTRAL_URL}
+      AGENT_TOKEN: ${AGENT_TOKEN}
+      PROM_URL: ${AGENT_PROM_URL}
+      PUSH_INTERVAL: ${AGENT_PUSH_INTERVAL}
+      ENVIRONMENT: ${AGENT_ENVIRONMENT}
+    depends_on:
+      - backend
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ai-observer-pgdata:/var/lib/postgresql/data
+
+volumes:
+  ai-observer-pgdata:
+
+networks:
+  minikube:
+    external: true
+    name: minikube
