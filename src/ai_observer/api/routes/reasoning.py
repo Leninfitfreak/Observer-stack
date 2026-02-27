@@ -35,7 +35,7 @@ def _parse_time_window(value: str) -> int:
     return max(5, min(360, minutes))
 
 
-def _extract_alert(payload: AlertmanagerWebhook, default_namespace: str, default_service: str) -> AlertSignal:
+def _extract_alert(payload: AlertmanagerWebhook, default_namespace: str, default_service: str, default_cluster: str) -> AlertSignal:
     if not payload.alerts:
         raise HTTPException(status_code=400, detail="alert payload has no alerts")
 
@@ -47,6 +47,7 @@ def _extract_alert(payload: AlertmanagerWebhook, default_namespace: str, default
         alertname=labels.get("alertname", "UnknownAlert"),
         namespace=labels.get("namespace", default_namespace),
         service=labels.get("service") or labels.get("app") or default_service,
+        cluster_id=labels.get("cluster_id") or labels.get("cluster") or default_cluster,
         severity=labels.get("severity", "warning"),
         status=first.status,
     )
@@ -57,15 +58,18 @@ def live_reasoning(
     request: Request,
     namespace: str = Query(default="dev"),
     service: str = Query(default="all"),
+    cluster: str | None = Query(default=None),
     severity: str = Query(default="warning"),
     time_window: str = Query(default="30m"),
     reasoner: ReasoningService = Depends(get_reasoning_service),
     db: Session = Depends(get_db_session),
 ) -> LiveReasoningResponse:
+    default_cluster = request.app.state.container.settings.telemetry.default_cluster_id
     alert = AlertSignal(
         alertname="LiveObservabilitySnapshot",
         namespace=namespace,
         service=service,
+        cluster_id=cluster or default_cluster,
         severity=severity,
         status="firing",
     )
@@ -86,7 +90,12 @@ def alertmanager_webhook(
     db: Session = Depends(get_db_session),
 ) -> LiveReasoningResponse:
     settings = request.app.state.container.settings
-    alert = _extract_alert(payload, settings.telemetry.default_namespace, settings.telemetry.default_service)
+    alert = _extract_alert(
+        payload,
+        settings.telemetry.default_namespace,
+        settings.telemetry.default_service,
+        settings.telemetry.default_cluster_id,
+    )
     result = reasoner.analyze(alert, window_minutes=settings.telemetry.default_window_minutes)
     try:
         _persist_analysis_snapshot(db, alert, result)

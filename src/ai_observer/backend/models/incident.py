@@ -18,10 +18,12 @@ class Incident(Base):
         Index("ix_incidents_incident_id", "incident_id", unique=True),
         Index("ix_incidents_created_at", "created_at"),
         Index("ix_incidents_start_time", "start_time"),
+        Index("ix_incidents_cluster_id", "cluster_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     incident_id: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    cluster_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     severity: Mapped[str] = mapped_column(String(32), nullable=False)
     impact_level: Mapped[str] = mapped_column(String(32), nullable=False, default="Low")

@@ -24,6 +24,7 @@ def list_incidents(
     classification: str | None = Query(default=None),
     min_confidence: float | None = Query(default=None, ge=0.0, le=100.0),
     service: str | None = Query(default=None),
+    cluster: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     svc: IncidentsService = Depends(get_service),
@@ -34,6 +35,7 @@ def list_incidents(
         classification=classification,
         min_confidence=(min_confidence / 100.0) if min_confidence is not None else None,
         service=service,
+        cluster=cluster,
         limit=limit,
         offset=offset,
     )
@@ -49,6 +51,7 @@ def export_incidents(payload: IncidentExportRequest, svc: IncidentsService = Dep
         classification=payload.classification,
         min_confidence=(payload.min_confidence / 100.0) if payload.min_confidence is not None else None,
         service=payload.service,
+        cluster=payload.cluster,
         limit=500,
         offset=0,
     )
@@ -69,6 +72,7 @@ def export_incidents_get(
     classification: str | None = Query(default=None),
     min_confidence: float | None = Query(default=None, ge=0.0, le=100.0),
     service: str | None = Query(default=None),
+    cluster: str | None = Query(default=None),
     svc: IncidentsService = Depends(get_service),
 ) -> StreamingResponse:
     query = IncidentFilterQuery(
@@ -77,6 +81,7 @@ def export_incidents_get(
         classification=classification,
         min_confidence=(min_confidence / 100.0) if min_confidence is not None else None,
         service=service,
+        cluster=cluster,
         limit=500,
         offset=0,
     )

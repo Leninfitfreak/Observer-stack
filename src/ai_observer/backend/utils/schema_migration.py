@@ -15,6 +15,7 @@ def ensure_enterprise_schema(engine: Engine) -> None:
                     CREATE TABLE IF NOT EXISTS incidents (
                       id SERIAL PRIMARY KEY,
                       incident_id VARCHAR(128) UNIQUE NOT NULL,
+                      cluster_id VARCHAR(128) NOT NULL DEFAULT '',
                       status VARCHAR(32) NOT NULL,
                       severity VARCHAR(32) NOT NULL,
                       impact_level VARCHAR(32) NOT NULL,
@@ -27,9 +28,11 @@ def ensure_enterprise_schema(engine: Engine) -> None:
                     );
                     CREATE INDEX IF NOT EXISTS ix_incidents_created_at ON incidents(created_at);
                     CREATE INDEX IF NOT EXISTS ix_incidents_start_time ON incidents(start_time);
+                    CREATE INDEX IF NOT EXISTS ix_incidents_cluster_id ON incidents(cluster_id);
                     """
                 )
             )
+            conn.execute(text("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS cluster_id VARCHAR(128) NOT NULL DEFAULT ''"))
             conn.execute(
                 text(
                     """
@@ -64,9 +67,11 @@ def ensure_enterprise_schema(engine: Engine) -> None:
                 )
             )
             conn.execute(text("ALTER TABLE incident_analysis ADD COLUMN IF NOT EXISTS executive_summary TEXT"))
+            conn.execute(text("ALTER TABLE incident_analysis ADD COLUMN IF NOT EXISTS cluster_id VARCHAR(128) NOT NULL DEFAULT ''"))
             conn.execute(text("ALTER TABLE incident_analysis ADD COLUMN IF NOT EXISTS supporting_signals JSONB NOT NULL DEFAULT '{}'::jsonb"))
             conn.execute(text("ALTER TABLE incident_analysis ADD COLUMN IF NOT EXISTS suggested_actions JSONB NOT NULL DEFAULT '{}'::jsonb"))
             conn.execute(text("ALTER TABLE incident_analysis ADD COLUMN IF NOT EXISTS confidence_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_incident_analysis_cluster_id ON incident_analysis(cluster_id)"))
             # Backfill parent incident rows for legacy incident_analysis data before adding FK.
             conn.execute(
                 text(
@@ -128,6 +133,7 @@ def ensure_enterprise_schema(engine: Engine) -> None:
                     CREATE TABLE IF NOT EXISTS incidents (
                       id INTEGER PRIMARY KEY AUTOINCREMENT,
                       incident_id TEXT UNIQUE NOT NULL,
+                      cluster_id TEXT NOT NULL DEFAULT '',
                       status TEXT NOT NULL,
                       severity TEXT NOT NULL,
                       impact_level TEXT NOT NULL,
@@ -173,6 +179,7 @@ def ensure_enterprise_schema(engine: Engine) -> None:
             )
             for column, col_type, default_sql in [
                 ("executive_summary", "TEXT", "NULL"),
+                ("cluster_id", "TEXT", "''"),
                 ("supporting_signals", "TEXT", "'{}'"),
                 ("suggested_actions", "TEXT", "'{}'"),
                 ("confidence_breakdown", "TEXT", "'{}'"),

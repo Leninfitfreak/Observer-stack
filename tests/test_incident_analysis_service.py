@@ -24,6 +24,7 @@ def test_insert_and_similarity() -> None:
         {
             "incident_id": "INC-1",
             "service_name": "product-service",
+            "cluster_id": "cluster-a",
             "anomaly_score": 0.21,
             "confidence_score": 0.71,
             "classification": "Performance Degradation",
@@ -44,6 +45,7 @@ def test_date_filtering() -> None:
         {
             "incident_id": "INC-2",
             "service_name": "order-service",
+            "cluster_id": "cluster-b",
             "anomaly_score": 0.18,
             "confidence_score": 0.66,
             "classification": "False Positive",
@@ -54,11 +56,19 @@ def test_date_filtering() -> None:
         }
     )
     created_date = row.created_at.date()
-    q = IncidentAnalysisQuery(start_date=created_date, end_date=created_date, service_name="order-service", limit=10, offset=0)
+    q = IncidentAnalysisQuery(
+        start_date=created_date,
+        end_date=created_date,
+        service_name="order-service",
+        cluster="cluster-b",
+        limit=10,
+        offset=0,
+    )
     total, rows = service.list_incidents(q)
     assert total == 1
     assert len(rows) == 1
     assert rows[0].service_name == "order-service"
+    assert rows[0].cluster_id == "cluster-b"
 
 
 def test_mitigation_update() -> None:
@@ -67,6 +77,7 @@ def test_mitigation_update() -> None:
         {
             "incident_id": "INC-3",
             "service_name": "order-service",
+            "cluster_id": "cluster-b",
             "anomaly_score": 0.42,
             "confidence_score": 0.52,
             "classification": "Observability Gap",

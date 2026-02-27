@@ -9,6 +9,7 @@ class AlertSignal(BaseModel):
     alertname: str
     namespace: str
     service: str
+    cluster_id: str | None = None
     severity: str
     status: str = "firing"
 

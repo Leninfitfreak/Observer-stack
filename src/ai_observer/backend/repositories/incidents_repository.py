@@ -30,6 +30,8 @@ class IncidentsRepository:
         ]
         if query.service:
             conditions.append(Incident.affected_services.ilike(f"%{query.service}%"))
+        if query.cluster:
+            conditions.append(Incident.cluster_id == query.cluster)
         return conditions
 
     def list_incidents(self, query: IncidentFilterQuery) -> tuple[int, list[tuple[Incident, IncidentAnalysis | None]]]:
@@ -81,4 +83,3 @@ class IncidentsRepository:
             "metrics_snapshot": metrics,
             "status_history": history,
         }
-

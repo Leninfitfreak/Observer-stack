@@ -17,6 +17,7 @@ def _to_utc_end_exclusive(value: date) -> datetime:
 class IncidentAnalysisCreate(BaseModel):
     incident_id: str = Field(min_length=1, max_length=128)
     service_name: str = Field(min_length=1, max_length=128)
+    cluster_id: str | None = Field(default=None, max_length=128)
     anomaly_score: float = Field(ge=0.0, le=1.0)
     confidence_score: float = Field(ge=0.0, le=1.0)
     classification: str = Field(min_length=1, max_length=64)
@@ -32,6 +33,7 @@ class IncidentAnalysisOut(BaseModel):
     id: int
     incident_id: str
     service_name: str
+    cluster_id: str
     anomaly_score: float
     confidence_score: float
     classification: str
@@ -52,6 +54,7 @@ class IncidentAnalysisQuery(BaseModel):
     start_date: date
     end_date: date
     service_name: str | None = None
+    cluster: str | None = None
     classification: str | None = None
     min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     anomaly_score_min: float | None = Field(default=None, ge=0.0, le=1.0)

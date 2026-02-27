@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from ai_observer.api.routes import health_router, incident_analysis_router, incidents_router, reasoning_router
+from ai_observer.api.routes import agent_router, health_router, incident_analysis_router, incidents_router, reasoning_router
 from ai_observer.core.di import build_container
 from ai_observer.core.logging import setup_logging
 from ai_observer.core.settings import AppSettings, load_settings
@@ -66,4 +66,5 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     app.include_router(reasoning_router)
     app.include_router(incident_analysis_router)
     app.include_router(incidents_router)
+    app.include_router(agent_router)
     return app

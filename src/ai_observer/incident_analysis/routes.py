@@ -4,7 +4,7 @@ import io
 from datetime import date
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -24,8 +24,9 @@ from ai_observer.incident_analysis.service_layer import IncidentAnalysisService
 router = APIRouter(prefix="/incident-analysis", tags=["incident-analysis"])
 
 
-def get_service(db: Session = Depends(get_db_session)) -> IncidentAnalysisService:
-    return IncidentAnalysisService(db=db)
+def get_service(request: Request, db: Session = Depends(get_db_session)) -> IncidentAnalysisService:
+    default_cluster_id = request.app.state.container.settings.telemetry.default_cluster_id
+    return IncidentAnalysisService(db=db, default_cluster_id=default_cluster_id)
 
 
 @router.post("", response_model=IncidentAnalysisCreatedResponse)
@@ -60,6 +61,7 @@ def get_incident_analysis(
     start_date: date = Query(...),
     end_date: date = Query(...),
     service_name: str | None = Query(default=None),
+    cluster: str | None = Query(default=None),
     classification: str | None = Query(default=None),
     min_confidence: float | None = Query(default=None, ge=0.0, le=100.0),
     anomaly_score_min: float | None = Query(default=None, ge=0.0, le=1.0),
@@ -72,6 +74,7 @@ def get_incident_analysis(
         start_date=start_date,
         end_date=end_date,
         service_name=service_name,
+        cluster=cluster,
         classification=classification,
         min_confidence=(min_confidence / 100.0) if min_confidence is not None else None,
         anomaly_score_min=anomaly_score_min,
@@ -93,6 +96,7 @@ def get_incident_analysis_summary(
     start_date: date = Query(...),
     end_date: date = Query(...),
     service_name: str | None = Query(default=None),
+    cluster: str | None = Query(default=None),
     classification: str | None = Query(default=None),
     min_confidence: float | None = Query(default=None, ge=0.0, le=100.0),
     service: IncidentAnalysisService = Depends(get_service),
@@ -101,6 +105,7 @@ def get_incident_analysis_summary(
         start_date=start_date,
         end_date=end_date,
         service_name=service_name,
+        cluster=cluster,
         classification=classification,
         min_confidence=(min_confidence / 100.0) if min_confidence is not None else None,
     )
@@ -113,6 +118,7 @@ def get_incident_analysis_report(
     start_date: date = Query(...),
     end_date: date = Query(...),
     service_name: str | None = Query(default=None),
+    cluster: str | None = Query(default=None),
     classification: str | None = Query(default=None),
     min_confidence: float | None = Query(default=None, ge=0.0, le=100.0),
     service: IncidentAnalysisService = Depends(get_service),
@@ -121,6 +127,7 @@ def get_incident_analysis_report(
         start_date=start_date,
         end_date=end_date,
         service_name=service_name,
+        cluster=cluster,
         classification=classification,
         min_confidence=(min_confidence / 100.0) if min_confidence is not None else None,
         limit=500,
@@ -138,6 +145,7 @@ def get_incident_analysis_report(
         {
             "timestamp": row.created_at.isoformat(),
             "service_name": row.service_name,
+            "cluster_id": row.cluster_id,
             "classification": row.classification,
             "anomaly_score": row.anomaly_score,
             "confidence_score": row.confidence_score,
@@ -152,6 +160,7 @@ def get_incident_analysis_report(
         columns=[
             "timestamp",
             "service_name",
+            "cluster_id",
             "classification",
             "anomaly_score",
             "confidence_score",

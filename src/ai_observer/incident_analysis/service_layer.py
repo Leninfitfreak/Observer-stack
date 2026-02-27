@@ -11,12 +11,15 @@ from ai_observer.incident_analysis.schemas import IncidentAnalysisCreate, Incide
 
 
 class IncidentAnalysisService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, default_cluster_id: str = ""):
         self.db = db
+        self.default_cluster_id = default_cluster_id
 
     def save_incident_analysis(self, data: dict[str, Any]) -> IncidentAnalysis:
         payload = IncidentAnalysisCreate.model_validate(data)
-        entity = IncidentAnalysis(**payload.model_dump())
+        payload_data = payload.model_dump()
+        payload_data["cluster_id"] = (payload.cluster_id or self.default_cluster_id or "").strip()
+        entity = IncidentAnalysis(**payload_data)
         self.db.add(entity)
         self.db.commit()
         self.db.refresh(entity)
@@ -29,6 +32,8 @@ class IncidentAnalysisService:
         ]
         if query.service_name:
             conditions.append(IncidentAnalysis.service_name == query.service_name)
+        if query.cluster:
+            conditions.append(IncidentAnalysis.cluster_id == query.cluster)
         if query.classification:
             conditions.append(IncidentAnalysis.classification == query.classification)
         if query.min_confidence is not None:

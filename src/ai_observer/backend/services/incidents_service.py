@@ -27,6 +27,7 @@ class IncidentsService:
             data.append(
                 {
                     "incident_id": incident.incident_id,
+                    "cluster_id": incident.cluster_id,
                     "status": incident.status,
                     "severity": incident.severity,
                     "impact_level": incident.impact_level,
@@ -52,6 +53,7 @@ class IncidentsService:
         return {
             "incident": {
                 "incident_id": row["incident"].incident_id,
+                "cluster_id": row["incident"].cluster_id,
                 "status": row["incident"].status,
                 "severity": row["incident"].severity,
                 "impact_level": row["incident"].impact_level,
@@ -219,6 +221,7 @@ class IncidentsService:
 
         incident = Incident(
             incident_id=incident_id,
+            cluster_id=(alert.cluster_id or ""),
             status="OPEN",
             severity=str(alert.severity).upper(),
             impact_level=analysis.impact_level,
@@ -242,6 +245,7 @@ class IncidentsService:
             IncidentAnalysis(
                 incident_id=incident_id,
                 service_name=alert.service,
+                cluster_id=(alert.cluster_id or ""),
                 anomaly_score=float((analysis.anomaly_summary or {}).get("score", 0) or 0),
                 confidence_score=float(analysis.confidence or 0),
                 classification=analysis.incident_classification or "Unknown",

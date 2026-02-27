@@ -12,6 +12,7 @@ class IncidentFilterQuery(BaseModel):
     classification: str | None = None
     min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     service: str | None = None
+    cluster: str | None = None
     limit: int = Field(default=20, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
 
@@ -24,6 +25,7 @@ class IncidentFilterQuery(BaseModel):
 
 class IncidentListItem(BaseModel):
     incident_id: str
+    cluster_id: str
     status: str
     severity: str
     impact_level: str
@@ -60,4 +62,4 @@ class IncidentExportRequest(BaseModel):
     classification: str | None = None
     min_confidence: float | None = Field(default=None, ge=0.0, le=100.0)
     service: str | None = None
-
+    cluster: str | None = None

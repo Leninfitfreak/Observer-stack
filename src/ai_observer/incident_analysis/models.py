@@ -20,6 +20,7 @@ class IncidentAnalysis(Base):
         Index("ix_incident_analysis_created_at", "created_at"),
         Index("ix_incident_analysis_service_name", "service_name"),
         Index("ix_incident_analysis_incident_id", "incident_id"),
+        Index("ix_incident_analysis_cluster_id", "cluster_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -29,6 +30,7 @@ class IncidentAnalysis(Base):
         nullable=False,
     )
     service_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    cluster_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     anomaly_score: Mapped[float] = mapped_column(Float, nullable=False)
     confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
     classification: Mapped[str] = mapped_column(String(64), nullable=False)

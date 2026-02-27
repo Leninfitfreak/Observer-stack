@@ -41,6 +41,7 @@ def test_export_excel_full_multisheet_payload() -> None:
     session.add(
         Incident(
             incident_id=incident_id,
+            cluster_id="cluster-export",
             status="OPEN",
             severity="WARNING",
             impact_level="Low",
@@ -64,6 +65,7 @@ def test_export_excel_full_multisheet_payload() -> None:
         IncidentAnalysis(
             incident_id=incident_id,
             service_name="product-service",
+            cluster_id="cluster-export",
             anomaly_score=0.37,
             confidence_score=0.81,
             classification="Performance Degradation",
