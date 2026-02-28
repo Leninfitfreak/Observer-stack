@@ -37,6 +37,7 @@ class AgentPushPayload(BaseModel):
     environment: str | None = None
     timestamp: str | None = None
     metrics: dict[str, float] | None = None
+    topology: dict[str, Any] | None = None
     incidents: list[AgentIncident] = Field(default_factory=list)
 
 
@@ -89,6 +90,7 @@ def _llm_reasoning_for_metrics(
     metrics: dict[str, float],
     classification: str,
     root_cause: str,
+    topology: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     provider = request.app.state.container.reasoning_service.llm_provider
     baseline = {
@@ -111,6 +113,7 @@ def _llm_reasoning_for_metrics(
             "environment": environment,
             "service_name": service_name,
             "telemetry": metrics,
+            "topology": topology or {},
         },
         "baseline": baseline,
     }
@@ -161,6 +164,18 @@ def push_from_agent(
     inserted = 0
     incoming_payload = payload.model_dump()
     metrics = payload.metrics or {}
+    topology = payload.topology or {}
+    dependency_graph: dict[str, Any] = {}
+    dependency_engine = getattr(request.app.state.container, "dependency_engine", None)
+    if isinstance(topology, dict) and topology and dependency_engine is not None:
+        try:
+            dependency_graph = dependency_engine.build_from_topology(
+                payload.cluster_id,
+                payload.environment or "dev",
+                topology,
+            )
+        except Exception:
+            dependency_graph = {}
     cpu_usage = _as_float(metrics.get("cpu_usage", 0.0))
     memory_usage = _as_float(metrics.get("memory_usage", 0.0))
     request_rate = _as_float(metrics.get("request_rate", 0.0))
@@ -222,6 +237,7 @@ def push_from_agent(
                         },
                         classification=classification,
                         root_cause=root_cause,
+                        topology=topology,
                     )
                     candidate = _normalize_reasoning(candidate)
                     if _is_valid_reasoning(candidate):
@@ -304,6 +320,8 @@ def push_from_agent(
                     "request_rate": request_rate,
                     "pod_restarts": _as_float(metrics.get("pod_restarts", 0.0)),
                     "error_rate": error_rate,
+                    "topology": topology,
+                    "dependency_graph": dependency_graph,
                 },
                 captured_at=now,
             )
@@ -325,6 +343,8 @@ def push_from_agent(
                         "request_rate": request_rate,
                         "error_rate": error_rate,
                     },
+                    "topology": topology,
+                    "dependency_graph": dependency_graph,
                 },
                 "risk_forecast": risk_forecast,
                 "mitigation_success": row.mitigation_success,

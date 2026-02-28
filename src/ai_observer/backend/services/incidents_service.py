@@ -119,6 +119,49 @@ class IncidentsService:
         data: list[dict[str, Any]] = []
         for incident, analysis in rows:
             telemetry = self._extract_telemetry(incident, analysis)
+            topology_insights: dict[str, Any] = {}
+            causal_chain: list[str] = []
+            origin_service: str | None = None
+            if analysis and isinstance(analysis.mitigation, dict):
+                top = analysis.mitigation.get("topology_insights")
+                if isinstance(top, dict):
+                    topology_insights = top
+                    origin_service = str(top.get("likely_origin_service", "") or "") or None
+                signals = analysis.mitigation.get("supporting_signals")
+                if isinstance(signals, list):
+                    causal_chain = [str(x) for x in signals]
+                elif isinstance(signals, dict):
+                    chain = signals.get("causal_chain")
+                    if isinstance(chain, list):
+                        causal_chain = [str(x) for x in chain]
+            if not origin_service and isinstance(incident.raw_payload, dict):
+                raw_topology = incident.raw_payload.get("topology")
+                if isinstance(raw_topology, dict):
+                    relations = raw_topology.get("relations", {}) if isinstance(raw_topology.get("relations"), dict) else {}
+                    service_to_pod = relations.get("service_to_pod", [])
+                    if isinstance(service_to_pod, list):
+                        for rel in service_to_pod:
+                            if not isinstance(rel, dict):
+                                continue
+                            svc = str(rel.get("service", "")).strip()
+                            if svc:
+                                origin_service = svc
+                                break
+                    if not topology_insights:
+                        counts = raw_topology.get("counts", {}) if isinstance(raw_topology.get("counts"), dict) else {}
+                        impacted = sorted(
+                            {
+                                str(rel.get("service", "")).strip()
+                                for rel in service_to_pod
+                                if isinstance(rel, dict) and str(rel.get("service", "")).strip()
+                            }
+                        )
+                        topology_insights = {
+                            "likely_origin_service": origin_service or "unknown",
+                            "impacted_services": impacted,
+                            "service_count": int(counts.get("services", 0) or 0),
+                            "pod_count": int(counts.get("pods", 0) or 0),
+                        }
             data.append(
                 {
                     "incident_id": incident.incident_id,
@@ -142,6 +185,9 @@ class IncidentsService:
                     "request_rate": telemetry["request_rate"],
                     "pod_restarts": telemetry["pod_restarts"],
                     "error_rate": telemetry["error_rate"],
+                    "origin_service": origin_service,
+                    "topology_insights": topology_insights,
+                    "causal_chain": causal_chain,
                 }
             )
         return total, data
@@ -372,6 +418,7 @@ class IncidentsService:
                 mitigation={
                     "executive_summary": analysis.executive_summary or "",
                     "supporting_signals": analysis.causal_chain or [],
+                    "origin_service": analysis.origin_service or (analysis.topology_insights or {}).get("likely_origin_service"),
                     "actions": analysis.corrective_actions or [],
                     "confidence_breakdown": analysis.confidence_details or {},
                     "telemetry": context.metrics or {},

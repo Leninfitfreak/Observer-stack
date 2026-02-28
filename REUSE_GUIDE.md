@@ -10,7 +10,10 @@ Core flow:
 
 ## Reusable Components
 
-Reusable intelligence modules are in `src/ai_observer/intelligence`:
+Reusable intelligence modules are in:
+
+- `src/ai_observer/intelligence` (core reasoning engines)
+- `src/ai_observer/backend/intelligence` (topology/discovery/dependency registry used by API/ingestion path)
 
 - `anomaly_engine.py`
 - `correlation_engine.py`
@@ -20,6 +23,11 @@ Reusable intelligence modules are in `src/ai_observer/intelligence`:
 - `causal_engine.py`
 - `confidence_engine.py`
 - `reasoning_engine.py`
+- `backend/intelligence/topology_engine.py`
+- `backend/intelligence/dependency_engine.py`
+- `backend/intelligence/discovery_engine.py`
+- `backend/intelligence/observability_registry.py`
+- `backend/intelligence/causal_engine.py`
 
 All modules accept structured telemetry and produce structured output without hardcoded cluster/service names.
 
@@ -58,6 +66,36 @@ Set these in Kubernetes ConfigMap/Secret:
 - `AGENT_TOKEN` (Secret)
 
 Then apply manifests and let ArgoCD reconcile.
+
+## Istio-Free Cluster Mode (Recommended)
+
+This platform does not require Istio.
+
+- Keep NGINX Ingress Controller enabled.
+- Ensure namespace sidecar injection is disabled.
+- Route external traffic through Kubernetes Ingress resources (`ingressClassName: nginx`).
+- Use observer-agent for telemetry forwarding and Kubernetes API topology discovery.
+
+## Kubernetes Topology Discovery
+
+`observer-agent` can enrich payloads with discovered topology metadata from Kubernetes API:
+
+- namespaces
+- pods
+- services
+- endpoints
+- deployments
+- ingresses
+
+Required runtime permissions are provided through ServiceAccount + ClusterRole + ClusterRoleBinding in infra manifests.
+
+Key env variables:
+
+- `K8S_DISCOVERY_ENABLED` (`true|false`)
+- `K8S_DISCOVERY_NAMESPACES` (comma-separated list; empty means all)
+- `K8S_DISCOVERY_TIMEOUT_SECONDS`
+- `K8S_API_URL` (default `https://kubernetes.default.svc`)
+- `K8S_VERIFY_SSL` (`true|false`)
 
 ## Validation Checklist
 

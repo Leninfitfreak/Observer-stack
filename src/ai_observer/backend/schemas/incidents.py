@@ -45,6 +45,9 @@ class IncidentListItem(BaseModel):
     request_rate: float | None = None
     pod_restarts: float | None = None
     error_rate: float | None = None
+    origin_service: str | None = None
+    topology_insights: dict[str, Any] | None = None
+    causal_chain: list[str] | None = None
 
 
 class IncidentListResponse(BaseModel):

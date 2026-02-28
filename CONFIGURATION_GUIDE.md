@@ -37,6 +37,12 @@ Runtime:
 
 - `HTTP_TIMEOUT_SECONDS`
 - `HTTP_ATTEMPTS`
+- `OBS_AUTO_DISCOVERY_ENABLED`
+- `K8S_API_URL`
+- `K8S_VERIFY_SSL`
+- `K8S_SA_TOKEN_PATH`
+- `K8S_SA_CA_PATH`
+- `DISCOVERY_NAMESPACES`
 
 ## Docker Compose
 
@@ -58,10 +64,22 @@ ConfigMap keys:
 - `PROM_URL`
 - `PUSH_INTERVAL`
 - `ENVIRONMENT`
+- `K8S_DISCOVERY_ENABLED`
+- `K8S_DISCOVERY_NAMESPACES`
+- `K8S_DISCOVERY_TIMEOUT_SECONDS`
+- `K8S_API_URL`
+- `K8S_VERIFY_SSL`
 
 Secret key:
 
 - `AGENT_TOKEN`
+
+## Istio Removal / NGINX Ingress Model
+
+- Keep `ingress-nginx` as the only ingress path.
+- Disable namespace Istio sidecar injection labels.
+- Remove Istio CRDs/control-plane only after workloads run sidecar-free.
+- Verify `Ingress` resources point directly to Kubernetes services.
 
 Deployment must use:
 
@@ -118,3 +136,14 @@ docker compose exec -T postgres psql -U ai_observer -d ai_observer -c "SELECT cl
   - verify `/api/reasoning/live` JSON contains analysis fields
 - wrong backend endpoint:
   - ensure `CENTRAL_URL` points to central Docker backend endpoint reachable from cluster
+- topology not present in incidents:
+  - verify agent logs include `Topology discovered ...`
+  - verify `/api/agent/push` backend is rebuilt with topology payload support
+- agent push timeouts:
+  - verify backend is reachable via `CENTRAL_URL`
+  - increase `PUSH_INTERVAL` and check backend CPU/load
+
+## Topology + Discovery References
+
+- See `TOPOLOGY_GUIDE.md` for topology schema, RBAC, and API validation.
+- Backend observability auto-discovery is enabled through `OBS_AUTO_DISCOVERY_ENABLED=true` and resolves Prometheus/Loki/Jaeger dynamically when explicit URLs are not set.

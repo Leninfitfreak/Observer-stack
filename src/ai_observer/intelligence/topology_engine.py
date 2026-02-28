@@ -27,7 +27,19 @@ class TopologyEngine:
             return clamp((0.35 * baseline) + (0.3 * (err / 0.05 if err > 0 else 0)) + (0.2 * (lat / 0.75 if lat > 0 else 0)) + (0.15 * (cpu / 0.8 if cpu > 0 else 0)))
 
         ranked = sorted(((svc, svc_anomaly(v)) for svc, v in component_metrics.items()), key=lambda item: item[1], reverse=True)
-        likely_origin = ranked[0][0] if ranked else (alert_service if alert_service not in {"all", "*"} else "unknown")
+        likely_origin = ranked[0][0] if ranked else (alert_service if alert_service not in {"all", "*"} else "")
+        if not likely_origin:
+            service_to_pods = graph.get("service_to_pods", {}) if isinstance(graph, dict) else {}
+            if isinstance(service_to_pods, dict):
+                populated = [svc for svc, pods in service_to_pods.items() if isinstance(pods, list) and pods]
+                if populated:
+                    likely_origin = sorted(populated)[0]
+        if not likely_origin:
+            services = graph.get("services", []) if isinstance(graph, dict) else []
+            if isinstance(services, list) and services:
+                likely_origin = str(services[0])
+        if not likely_origin:
+            likely_origin = "unknown"
         likely_origin_score = ranked[0][1] if ranked else 0.0
         impacted = [svc for svc, score in ranked if score >= 0.2]
         downstream_coverage = clamp((len(impacted) / max(len(graph.get("services", [])), 1)) if graph.get("services") else 0.0)

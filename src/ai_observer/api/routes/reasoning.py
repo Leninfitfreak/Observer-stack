@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from ai_observer.api.routes.schemas import AlertmanagerWebhook
+from ai_observer.backend.intelligence import CausalEngine, TopologyEngine
 from ai_observer.backend.models.incident import Incident, IncidentMetricsSnapshot
 from ai_observer.backend.services import IncidentsService
 from ai_observer.domain.models import AlertSignal, LiveReasoningResponse
@@ -128,7 +129,29 @@ def _telemetry_for_incident(db: Session, incident: Incident) -> dict[str, float]
     }
 
 
-def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tuple[dict[str, Any], dict[str, dict[str, float]]]:
+def _topology_for_incident(db: Session, incident: Incident) -> dict[str, Any]:
+    raw_payload = incident.raw_payload if isinstance(incident.raw_payload, dict) else {}
+    topology = raw_payload.get("topology") if isinstance(raw_payload, dict) else {}
+    if isinstance(topology, dict) and topology:
+        return topology
+
+    latest_analysis = (
+        db.query(IncidentAnalysis)
+        .filter(IncidentAnalysis.incident_id == incident.incident_id)
+        .order_by(IncidentAnalysis.created_at.desc())
+        .first()
+    )
+    mitigation = latest_analysis.mitigation if latest_analysis and isinstance(latest_analysis.mitigation, dict) else {}
+    topology = mitigation.get("topology") if isinstance(mitigation, dict) else {}
+    if isinstance(topology, dict) and topology:
+        return topology
+    topology_insights = mitigation.get("topology_insights") if isinstance(mitigation, dict) else {}
+    if isinstance(topology_insights, dict) and topology_insights:
+        return {"topology_insights": topology_insights}
+    return {}
+
+
+def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tuple[dict[str, Any], dict[str, dict[str, float]], dict[str, Any]]:
     query = db.query(Incident).filter(Incident.incident_id.ilike("agent-%")).order_by(Incident.created_at.desc())
     if cluster_id:
         rows = query.filter(Incident.cluster_id == cluster_id).limit(100).all()
@@ -137,6 +160,7 @@ def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tupl
     else:
         rows = query.limit(100).all()
     component_metrics: dict[str, dict[str, float]] = {}
+    topology_candidate: dict[str, Any] = {}
     metric_samples: dict[str, list[tuple[float, Any]]] = {
         "cpu_usage_cores_5m": [],
         "memory_usage_bytes": [],
@@ -149,6 +173,10 @@ def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tupl
         resolved = _telemetry_for_incident(db, row)
         if not _has_nonzero(resolved):
             continue
+        if not topology_candidate:
+            topo = _topology_for_incident(db, row)
+            if topo:
+                topology_candidate = topo
 
         service = (row.affected_services or "observer-agent").split(",")[0].strip() or "observer-agent"
         if service not in component_metrics:
@@ -159,7 +187,7 @@ def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tupl
             metric_samples[key].append((float(resolved.get(key, 0.0) or 0.0), ts))
 
     if not component_metrics:
-        return {}, {}
+        return {}, {}, {}
 
     aggregated: dict[str, float | str] = {
         "cpu_usage_cores_5m": max(v.get("cpu_usage_cores_5m", 0.0) for v in component_metrics.values()),
@@ -285,10 +313,10 @@ def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tupl
     )
     aggregated["baseline_anomaly_score"] = max(0.0, min(1.0, weighted))
 
-    return {k: float(v) if isinstance(v, (int, float)) else v for k, v in aggregated.items()}, component_metrics
+    return {k: float(v) if isinstance(v, (int, float)) else v for k, v in aggregated.items()}, component_metrics, topology_candidate
 
 
-def _refresh_analysis_from_metrics(response: LiveReasoningResponse) -> None:
+def _refresh_analysis_from_metrics(response: LiveReasoningResponse, topology: dict[str, Any], service_hint: str) -> None:
     metrics = response.context.metrics or {}
     cpu = _as_float(metrics.get("cpu_usage_cores_5m", 0.0))
     mem_mb = _as_float(metrics.get("memory_usage_bytes", 0.0)) / (1024 * 1024)
@@ -366,9 +394,27 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse) -> None:
         "contradictory_signals": [],
         "unaffected_signals": [],
     }
+    origin_service = TopologyEngine.infer_origin_service(topology, preferred_service=service_hint or "observer-agent")
+    impacted_services = TopologyEngine.infer_impacted_services(topology)
+    propagation_path = []
+    if isinstance(topology.get("topology_insights"), dict):
+        propagation_path = list(topology.get("topology_insights", {}).get("propagation_path", []) or [])
+    if not propagation_path and impacted_services and origin_service in impacted_services:
+        propagation_path = [origin_service]
     response.analysis.topology_insights = {
-        "likely_origin_service": "observer-agent",
+        "likely_origin_service": origin_service,
+        "impacted_services": impacted_services,
+        "propagation_path": propagation_path,
         "propagation_consistency": round(min(1.0, baseline_score + 0.3), 3),
+    }
+    response.analysis.origin_service = origin_service
+    chain_addons = CausalEngine.build_causal_chain(origin_service, impacted_services, propagation_path)
+    response.analysis.causal_chain = [*response.analysis.causal_chain, *chain_addons]
+    response.analysis.causal_analysis = {
+        **(response.analysis.causal_analysis or {}),
+        "origin_service": origin_service,
+        "propagation_path": propagation_path,
+        "impacted_services": impacted_services,
     }
     logger.info("Refreshed analysis why_not_resource_saturation=%s", response.analysis.why_not_resource_saturation)
 
@@ -429,13 +475,15 @@ def live_reasoning(
     result = reasoner.analyze(alert, window_minutes=_parse_time_window(time_window))
     if not _has_metric_signal(result.context.metrics):
         logger.info("Live reasoning metrics missing; attempting incident telemetry fallback cluster=%s", alert.cluster_id or "")
-        fallback_metrics, fallback_components = _hydrate_metrics_from_recent_incidents(db, alert.cluster_id or "")
+        fallback_metrics, fallback_components, fallback_topology = _hydrate_metrics_from_recent_incidents(db, alert.cluster_id or "")
         if _has_metric_signal(fallback_metrics):
             logger.info("Applying incident telemetry fallback metrics=%s", fallback_metrics)
             result.context.metrics.update(fallback_metrics)
             for service_name, service_metrics in fallback_components.items():
                 result.context.component_metrics[service_name] = service_metrics
-            _refresh_analysis_from_metrics(result)
+            if fallback_topology:
+                result.context.cluster_wiring = fallback_topology
+            _refresh_analysis_from_metrics(result, fallback_topology, alert.service)
             logger.info("Post-refresh analysis why_not_resource_saturation=%s", result.analysis.why_not_resource_saturation)
         else:
             logger.info("No fallback telemetry available from incidents for cluster=%s", alert.cluster_id or "")

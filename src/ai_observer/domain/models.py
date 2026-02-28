@@ -34,6 +34,7 @@ class ObservabilityContext(BaseModel):
 
 class ReasoningResult(BaseModel):
     probable_root_cause: str
+    origin_service: str | None = None
     impact_level: str
     recommended_remediation: str
     confidence_score: str

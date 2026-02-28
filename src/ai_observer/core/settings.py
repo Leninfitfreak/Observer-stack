@@ -43,6 +43,16 @@ class ObservabilitySettings:
 
 
 @dataclass(frozen=True)
+class DiscoverySettings:
+    enabled: bool = True
+    k8s_api_url: str = "https://kubernetes.default.svc"
+    verify_ssl: bool = True
+    service_account_token_path: str = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    service_account_ca_path: str = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    namespaces: tuple[str, ...] = ("dev",)
+
+
+@dataclass(frozen=True)
 class DatabaseSettings:
     url: str = ""
     echo_sql: bool = False
@@ -53,6 +63,7 @@ class AppSettings:
     telemetry: TelemetrySettings
     llm: LlmSettings
     observability: ObservabilitySettings
+    discovery: DiscoverySettings
     http: HttpSettings
     database: DatabaseSettings
     agent_token: str
@@ -74,8 +85,13 @@ def load_settings() -> AppSettings:
     if provider not in {"ollama", "openai"}:
         provider = "ollama"
 
+    llama_api_url = os.getenv("LLAMA_API_URL", "").strip().rstrip("/")
+    llama_api_key = os.getenv("LLAMA_API_KEY", "").strip()
+    llama_model = os.getenv("LLAMA_MODEL", "").strip()
+
     openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    ollama_api_key = os.getenv("OLLAMA_API_KEY", openai_api_key).strip()
+    ollama_api_key = os.getenv("OLLAMA_API_KEY", llama_api_key or openai_api_key).strip()
+    llm_model = os.getenv("LLM_MODEL", llama_model).strip()
 
     telemetry = TelemetrySettings(
         default_namespace=os.getenv("DEFAULT_NAMESPACE", "default").strip() or "default",
@@ -87,8 +103,8 @@ def load_settings() -> AppSettings:
 
     llm = LlmSettings(
         provider=provider,  # type: ignore[arg-type]
-        model=os.getenv("LLM_MODEL", "").strip(),
-        ollama_url=os.getenv("OLLAMA_URL", "").strip().rstrip("/"),
+        model=llm_model,
+        ollama_url=os.getenv("OLLAMA_URL", llama_api_url).strip().rstrip("/"),
         openai_base_url=os.getenv("OPENAI_BASE_URL", "").strip().rstrip("/"),
         ollama_api_key=ollama_api_key,
         openai_api_key=openai_api_key,
@@ -98,6 +114,25 @@ def load_settings() -> AppSettings:
         prometheus_url=os.getenv("PROMETHEUS_URL", "").strip().rstrip("/"),
         loki_url=os.getenv("LOKI_URL", "").strip().rstrip("/"),
         jaeger_url=os.getenv("JAEGER_URL", "").strip().rstrip("/"),
+    )
+    discovery_namespaces = tuple(
+        part.strip()
+        for part in os.getenv("DISCOVERY_NAMESPACES", "dev").split(",")
+        if part.strip()
+    ) or ("dev",)
+    discovery = DiscoverySettings(
+        enabled=(os.getenv("OBS_AUTO_DISCOVERY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}),
+        k8s_api_url=os.getenv("K8S_API_URL", "https://kubernetes.default.svc").strip().rstrip("/"),
+        verify_ssl=(os.getenv("K8S_VERIFY_SSL", "true").strip().lower() in {"1", "true", "yes", "on"}),
+        service_account_token_path=os.getenv(
+            "K8S_SA_TOKEN_PATH",
+            "/var/run/secrets/kubernetes.io/serviceaccount/token",
+        ).strip(),
+        service_account_ca_path=os.getenv(
+            "K8S_SA_CA_PATH",
+            "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+        ).strip(),
+        namespaces=discovery_namespaces,
     )
 
     http = HttpSettings(
@@ -119,6 +154,7 @@ def load_settings() -> AppSettings:
         telemetry=telemetry,
         llm=llm,
         observability=observability,
+        discovery=discovery,
         http=http,
         database=database,
         agent_token=os.getenv("AGENT_TOKEN", "").strip(),
