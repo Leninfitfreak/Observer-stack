@@ -40,6 +40,11 @@ class IncidentListItem(BaseModel):
     confidence_score: float | None = None
     classification: str | None = None
     risk_forecast: float | None = None
+    cpu_usage: float | None = None
+    memory_usage: float | None = None
+    request_rate: float | None = None
+    pod_restarts: float | None = None
+    error_rate: float | None = None
 
 
 class IncidentListResponse(BaseModel):

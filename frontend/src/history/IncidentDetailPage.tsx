@@ -36,6 +36,31 @@ export default function IncidentDetailPage() {
 
   const latestAnalysis = useMemo(() => data?.analysis?.[0] ?? null, [data]);
   const latestMetrics = useMemo(() => data?.metrics_snapshot?.[0] ?? null, [data]);
+  const fallbackTelemetry = useMemo(() => {
+    const fromSnapshot = (latestMetrics?.raw_metrics_json as Record<string, unknown> | undefined) ?? {};
+    const fromMitigation = (latestAnalysis?.mitigation?.telemetry as Record<string, unknown> | undefined) ?? {};
+    const fromPayload = (data?.incident?.raw_payload?.metrics as Record<string, unknown> | undefined) ?? {};
+    return { ...fromPayload, ...fromMitigation, ...fromSnapshot };
+  }, [data, latestAnalysis, latestMetrics]);
+
+  const cpuPercent = useMemo(() => {
+    const snapshotValue = Number(latestMetrics?.cpu_usage);
+    if (Number.isFinite(snapshotValue) && snapshotValue > 0) return snapshotValue;
+    const raw = Number(fallbackTelemetry?.cpu_usage ?? 0);
+    if (!Number.isFinite(raw)) return 0;
+    return raw <= 1 ? raw * 100 : raw;
+  }, [latestMetrics, fallbackTelemetry]);
+
+  const memoryMb = useMemo(() => {
+    const snapshotValue = Number(latestMetrics?.memory_usage);
+    if (Number.isFinite(snapshotValue) && snapshotValue > 0) return snapshotValue;
+    const raw = Number(fallbackTelemetry?.memory_usage ?? 0);
+    if (!Number.isFinite(raw)) return 0;
+    return raw > 1024 ? raw / (1024 * 1024) : raw;
+  }, [latestMetrics, fallbackTelemetry]);
+
+  const requestRate = useMemo(() => Number(fallbackTelemetry?.request_rate ?? 0), [fallbackTelemetry]);
+  const podRestarts = useMemo(() => Number(fallbackTelemetry?.pod_restarts ?? 0), [fallbackTelemetry]);
 
   return (
     <main className="history-page">
@@ -92,10 +117,12 @@ export default function IncidentDetailPage() {
           <div className="detail-card">
             <h3>Metrics Snapshot</h3>
             <ul>
-              <li>CPU Usage: {Number(latestMetrics?.cpu_usage || 0).toFixed(2)}%</li>
-              <li>Memory Usage: {Math.round(Number(latestMetrics?.memory_usage || 0))} MB</li>
+              <li>CPU Usage: {cpuPercent.toFixed(2)}%</li>
+              <li>Memory Usage: {Math.round(memoryMb)} MB</li>
               <li>Latency P95: {Math.round(Number(latestMetrics?.latency_p95 || 0))} ms</li>
               <li>Error Rate: {Number(latestMetrics?.error_rate || 0).toFixed(2)}%</li>
+              <li>Request Rate: {Number.isFinite(requestRate) ? requestRate.toFixed(4) : "0.0000"} rps</li>
+              <li>Pod Restarts: {Number.isFinite(podRestarts) ? podRestarts.toFixed(0) : "0"}</li>
               <li>Thread Pool Saturation: {Number(latestMetrics?.thread_pool_saturation || 0).toFixed(2)}</li>
             </ul>
           </div>

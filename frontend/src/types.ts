@@ -1,5 +1,6 @@
 export interface IncidentAnalysis {
   incident_id: string;
+  cluster_id: string;
   status: string;
   severity: string;
   impact_level: string;
@@ -13,6 +14,11 @@ export interface IncidentAnalysis {
   confidence_score: number;
   classification?: string | null;
   risk_forecast?: number | null;
+  cpu_usage?: number | null;
+  memory_usage?: number | null;
+  request_rate?: number | null;
+  pod_restarts?: number | null;
+  error_rate?: number | null;
   created_at: string;
 }
 
@@ -34,6 +40,7 @@ export interface HistoryFiltersState {
   startDate: string;
   endDate: string;
   service: string;
+  cluster: string;
   classification: string;
   minConfidence: number;
 }

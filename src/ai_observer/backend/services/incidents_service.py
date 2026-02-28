@@ -20,10 +20,45 @@ class IncidentsService:
         self.db = db
         self.repo = IncidentsRepository(db)
 
+    @staticmethod
+    def _extract_telemetry(incident: Incident, analysis: IncidentAnalysis | None) -> dict[str, float]:
+        payload_metrics = {}
+        if isinstance(incident.raw_payload, dict):
+            payload_metrics = incident.raw_payload.get("metrics") or {}
+        mitigation_metrics = {}
+        if analysis and isinstance(analysis.mitigation, dict):
+            mitigation_metrics = analysis.mitigation.get("telemetry") or {}
+        metrics = payload_metrics if isinstance(payload_metrics, dict) else {}
+        if not metrics and isinstance(mitigation_metrics, dict):
+            metrics = mitigation_metrics
+
+        def _num(key: str, default: float = 0.0) -> float:
+            try:
+                return float(metrics.get(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        return {
+            "cpu_usage": _num("cpu_usage"),
+            "memory_usage": _num("memory_usage"),
+            "request_rate": _num("request_rate"),
+            "pod_restarts": _num("pod_restarts"),
+            "error_rate": _num("error_rate"),
+        }
+
+    @staticmethod
+    def _to_cpu_percent(value: float) -> float:
+        return value * 100.0 if value <= 1.0 else value
+
+    @staticmethod
+    def _to_memory_mb(value: float) -> float:
+        return value / (1024.0 * 1024.0) if value > 1024.0 else value
+
     def list(self, query: IncidentFilterQuery) -> tuple[int, list[dict[str, Any]]]:
         total, rows = self.repo.list_incidents(query)
         data: list[dict[str, Any]] = []
         for incident, analysis in rows:
+            telemetry = self._extract_telemetry(incident, analysis)
             data.append(
                 {
                     "incident_id": incident.incident_id,
@@ -42,6 +77,11 @@ class IncidentsService:
                     "confidence_score": analysis.confidence_score if analysis else None,
                     "classification": analysis.classification if analysis else None,
                     "risk_forecast": analysis.risk_forecast if analysis else None,
+                    "cpu_usage": telemetry["cpu_usage"],
+                    "memory_usage": telemetry["memory_usage"],
+                    "request_rate": telemetry["request_rate"],
+                    "pod_restarts": telemetry["pod_restarts"],
+                    "error_rate": telemetry["error_rate"],
                 }
             )
         return total, data
@@ -50,6 +90,36 @@ class IncidentsService:
         row = self.repo.get_incident_details(incident_id)
         if row is None:
             return None
+        latest_analysis = row["analysis"][0] if row["analysis"] else None
+        fallback_telemetry = self._extract_telemetry(row["incident"], latest_analysis)
+        metrics_snapshot = [
+            {
+                "id": m.id,
+                "incident_id": m.incident_id,
+                "cpu_usage": m.cpu_usage,
+                "memory_usage": m.memory_usage,
+                "latency_p95": m.latency_p95,
+                "error_rate": m.error_rate,
+                "thread_pool_saturation": m.thread_pool_saturation,
+                "raw_metrics_json": m.raw_metrics_json,
+                "captured_at": m.captured_at,
+            }
+            for m in row["metrics_snapshot"]
+        ]
+        if not metrics_snapshot and any(v != 0.0 for v in fallback_telemetry.values()):
+            metrics_snapshot = [
+                {
+                    "id": 0,
+                    "incident_id": row["incident"].incident_id,
+                    "cpu_usage": self._to_cpu_percent(fallback_telemetry["cpu_usage"]),
+                    "memory_usage": self._to_memory_mb(fallback_telemetry["memory_usage"]),
+                    "latency_p95": 0.0,
+                    "error_rate": fallback_telemetry["error_rate"] * 100.0 if fallback_telemetry["error_rate"] <= 1.0 else fallback_telemetry["error_rate"],
+                    "thread_pool_saturation": 0.0,
+                    "raw_metrics_json": fallback_telemetry,
+                    "captured_at": row["incident"].created_at,
+                }
+            ]
         return {
             "incident": {
                 "incident_id": row["incident"].incident_id,
@@ -63,6 +133,8 @@ class IncidentsService:
                 "start_time": row["incident"].start_time,
                 "duration": row["incident"].duration,
                 "created_at": row["incident"].created_at,
+                "raw_payload": row["incident"].raw_payload,
+                "analysis_json": row["incident"].analysis,
             },
             "analysis": [
                 {
@@ -81,20 +153,7 @@ class IncidentsService:
                 }
                 for a in row["analysis"]
             ],
-            "metrics_snapshot": [
-                {
-                    "id": m.id,
-                    "incident_id": m.incident_id,
-                    "cpu_usage": m.cpu_usage,
-                    "memory_usage": m.memory_usage,
-                    "latency_p95": m.latency_p95,
-                    "error_rate": m.error_rate,
-                    "thread_pool_saturation": m.thread_pool_saturation,
-                    "raw_metrics_json": m.raw_metrics_json,
-                    "captured_at": m.captured_at,
-                }
-                for m in row["metrics_snapshot"]
-            ],
+            "metrics_snapshot": metrics_snapshot,
             "status_history": [
                 {
                     "id": h.id,
