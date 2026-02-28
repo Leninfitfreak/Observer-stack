@@ -6,6 +6,16 @@ from typing import Any
 
 from ai_observer.domain.interfaces import ClusterWiringProvider, LlmProvider, LogsProvider, MetricsProvider, TracesProvider
 from ai_observer.domain.models import AlertSignal, LiveReasoningResponse, ObservabilityContext, ReasoningResult
+from ai_observer.intelligence import (
+    AnomalyEngine,
+    CausalEngine,
+    ConfidenceEngine,
+    CorrelationEngine,
+    DependencyGraphEngine,
+    ReasoningEngine,
+    TemporalEngine,
+    TopologyEngine,
+)
 
 
 class ReasoningService:
@@ -24,6 +34,14 @@ class ReasoningService:
         self.cluster_wiring_provider = cluster_wiring_provider
         self.started_at = datetime.now(timezone.utc)
         self._incident_state: dict[str, dict[str, Any]] = {}
+        self.anomaly_engine = AnomalyEngine()
+        self.causal_engine = CausalEngine()
+        self.confidence_engine = ConfidenceEngine()
+        self.correlation_engine = CorrelationEngine()
+        self.dependency_graph_engine = DependencyGraphEngine()
+        self.topology_engine = TopologyEngine(self.dependency_graph_engine)
+        self.temporal_engine = TemporalEngine()
+        self.reasoning_engine = ReasoningEngine()
 
     @staticmethod
     def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
@@ -605,8 +623,8 @@ class ReasoningService:
         topology_insights = context.get("topology_insights", {}) or {}
         causal_analysis = context.get("causal_analysis", {}) or {}
         advanced_conf = context.get("advanced_confidence", {}) or {}
-        classification = self._incident_classification(metrics, missing_observability)
-        metric_summary, metric_bullets = self._metric_narrative(metrics)
+        classification = self.reasoning_engine.classify(metrics, missing_observability)
+        metric_summary, metric_bullets = self.reasoning_engine.metric_narrative(metrics)
         why_not_resource = self._resource_saturation_signals(metrics)
         p95_dev = float(metrics.get("latency_deviation_7d_pct", 0) or 0)
         p95_yesterday = float(metrics.get("p95_yesterday_s_5m", 0) or 0) * 1000
@@ -628,7 +646,7 @@ class ReasoningService:
             impact = "Low"
             confidence = 0.48
 
-        confidence_details = self._confidence_details(context)
+        confidence_details = self.reasoning_engine.confidence_details(advanced_conf) if advanced_conf else self._confidence_details(context)
         if confidence_details.get("computed_confidence") is not None:
             confidence = float(confidence_details["computed_confidence"])
         change_detection_context = []
@@ -667,8 +685,8 @@ class ReasoningService:
             "external_dependency": "External dependency latency is the most likely contributor.",
             "internal_runtime": "Transient runtime or traffic fluctuation is the most likely contributor.",
         }
-        most_likely = scenario_map.get(top_domain, "Transient runtime or traffic fluctuation is the most likely contributor.")
-        risk_15m = self._risk_forecast_15m(metrics, lifecycle)
+        most_likely = self.reasoning_engine.scenario_from_domain(causal_likelihoods)
+        risk_15m = self.reasoning_engine.risk_forecast_15m(metrics, lifecycle)
         anomaly_score = float(signal_scores.get("overall_anomaly_score", 0) or 0)
         anomaly_threshold = 0.65
         anomaly_status = "Anomalous" if anomaly_score >= anomaly_threshold else "Normal"
@@ -689,9 +707,9 @@ class ReasoningService:
             causal_chain.append(str(causal_analysis.get("causal_narrative")))
 
         confidence = max(confidence, float(advanced_conf.get("computed_confidence", 0.0) or 0.0))
-        confidence_floor = 0.35 if len(missing_observability) <= 2 else 0.2
+        confidence_floor = self.reasoning_engine.confidence_floor(missing_observability)
         confidence = max(confidence, confidence_floor)
-        confidence = self._clamp(confidence)
+        confidence = self.reasoning_engine.clamp(confidence)
         return {
             "probable_root_cause": root,
             "impact_level": impact,
@@ -729,11 +747,7 @@ class ReasoningService:
             "correlated_signals": correlation,
             "causal_analysis": causal_analysis,
             "topology_insights": topology_insights,
-            "anomaly_summary": {
-                "score": round(anomaly_score, 3),
-                "threshold": anomaly_threshold,
-                "status": anomaly_status,
-            },
+            "anomaly_summary": self.reasoning_engine.anomaly_summary(signal_scores, anomaly_threshold),
             "engine_boundary_note": "Classification and scoring are computed by deterministic signal engine; LLM is used only for structured narrative generation.",
         }
 
@@ -892,20 +906,20 @@ class ReasoningService:
             missing_observability.append("kafka_consumer_lag metric missing")
         context_data["analysis_missing_observability"] = missing_observability
 
-        signal_scores = self._signal_scores(context_data["metrics"], missing_observability)
+        signal_scores = self.anomaly_engine.compute_signal_scores(context_data["metrics"], missing_observability)
         context_data["metrics"].update(signal_scores)
         context_data["signal_scores"] = signal_scores
-        causal_likelihoods = self._causal_likelihoods(context_data["metrics"], logs, traces, cluster_wiring)
+        causal_likelihoods = self.causal_engine.likelihoods(context_data["metrics"], logs, traces, cluster_wiring)
         context_data["causal_likelihoods"] = causal_likelihoods
         incident_key = f"{alert.namespace}:{alert.service}:{alert.severity}:{alert.alertname}"
-        lifecycle = self._lifecycle_progression(incident_key, context_data["metrics"])
+        lifecycle = self.temporal_engine.lifecycle(incident_key, context_data["metrics"])
         context_data["incident_lifecycle"] = lifecycle
         context_data["lifecycle"] = lifecycle
-        topology_insights = self._topology_awareness(alert, cluster_wiring, component_metrics)
+        topology_insights = self.topology_engine.evaluate(alert.namespace, cluster_wiring, component_metrics, alert.service)
         context_data["topology_insights"] = topology_insights
-        correlation = self._correlation_engine(context_data["metrics"], component_metrics, lifecycle)
+        correlation = self.correlation_engine.evaluate(context_data["metrics"], component_metrics, lifecycle)
         context_data["correlation"] = correlation
-        advanced_confidence = self._advanced_confidence(
+        advanced_confidence = self.confidence_engine.evaluate(
             context_data["metrics"],
             missing_observability,
             errors,
@@ -915,7 +929,7 @@ class ReasoningService:
             lifecycle,
         )
         context_data["advanced_confidence"] = advanced_confidence
-        causal_analysis = self._causal_reasoning(
+        causal_analysis = self.causal_engine.infer(
             context_data["metrics"],
             signal_scores,
             correlation,
