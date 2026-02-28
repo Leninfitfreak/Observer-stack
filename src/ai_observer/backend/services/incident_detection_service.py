@@ -218,12 +218,19 @@ class IncidentDetectionEngine:
                 .all()
             )
             latest: dict[tuple[str, str, str], TelemetrySample] = {}
+            best_triggered: dict[tuple[str, str, str], tuple[TelemetrySample, DetectionDecision]] = {}
             for row in rows:
                 key = (row.cluster_id, row.namespace, row.service_name)
                 if key not in latest:
                     latest[key] = row
-            for sample in latest.values():
-                decision = self.evaluate_sample(sample, session)
+                decision = self.evaluate_sample(row, session)
+                if decision.triggered:
+                    current_best = best_triggered.get(key)
+                    if current_best is None or decision.score > current_best[1].score:
+                        best_triggered[key] = (row, decision)
+
+            for key, latest_sample in latest.items():
+                sample, decision = best_triggered.get(key, (latest_sample, self.evaluate_sample(latest_sample, session)))
                 if not decision.triggered:
                     continue
                 if self._incident_recently_created(session, sample):

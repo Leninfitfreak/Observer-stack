@@ -11,10 +11,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ai_observer.backend.intelligence import TopologyEngine
-from ai_observer.backend.models.incident import Incident, IncidentMetricsSnapshot, IncidentStatusHistory, TelemetrySample
+from ai_observer.backend.models.incident import TelemetrySample
 from ai_observer.incident_analysis.database import get_db_session
-from ai_observer.backend.services import IncidentsService
-from ai_observer.domain.models import AlertSignal
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -409,33 +407,11 @@ def push_from_agent(
         decision_triggered = bool(decision.triggered)
         severity = decision.severity
 
+    inserted = 1
     if decision_triggered:
-        alert = AlertSignal(
-            alertname="TelemetryAnomaly",
-            namespace=namespace,
-            service=service_name,
-            cluster_id=cluster_id,
-            severity=severity,
-            status="firing",
-        )
-        IncidentsService(db).persist_from_telemetry_sample(
-            alert=alert,
-            metrics={
-                "cpu_usage": cpu_usage,
-                "memory_usage": memory_usage,
-                "request_rate": request_rate,
-                "error_rate": error_rate,
-                "pod_restarts": _as_float(metrics.get("pod_restarts", 0.0)),
-                "latency": _as_float(metrics.get("latency", 0.0)),
-                "anomaly_score": score,
-            },
-            raw_payload=raw_payload,
-            reasoner=request.app.state.container.reasoning_service,
-            window_minutes=request.app.state.container.settings.telemetry.default_window_minutes,
-        )
-        inserted = 1
         logger.info(
-            "incident_created cluster=%s namespace=%s service=%s anomaly_score=%.3f threshold=%.3f",
+            "telemetry_sample_flagged cluster=%s namespace=%s service=%s anomaly_score=%.3f threshold=%.3f "
+            "incident_creation=detector_only",
             cluster_id,
             namespace,
             service_name,
@@ -444,7 +420,7 @@ def push_from_agent(
         )
     else:
         logger.info(
-            "telemetry_stored_no_incident cluster=%s namespace=%s service=%s anomaly_score=%.3f threshold=%.3f",
+            "telemetry_stored cluster=%s namespace=%s service=%s anomaly_score=%.3f threshold=%.3f",
             cluster_id,
             namespace,
             service_name,
