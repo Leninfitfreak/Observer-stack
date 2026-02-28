@@ -566,6 +566,7 @@
   function renderAi(data) {
     const a = data.analysis || {};
     const c = data.context || {};
+    const canonicalMetrics = c.metrics || {};
     const selectedService = (el.service?.value || c.alert?.service || "all").trim();
     const componentMetrics = c.component_metrics || {};
     const isInfra = (name) => ["ai-observer", "kafka", "postgres", "grafana", "prometheus", "jaeger", "loki", "vault", "argocd", "istio"].some((t) => String(name || "").toLowerCase().includes(t));
@@ -578,11 +579,33 @@
       : [componentMetrics[focusService] || {}];
     const sumBy = (k) => scopedMetrics.reduce((acc, m) => acc + Number(m?.[k] || 0), 0);
     const maxBy = (k) => scopedMetrics.reduce((acc, m) => Math.max(acc, Number(m?.[k] || 0)), 0);
-    const p95ms = Math.round(maxBy("latency_p95_s_5m") * 1000);
-    const errPct = maxBy("error_rate_5xx_5m") * 100;
-    const cpuPct = maxBy("cpu_usage_cores_5m") * 100;
-    const memMb = sumBy("memory_usage_bytes") / (1024 * 1024);
-    const rps = sumBy("request_rate_rps_5m");
+    const scoped = {
+      p95ms: maxBy("latency_p95_s_5m") * 1000,
+      errPct: maxBy("error_rate_5xx_5m") * 100,
+      cpuPct: maxBy("cpu_usage_cores_5m") * 100,
+      memMb: sumBy("memory_usage_bytes") / (1024 * 1024),
+      rps: sumBy("request_rate_rps_5m"),
+    };
+    const canonical = {
+      p95ms: Number(canonicalMetrics.latency_p95_s_5m || 0) * 1000,
+      errPct: Number(canonicalMetrics.error_rate_5xx_5m || 0) * 100,
+      cpuPct: Number(canonicalMetrics.cpu_usage_cores_5m || 0) * 100,
+      memMb: Number(canonicalMetrics.memory_usage_bytes || 0) / (1024 * 1024),
+      rps: Number(canonicalMetrics.request_rate_rps_5m || 0),
+    };
+    const pickNonZero = (primary, fallback) => {
+      const p = Number(primary || 0);
+      if (p > 0) return p;
+      const f = Number(fallback || 0);
+      return f > 0 ? f : 0;
+    };
+    // Canonical telemetry from backend context is the source of truth.
+    // Scoped component telemetry can refine values when present, but must never force zeros.
+    const p95ms = Math.round(pickNonZero(scoped.p95ms, canonical.p95ms));
+    const errPct = pickNonZero(scoped.errPct, canonical.errPct);
+    const cpuPct = pickNonZero(scoped.cpuPct, canonical.cpuPct);
+    const memMb = pickNonZero(scoped.memMb, canonical.memMb);
+    const rps = pickNonZero(scoped.rps, canonical.rps);
     const promErrors = Object.entries(c.datasource_errors || {})
       .filter(([k]) => String(k).startsWith("prometheus"))
       .map(([, v]) => String(v));

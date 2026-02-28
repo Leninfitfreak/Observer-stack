@@ -6,6 +6,23 @@ All environment-specific values are externalized through environment variables.
 
 No code edits are required to onboard new clusters/projects if configuration is updated correctly.
 
+## Canonical Telemetry Consistency (Narrative + API)
+
+The platform enforces one canonical telemetry source order for reasoning, persistence, and API response construction:
+
+1. `incident_metrics_snapshot` (latest row for incident)
+2. `incidents.raw_payload.metrics`
+3. `incident_analysis.mitigation.telemetry`
+4. zero fallback only when all above are missing
+
+Rules:
+
+- Lower-priority values never override higher-priority real telemetry.
+- Zero telemetry values never replace non-zero canonical values.
+- Narrative fields (executive summary, causal chain, supporting evidence) are sanitized to match canonical telemetry.
+- `origin_service` is resolved from topology and narrative text is normalized to the resolved value.
+- This enforcement is configuration-driven and cluster-agnostic (no hardcoded cluster/service names).
+
 ## Backend Configuration (`.env`)
 
 Core:

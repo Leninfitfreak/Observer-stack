@@ -113,6 +113,22 @@ Key env variables:
 5. UI route works:
    - `GET /history` returns `200`
 
+## Canonical Narrative Consistency
+
+Narrative telemetry is enforced from one canonical object across live reasoning, persisted incidents, and API responses:
+
+1. `incident_metrics_snapshot`
+2. `incidents.raw_payload.metrics`
+3. `incident_analysis.mitigation.telemetry`
+4. fallback only when all sources are missing
+
+Guarantees:
+
+- Lower-priority zero values cannot override higher-priority real telemetry.
+- `origin_service` is resolved from topology and normalized before narrative persistence/response.
+- LLM is used for explanation only; telemetry/origin values are deterministic and sanitized post-LLM.
+- Historical API responses are normalized so UI does not display stale `CPU 0%`, `Memory 0MB`, or unknown origin text when canonical telemetry exists.
+
 ## Common Mistakes
 
 - Using Kubernetes service DNS for backend when backend runs in Docker Compose.

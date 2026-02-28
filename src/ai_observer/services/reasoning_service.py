@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import math
+import re
+import time
 from typing import Any
 
 from ai_observer.backend.intelligence.observability_registry import ObservabilityRegistry
@@ -120,6 +122,79 @@ class ReasoningService:
             if target:
                 pods.append(target)
         return sorted(set(pods))
+
+    @staticmethod
+    def _has_primary_signal(metrics: dict[str, Any]) -> bool:
+        keys = (
+            "cpu_usage_cores_5m",
+            "memory_usage_bytes",
+            "request_rate_rps_5m",
+            "pod_restarts_10m",
+            "error_rate_5xx_5m",
+            "latency_p95_s_5m",
+            "baseline_anomaly_score",
+        )
+        for key in keys:
+            try:
+                if float(metrics.get(key, 0) or 0) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    @staticmethod
+    def _coalesce_metrics_with_component_view(metrics: dict[str, Any], component_metrics: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        aggregate = dict(metrics)
+        cpu_values: list[float] = []
+        memory_values: list[float] = []
+        rps_values: list[float] = []
+        restarts_values: list[float] = []
+        error_values: list[float] = []
+        latency_values: list[float] = []
+        baseline_values: list[float] = []
+        for value in component_metrics.values():
+            try:
+                cpu_values.append(float(value.get("cpu_usage_cores_5m", 0) or 0))
+                memory_values.append(float(value.get("memory_usage_bytes", 0) or 0))
+                rps_values.append(float(value.get("request_rate_rps_5m", 0) or 0))
+                restarts_values.append(float(value.get("pod_restarts_10m", 0) or 0))
+                error_values.append(float(value.get("error_rate_5xx_5m", 0) or 0))
+                latency_values.append(float(value.get("latency_p95_s_5m", 0) or 0))
+                baseline_values.append(float(value.get("baseline_anomaly_score", 0) or 0))
+            except (TypeError, ValueError):
+                continue
+        coalesced = {
+            "cpu_usage_cores_5m": max(cpu_values) if cpu_values else 0.0,
+            "memory_usage_bytes": sum(memory_values) if memory_values else 0.0,
+            "request_rate_rps_5m": sum(rps_values) if rps_values else 0.0,
+            "pod_restarts_10m": sum(restarts_values) if restarts_values else 0.0,
+            "error_rate_5xx_5m": max(error_values) if error_values else 0.0,
+            "latency_p95_s_5m": max(latency_values) if latency_values else 0.0,
+            "baseline_anomaly_score": max(baseline_values) if baseline_values else 0.0,
+        }
+        for key, candidate in coalesced.items():
+            try:
+                current = float(aggregate.get(key, 0) or 0)
+            except (TypeError, ValueError):
+                current = 0.0
+            if current <= 0.0 and float(candidate or 0) > 0.0:
+                aggregate[key] = candidate
+        return aggregate
+
+    @staticmethod
+    def _observability_recent_success(state: dict[str, Any], freshness_seconds: int = 300) -> bool:
+        last_success = state.get("last_success_at", {}) if isinstance(state.get("last_success_at", {}), dict) else {}
+        now = datetime.now(timezone.utc)
+        for ts in last_success.values():
+            if not isinstance(ts, str) or not ts.strip():
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if (now - dt).total_seconds() <= freshness_seconds:
+                return True
+        return False
 
     @staticmethod
     def _incident_classification(metrics: dict[str, Any], missing_observability: list[str]) -> str:
@@ -626,7 +701,7 @@ class ReasoningService:
         topology_insights = context.get("topology_insights", {}) or {}
         causal_analysis = context.get("causal_analysis", {}) or {}
         advanced_conf = context.get("advanced_confidence", {}) or {}
-        classification = self.reasoning_engine.classify(metrics, missing_observability)
+        classification = self.reasoning_engine.classify(metrics, missing_observability, context.get("datasource_errors", {}))
         metric_summary, metric_bullets = self.reasoning_engine.metric_narrative(metrics)
         why_not_resource = self._resource_saturation_signals(metrics)
         p95_dev = float(metrics.get("latency_deviation_7d_pct", 0) or 0)
@@ -793,7 +868,8 @@ class ReasoningService:
             out["causal_analysis"] = {}
         if not isinstance(out.get("topology_insights"), dict):
             out["topology_insights"] = {}
-        if not out.get("origin_service"):
+        origin_value = str(out.get("origin_service", "") or "").strip().lower()
+        if origin_value in {"", "unknown", "all", "*"}:
             out["origin_service"] = str((out.get("topology_insights") or {}).get("likely_origin_service", "unknown") or "unknown")
         if not isinstance(out.get("anomaly_summary"), dict):
             out["anomaly_summary"] = {}
@@ -812,7 +888,7 @@ class ReasoningService:
     def _derive_origin_from_context(context: dict[str, Any], preferred_service: str = "observer-agent") -> str:
         topology = context.get("topology_insights", {}) if isinstance(context.get("topology_insights"), dict) else {}
         current = str(topology.get("likely_origin_service", "") or "").strip()
-        if current and current.lower() != "unknown":
+        if current and current.lower() not in {"unknown", "all", "*"}:
             return current
 
         ranked = topology.get("ranked_services")
@@ -858,7 +934,7 @@ class ReasoningService:
     def _ensure_complete_analysis(self, analysis: dict[str, Any], context: dict[str, Any], preferred_service: str = "observer-agent") -> dict[str, Any]:
         out = self._normalize(analysis)
         origin = str(out.get("origin_service", "")).strip()
-        if not origin or origin.lower() == "unknown":
+        if not origin or origin.lower() in {"unknown", "all", "*"}:
             origin = self._derive_origin_from_context(context, preferred_service=preferred_service)
             out["origin_service"] = origin
 
@@ -867,9 +943,39 @@ class ReasoningService:
             topology = {}
         if not topology:
             topology = dict(context.get("topology_insights", {}) or {})
-        if str(topology.get("likely_origin_service", "")).strip().lower() in {"", "unknown"}:
+        if str(topology.get("likely_origin_service", "")).strip().lower() in {"", "unknown", "all", "*"}:
             topology["likely_origin_service"] = origin
         out["topology_insights"] = topology
+
+        # Rewrite stale origin narratives so UI text never shows unknown when deterministic origin exists.
+        ctx_lines = out.get("change_detection_context")
+        if isinstance(ctx_lines, list):
+            rebuilt: list[str] = []
+            replaced = False
+            for line in ctx_lines:
+                text = str(line)
+                if "Topology origin service:" in text:
+                    rebuilt.append(
+                        f"Topology origin service: {origin} "
+                        f"(propagation={float(topology.get('propagation_consistency', 0) or 0):.2f})."
+                    )
+                    replaced = True
+                else:
+                    rebuilt.append(text)
+            if not replaced and topology:
+                rebuilt.append(
+                    f"Topology origin service: {origin} "
+                    f"(propagation={float(topology.get('propagation_consistency', 0) or 0):.2f})."
+                )
+            out["change_detection_context"] = rebuilt
+
+        causal_analysis = out.get("causal_analysis")
+        if isinstance(causal_analysis, dict):
+            narrative = str(causal_analysis.get("causal_narrative", "") or "")
+            if narrative and "origin service=unknown" in narrative.lower():
+                causal_analysis["causal_narrative"] = narrative.replace("origin service=unknown", f"origin service={origin}")
+            causal_analysis["origin_service"] = causal_analysis.get("origin_service") or origin
+            out["causal_analysis"] = causal_analysis
 
         chain = out.get("causal_chain")
         if not isinstance(chain, list) or not chain:
@@ -894,24 +1000,178 @@ class ReasoningService:
         out["ai_response_status"] = "complete"
         return out
 
+    @staticmethod
+    def _preferred_origin_service(service_name: str | None) -> str:
+        candidate = (service_name or "").strip()
+        if candidate.lower() in {"", "all", "*"}:
+            return "observer-agent"
+        return candidate
+
+    @staticmethod
+    def _canonical_telemetry(metrics: dict[str, Any]) -> dict[str, float]:
+        return {
+            "cpu_usage_cores_5m": float(metrics.get("cpu_usage_cores_5m", 0) or 0),
+            "memory_usage_bytes": float(metrics.get("memory_usage_bytes", 0) or 0),
+            "request_rate_rps_5m": float(metrics.get("request_rate_rps_5m", 0) or 0),
+            "pod_restarts_10m": float(metrics.get("pod_restarts_10m", 0) or 0),
+            "error_rate_5xx_5m": float(metrics.get("error_rate_5xx_5m", 0) or 0),
+            "latency_p95_s_5m": float(metrics.get("latency_p95_s_5m", 0) or 0),
+        }
+
+    def _build_llm_narrative_payload(
+        self,
+        context_data: dict[str, Any],
+        baseline: dict[str, Any],
+        preferred_service: str,
+    ) -> tuple[dict[str, Any], dict[str, float], str]:
+        final_metrics = self._coalesce_metrics_with_component_view(
+            dict(context_data.get("metrics", {}) or {}),
+            context_data.get("component_metrics", {}) or {},
+        )
+        canonical_metrics = self._canonical_telemetry(final_metrics)
+        has_signal = self._has_primary_signal(final_metrics)
+
+        resolved_origin = str(baseline.get("origin_service", "") or "").strip()
+        if not resolved_origin or resolved_origin.lower() in {"unknown", "all", "*"}:
+            resolved_origin = self._derive_origin_from_context(context_data, preferred_service=preferred_service)
+        if not resolved_origin:
+            resolved_origin = preferred_service
+
+        topology = dict(context_data.get("topology_insights", {}) or {})
+        likely = str(topology.get("likely_origin_service", "") or "").strip().lower()
+        if not likely or likely in {"unknown", "all", "*"}:
+            topology["likely_origin_service"] = resolved_origin
+
+        # Narrative consistency guard: if we have real telemetry, ensure canonical fields are propagated.
+        if has_signal:
+            if canonical_metrics["cpu_usage_cores_5m"] <= 0:
+                canonical_metrics["cpu_usage_cores_5m"] = max(
+                    float(context_data.get("metrics", {}).get("cpu_usage_cores_5m", 0) or 0),
+                    float((context_data.get("signal_scores", {}) or {}).get("cpu_saturation_score", 0) or 0),
+                )
+            if canonical_metrics["memory_usage_bytes"] <= 0:
+                canonical_metrics["memory_usage_bytes"] = float(context_data.get("metrics", {}).get("memory_usage_bytes", 0) or 0)
+
+        llm_context = dict(context_data)
+        llm_context["metrics"] = {**final_metrics, **canonical_metrics}
+        llm_context["topology_insights"] = topology
+
+        llm_baseline = dict(baseline)
+        llm_baseline["origin_service"] = resolved_origin
+        llm_baseline["topology_insights"] = {**(llm_baseline.get("topology_insights", {}) or {}), "likely_origin_service": resolved_origin}
+        return {"context": llm_context, "baseline": llm_baseline}, canonical_metrics, resolved_origin
+
+    def _enforce_narrative_consistency(
+        self,
+        analysis_data: dict[str, Any],
+        canonical_metrics: dict[str, float],
+        resolved_origin: str,
+    ) -> dict[str, Any]:
+        out = dict(analysis_data)
+        cpu_pct = float(canonical_metrics.get("cpu_usage_cores_5m", 0) or 0) * 100.0
+        mem_mb = float(canonical_metrics.get("memory_usage_bytes", 0) or 0) / (1024.0 * 1024.0)
+        rps = float(canonical_metrics.get("request_rate_rps_5m", 0) or 0)
+        restarts = float(canonical_metrics.get("pod_restarts_10m", 0) or 0)
+        err_pct = float(canonical_metrics.get("error_rate_5xx_5m", 0) or 0) * 100.0
+        p95_ms = float(canonical_metrics.get("latency_p95_s_5m", 0) or 0) * 1000.0
+        has_signal = any(v > 0 for v in (cpu_pct, mem_mb, rps, err_pct, restarts))
+        canonical_line = (
+            f"Current telemetry: RPS {rps:.2f}, p95 {p95_ms:.0f}ms, "
+            f"5xx {err_pct:.2f}%, CPU {cpu_pct:.0f}%, Memory {mem_mb:.0f}MB."
+        )
+
+        def normalize_origin_text(text: str) -> str:
+            normalized = re.sub(r"origin service\s*=\s*(unknown|all|\*)", f"origin service={resolved_origin}", text, flags=re.IGNORECASE)
+            normalized = re.sub(
+                r"origin service[^a-zA-Z0-9]+(unknown|all|\*)",
+                f"origin service={resolved_origin}",
+                normalized,
+                flags=re.IGNORECASE,
+            )
+            normalized = re.sub(
+                r"Topology origin service:\s*(unknown|all|\*)",
+                f"Topology origin service: {resolved_origin}",
+                normalized,
+                flags=re.IGNORECASE,
+            )
+            return normalized
+
+        stale_metric_pattern = re.compile(r"(cpu\s*0+(\.0+)?%|memory\s*0+(\.0+)?\s*mb)", re.IGNORECASE)
+
+        for field in ("executive_summary", "human_summary", "assessment"):
+            value = out.get(field)
+            if not isinstance(value, str):
+                continue
+            text = normalize_origin_text(value)
+            if has_signal and stale_metric_pattern.search(text):
+                if "Current telemetry:" in text:
+                    text = re.sub(r"Current telemetry:.*", canonical_line, text, flags=re.IGNORECASE)
+                else:
+                    text = f"{text} {canonical_line}".strip()
+            out[field] = text
+
+        for list_field in ("causal_chain", "supporting_evidence", "change_detection_context"):
+            items = out.get(list_field)
+            if not isinstance(items, list):
+                continue
+            rewritten: list[str] = []
+            for item in items:
+                line = normalize_origin_text(str(item))
+                if has_signal and "current telemetry:" in line.lower():
+                    line = canonical_line
+                elif has_signal and stale_metric_pattern.search(line):
+                    line = canonical_line
+                rewritten.append(line)
+            out[list_field] = rewritten
+
+        topology = out.get("topology_insights")
+        if isinstance(topology, dict):
+            likely = str(topology.get("likely_origin_service", "") or "").strip().lower()
+            if not likely or likely in {"unknown", "all", "*"}:
+                topology["likely_origin_service"] = resolved_origin
+            out["topology_insights"] = topology
+        out["origin_service"] = resolved_origin
+
+        causal_analysis = out.get("causal_analysis")
+        if isinstance(causal_analysis, dict):
+            narrative = str(causal_analysis.get("causal_narrative", "") or "")
+            if narrative:
+                narrative = normalize_origin_text(narrative)
+                if has_signal and stale_metric_pattern.search(narrative):
+                    narrative = f"{narrative} {canonical_line}".strip()
+                causal_analysis["causal_narrative"] = narrative
+            causal_analysis["origin_service"] = resolved_origin
+            out["causal_analysis"] = causal_analysis
+        return out
+
     def analyze(self, alert: AlertSignal, window_minutes: int = 30) -> LiveReasoningResponse:
         errors: dict[str, str] = {}
         observability_registry_state: dict[str, Any] = {}
 
         if self.observability_registry is not None:
-            refreshed = self.observability_registry.refresh()
-            observability_registry_state = self.observability_registry.status_view()
+            refreshed = None
+            for attempt in range(1, 4):
+                refreshed = self.observability_registry.refresh(force=(attempt > 1))
+                observability_registry_state = self.observability_registry.status_view()
+                statuses = refreshed.status or {}
+                all_healthy = bool(statuses) and all(v == "healthy" for v in statuses.values())
+                recently_healthy = self._observability_recent_success(observability_registry_state)
+                if all_healthy or recently_healthy or attempt == 3:
+                    break
+                # Short bounded delay while registry refresh stabilizes.
+                time.sleep(0.35)
             # Providers are long-lived objects. Keep their endpoints fresh as discovery evolves.
-            if refreshed.prometheus_url:
+            if refreshed and refreshed.prometheus_url:
                 self.metrics_provider.base_url = refreshed.prometheus_url  # type: ignore[attr-defined]
-            if refreshed.loki_url:
+            if refreshed and refreshed.loki_url:
                 self.logs_provider.base_url = refreshed.loki_url  # type: ignore[attr-defined]
-            if refreshed.jaeger_url:
+            if refreshed and refreshed.jaeger_url:
                 self.traces_provider.base_url = refreshed.jaeger_url  # type: ignore[attr-defined]
-            for source, source_status in refreshed.status.items():
+            for source, source_status in (refreshed.status if refreshed else {}).items():
                 if source_status != "healthy":
-                    source_error = refreshed.last_error.get(source, source_status)
-                    errors[source] = source_error or source_status
+                    source_error = (refreshed.last_error or {}).get(source, source_status)
+                    if not self._observability_recent_success(observability_registry_state):
+                        errors[source] = source_error or source_status
 
         try:
             metrics = self.metrics_provider.collect(alert.namespace, alert.service)
@@ -1008,6 +1268,10 @@ class ReasoningService:
             "datasource_errors": errors,
             "observability_registry": observability_registry_state,
         }
+        context_data["metrics"] = self._coalesce_metrics_with_component_view(
+            context_data["metrics"],
+            component_metrics,
+        )
 
         missing_observability: list[str] = []
         if not context_data["metrics"].get("db_connection_pool_usage_5m"):
@@ -1051,15 +1315,31 @@ class ReasoningService:
         context_data["causal_analysis"] = causal_analysis
 
         baseline = self._baseline(context_data)
+        preferred_origin = self._preferred_origin_service(alert.service)
+        llm_payload, canonical_metrics, resolved_origin = self._build_llm_narrative_payload(
+            context_data,
+            baseline,
+            preferred_origin,
+        )
         try:
-            llm_response = self.llm_provider.analyze({"context": context_data, "baseline": baseline})
+            llm_response = self.llm_provider.analyze(llm_payload)
             merged = dict(baseline)
             merged.update({k: v for k, v in llm_response.items() if not str(k).startswith("_") and v is not None and v != ""})
-            analysis_data = self._ensure_complete_analysis(merged, context_data, preferred_service=alert.service or "observer-agent")
+            merged = self._enforce_narrative_consistency(merged, canonical_metrics, resolved_origin)
+            analysis_data = self._ensure_complete_analysis(
+                merged,
+                context_data,
+                preferred_service=preferred_origin,
+            )
         except Exception as exc:
             errors["llm"] = str(exc)
             context_data["datasource_errors"] = errors
-            analysis_data = self._ensure_complete_analysis(baseline, context_data, preferred_service=alert.service or "observer-agent")
+            baseline = self._enforce_narrative_consistency(baseline, canonical_metrics, resolved_origin)
+            analysis_data = self._ensure_complete_analysis(
+                baseline,
+                context_data,
+                preferred_service=preferred_origin,
+            )
 
         analysis_data["policy_note"] = "No auto-remediation was applied. Explicit approval required before changes."
 

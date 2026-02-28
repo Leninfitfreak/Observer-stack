@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from ai_observer.api.routes.schemas import AlertmanagerWebhook
 from ai_observer.backend.intelligence import CausalEngine, TopologyEngine
 from ai_observer.backend.models.incident import Incident, IncidentMetricsSnapshot
+from ai_observer.backend.services.canonical_telemetry import build_canonical_telemetry
 from ai_observer.backend.services import IncidentsService
 from ai_observer.domain.models import AlertSignal, LiveReasoningResponse
 from ai_observer.incident_analysis.database import get_db_session
@@ -76,56 +77,59 @@ def _has_nonzero(metrics: dict[str, float]) -> bool:
     return any(_as_float(metrics.get(k, 0.0)) > 0.0 for k in metrics.keys())
 
 
-def _telemetry_for_incident(db: Session, incident: Incident) -> dict[str, float]:
-    # Priority 1: incident_metrics_snapshot
-    snapshot = (
-        db.query(IncidentMetricsSnapshot)
-        .filter(IncidentMetricsSnapshot.incident_id == incident.incident_id)
-        .order_by(IncidentMetricsSnapshot.captured_at.desc())
-        .first()
-    )
-    if snapshot is not None:
-        raw_snapshot = snapshot.raw_metrics_json if isinstance(snapshot.raw_metrics_json, dict) else {}
-        normalized_snapshot = _normalize_telemetry_metrics(raw_snapshot)
-        if _has_nonzero(normalized_snapshot):
-            return normalized_snapshot
-        reconstructed = _normalize_telemetry_metrics(
-            {
-                "cpu_usage": _as_float(snapshot.cpu_usage) / 100.0,
-                "memory_usage": _as_float(snapshot.memory_usage) * 1024.0 * 1024.0,
-                "error_rate": _as_float(snapshot.error_rate) / 100.0,
-            }
-        )
-        if _has_nonzero(reconstructed):
-            return reconstructed
-
-    # Priority 2: incidents.raw_payload.metrics
-    raw_payload = incident.raw_payload if isinstance(incident.raw_payload, dict) else {}
-    payload_metrics = raw_payload.get("metrics") if isinstance(raw_payload, dict) else {}
-    normalized_payload = _normalize_telemetry_metrics(payload_metrics if isinstance(payload_metrics, dict) else {})
-    if _has_nonzero(normalized_payload):
-        return normalized_payload
-
-    # Priority 3: incident_analysis.mitigation.telemetry
-    latest_analysis = (
-        db.query(IncidentAnalysis)
-        .filter(IncidentAnalysis.incident_id == incident.incident_id)
-        .order_by(IncidentAnalysis.created_at.desc())
-        .first()
-    )
-    mitigation = latest_analysis.mitigation if latest_analysis and isinstance(latest_analysis.mitigation, dict) else {}
-    mitigation_metrics = mitigation.get("telemetry") if isinstance(mitigation, dict) else {}
-    normalized_mitigation = _normalize_telemetry_metrics(mitigation_metrics if isinstance(mitigation_metrics, dict) else {})
-    if _has_nonzero(normalized_mitigation):
-        return normalized_mitigation
-
-    # Priority 4: reconstructed fallback (zeros if no signal exists anywhere)
-    return {
+def _merge_priority_metrics(sources: list[dict[str, float]]) -> dict[str, float]:
+    merged = {
         "cpu_usage_cores_5m": 0.0,
         "memory_usage_bytes": 0.0,
         "request_rate_rps_5m": 0.0,
         "pod_restarts_10m": 0.0,
         "error_rate_5xx_5m": 0.0,
+    }
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in merged.keys():
+            current = _as_float(merged.get(key, 0.0))
+            candidate = _as_float(source.get(key, 0.0))
+            # Keep highest-priority non-zero values; never overwrite with lower-priority zeros.
+            if current <= 0.0 and candidate > 0.0:
+                merged[key] = candidate
+    return merged
+
+
+def _has_zero_telemetry_narrative(response: LiveReasoningResponse) -> bool:
+    lines: list[str] = []
+    lines.extend([str(x) for x in (response.analysis.supporting_evidence or [])])
+    lines.extend([str(x) for x in (response.analysis.causal_chain or [])])
+    text = " ".join(lines).lower()
+    return ("current telemetry" in text) and ("cpu 0%" in text or "memory 0mb" in text)
+
+
+def _needs_canonical_metric_repair(response: LiveReasoningResponse) -> bool:
+    metrics = response.context.metrics or {}
+    cpu = _as_float(metrics.get("cpu_usage_cores_5m", 0.0))
+    mem = _as_float(metrics.get("memory_usage_bytes", 0.0))
+    rps = _as_float(metrics.get("request_rate_rps_5m", 0.0))
+    origin = str(response.analysis.origin_service or "").strip().lower()
+    topo = response.analysis.topology_insights if isinstance(response.analysis.topology_insights, dict) else {}
+    topo_origin = str(topo.get("likely_origin_service", "") or "").strip().lower()
+
+    # Core fields used by UI narrative must be repaired if zero/unknown while telemetry signal exists elsewhere.
+    has_any_signal = _has_metric_signal(metrics)
+    zero_core = cpu <= 0.0 or mem <= 0.0 or rps <= 0.0
+    unknown_origin = origin in {"", "unknown", "all", "*"} or topo_origin in {"", "unknown", "all", "*"}
+    return _has_zero_telemetry_narrative(response) or (has_any_signal and zero_core) or unknown_origin
+
+
+def _telemetry_for_incident(db: Session, incident: Incident) -> dict[str, float]:
+    canonical = build_canonical_telemetry(incident)
+    reasoning_metrics = canonical.get("reasoning_metrics", {}) if isinstance(canonical.get("reasoning_metrics"), dict) else {}
+    return {
+        "cpu_usage_cores_5m": _as_float(reasoning_metrics.get("cpu_usage_cores_5m", canonical.get("cpu_usage", 0.0))),
+        "memory_usage_bytes": _as_float(reasoning_metrics.get("memory_usage_bytes", canonical.get("memory_usage", 0.0))),
+        "request_rate_rps_5m": _as_float(reasoning_metrics.get("request_rate_rps_5m", canonical.get("request_rate", 0.0))),
+        "pod_restarts_10m": _as_float(reasoning_metrics.get("pod_restarts_10m", canonical.get("pod_restarts", 0.0))),
+        "error_rate_5xx_5m": _as_float(reasoning_metrics.get("error_rate_5xx_5m", canonical.get("error_rate", 0.0))),
     }
 
 
@@ -476,18 +480,25 @@ def live_reasoning(
         status="firing",
     )
     result = reasoner.analyze(alert, window_minutes=_parse_time_window(time_window))
-    if not _has_metric_signal(result.context.metrics):
+    needs_refresh = (not _has_metric_signal(result.context.metrics)) or _needs_canonical_metric_repair(result)
+    if needs_refresh:
         logger.info("Live reasoning metrics missing; attempting historical telemetry recovery cluster=%s", alert.cluster_id or "")
         recovered_metrics, recovered_components, recovered_topology = _hydrate_metrics_from_recent_incidents(db, alert.cluster_id or "")
-        if _has_metric_signal(recovered_metrics):
+        if recovered_metrics:
             logger.info("Applying historical telemetry metrics=%s", recovered_metrics)
-            result.context.metrics.update(recovered_metrics)
+            replaced = False
+            for key, value in recovered_metrics.items():
+                if _as_float(result.context.metrics.get(key, 0.0)) <= 0.0 and _as_float(value) > 0.0:
+                    result.context.metrics[key] = value
+                    replaced = True
             for service_name, service_metrics in recovered_components.items():
                 result.context.component_metrics[service_name] = service_metrics
             if recovered_topology:
                 result.context.cluster_wiring = recovered_topology
-            _refresh_analysis_from_metrics(result, recovered_topology, alert.service)
-            logger.info("Post-refresh analysis why_not_resource_saturation=%s", result.analysis.why_not_resource_saturation)
+                replaced = True
+            if replaced or _needs_canonical_metric_repair(result):
+                _refresh_analysis_from_metrics(result, recovered_topology, alert.service)
+                logger.info("Post-refresh analysis why_not_resource_saturation=%s", result.analysis.why_not_resource_saturation)
         else:
             logger.info("No historical telemetry available from incidents for cluster=%s", alert.cluster_id or "")
     try:

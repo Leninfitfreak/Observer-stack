@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -242,6 +243,72 @@ def _ensure_complete_reasoning(
     return merged
 
 
+def _sanitize_reasoning_narrative(
+    analysis: dict[str, Any],
+    *,
+    metrics: dict[str, float],
+    resolved_origin: str,
+) -> dict[str, Any]:
+    out = dict(analysis or {})
+    cpu_pct = _to_cpu_percent(_as_float(metrics.get("cpu_usage", 0.0)))
+    mem_mb = _to_memory_mb(_as_float(metrics.get("memory_usage", 0.0)))
+    rps = _as_float(metrics.get("request_rate", 0.0))
+    restarts = _as_float(metrics.get("pod_restarts", 0.0))
+    err_pct = _to_error_percent(_as_float(metrics.get("error_rate", 0.0)))
+    has_signal = any(v > 0.0 for v in (cpu_pct, mem_mb, rps, err_pct, restarts))
+    canonical_line = (
+        f"Current telemetry: RPS {rps:.2f}, 5xx {err_pct:.2f}%, "
+        f"CPU {cpu_pct:.0f}%, Memory {mem_mb:.0f}MB."
+    )
+    stale_metric_pattern = re.compile(r"(cpu\s*0+(\.0+)?%|memory\s*0+(\.0+)?\s*mb)", re.IGNORECASE)
+
+    def normalize_origin_text(text: str) -> str:
+        normalized = re.sub(r"origin service\s*=\s*(unknown|all|\*)", f"origin service={resolved_origin}", text, flags=re.IGNORECASE)
+        normalized = re.sub(
+            r"origin service[^a-zA-Z0-9]+(unknown|all|\*)",
+            f"origin service={resolved_origin}",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        normalized = re.sub(
+            r"Topology[- ]derived origin service\s*=\s*(unknown|all|\*)",
+            f"Topology-derived origin service={resolved_origin}",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        return normalized
+
+    for field in ("human_summary",):
+        value = out.get(field)
+        if not isinstance(value, str):
+            continue
+        text = normalize_origin_text(value)
+        if has_signal and stale_metric_pattern.search(text):
+            text = f"{text} {canonical_line}".strip()
+        out[field] = text
+
+    chain = out.get("causal_chain")
+    if isinstance(chain, list):
+        rewritten: list[str] = []
+        for item in chain:
+            line = normalize_origin_text(str(item))
+            if has_signal and "current telemetry:" in line.lower():
+                line = canonical_line
+            elif has_signal and stale_metric_pattern.search(line):
+                line = canonical_line
+            rewritten.append(line)
+        out["causal_chain"] = rewritten
+
+    top = out.get("topology_insights")
+    if isinstance(top, dict):
+        likely = str(top.get("likely_origin_service", "") or "").strip().lower()
+        if not likely or likely in {"unknown", "all", "*"}:
+            top["likely_origin_service"] = resolved_origin
+        out["topology_insights"] = top
+    out["origin_service"] = resolved_origin
+    return out
+
+
 @router.post("/push", response_model=AgentPushResponse)
 def push_from_agent(
     request: Request,
@@ -373,6 +440,17 @@ def push_from_agent(
                         root_cause=root_cause,
                         topology=topology,
                     )
+                llm_reasoning = _sanitize_reasoning_narrative(
+                    llm_reasoning,
+                    metrics={
+                        "cpu_usage": cpu_usage,
+                        "memory_usage": memory_usage,
+                        "request_rate": request_rate,
+                        "pod_restarts": _as_float(metrics.get("pod_restarts", 0.0)),
+                        "error_rate": error_rate,
+                    },
+                    resolved_origin=str(llm_reasoning.get("origin_service", "") or row.service_name or "observer-agent"),
+                )
 
                 root_cause = str(llm_reasoning.get("root_cause") or llm_reasoning.get("probable_root_cause") or root_cause)
                 executive_summary = str(llm_reasoning.get("human_summary") or "")
