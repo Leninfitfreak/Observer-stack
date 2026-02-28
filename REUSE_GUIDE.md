@@ -8,6 +8,12 @@ Core flow:
 
 `observer-agent (cluster) -> /api/agent/push -> PostgreSQL -> reasoning -> API/UI`
 
+Incident-driven runtime contract:
+
+- Reasoning is executed during incident creation/persistence paths (agent push / webhook), not dashboard refresh.
+- Dashboard and history pages read stored incident + stored reasoning from `/api/incidents` and `/api/incidents/{id}`.
+- `/api/reasoning/live` is for diagnostics and must not be used as the primary UI data source.
+
 ## Reusable Components
 
 Reusable intelligence modules are in:
@@ -112,6 +118,9 @@ Key env variables:
    - `cpu_usage`, `memory_usage`, `request_rate`
 5. UI route works:
    - `GET /history` returns `200`
+6. Dashboard is incident-view only:
+   - open `/dashboard`
+   - confirm backend logs show `/api/incidents` calls during refresh, not `/api/reasoning/live`
 
 ## Canonical Narrative Consistency
 

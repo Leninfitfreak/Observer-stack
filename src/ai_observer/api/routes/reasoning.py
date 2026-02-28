@@ -470,6 +470,10 @@ def live_reasoning(
     reasoner: ReasoningService = Depends(get_reasoning_service),
     db: Session = Depends(get_db_session),
 ) -> LiveReasoningResponse:
+    logger.warning(
+        "Deprecated endpoint /api/reasoning/live invoked; returning computed view only. "
+        "Dashboard must use stored incidents via /api/incidents."
+    )
     default_cluster = request.app.state.container.settings.telemetry.default_cluster_id
     alert = AlertSignal(
         alertname="LiveObservabilitySnapshot",
@@ -501,11 +505,7 @@ def live_reasoning(
                 logger.info("Post-refresh analysis why_not_resource_saturation=%s", result.analysis.why_not_resource_saturation)
         else:
             logger.info("No historical telemetry available from incidents for cluster=%s", alert.cluster_id or "")
-    try:
-        _persist_analysis_snapshot(db, alert, result)
-    except Exception:
-        # Persistence is best-effort and must not break live reasoning response path.
-        pass
+    # Intentionally no persistence here to keep reasoning execution scoped to incident creation paths.
     return result
 
 

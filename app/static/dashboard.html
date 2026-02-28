@@ -33,6 +33,7 @@
   <main class="layout">
     <section class="toolbar card sev-info">
       <div class="filters">
+        <label>Cluster <input id="cluster" value=""></label>
         <label>Namespace <input id="namespace" value="dev"></label>
         <label>Service Scope <input id="service" value="all"></label>
         <label>Severity
@@ -54,10 +55,26 @@
         </label>
         <label id="customWindowWrap" class="hidden">Custom (m) <input id="customWindow" type="number" min="5" max="360" value="30"></label>
         <label>Refresh (sec) <input id="interval" type="number" min="5" value="20"></label>
-        <button id="refreshBtn" class="primary">Refresh</button>
-        <a id="incidentHistoryLink" class="primary nav-btn" href="/history">Incident History</a>
-        <a id="exportExcelLink" class="primary nav-btn" href="/api/incidents/export" target="_blank" rel="noopener noreferrer">Export Excel</a>
-        <button id="rawToggleBtn" type="button">Raw JSON</button>
+      </div>
+      <div class="toolbar-actions">
+        <button id="refreshBtn" class="primary control-btn" type="button">
+          <span class="btn-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M12 5a7 7 0 0 1 6.24 3.82H16v2h6V5h-2v2.15A9 9 0 1 0 21 12h-2a7 7 0 1 1-7-7z"/></svg>
+          </span>
+          <span>Refresh</span>
+        </button>
+        <a id="incidentHistoryLink" class="primary nav-btn control-btn" href="/history">
+          <span class="btn-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1zm0 20a9 9 0 1 1 9-9 9 9 0 0 1-9 9zm1-14h-2v6l5.2 3.1 1-1.7-4.2-2.4z"/></svg>
+          </span>
+          <span>Incident History</span>
+        </a>
+        <button id="rawToggleBtn" type="button" class="control-btn control-btn-secondary">
+          <span class="btn-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M8.6 5.6 3.2 11l5.4 5.4 1.4-1.4L6 11l4-4zM15.4 5.6 14 7l4 4-4 4 1.4 1.4 5.4-5.4zM12.8 4l-3 16h1.9l3-16z"/></svg>
+          </span>
+          <span>Raw JSON</span>
+        </button>
       </div>
       <div class="view-toggle" id="viewToggle">
         <button data-view="ai" class="active">AI View</button>

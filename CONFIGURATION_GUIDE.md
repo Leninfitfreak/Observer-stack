@@ -134,7 +134,13 @@ Backend health:
 curl http://localhost:8080/healthz
 ```
 
-Live reasoning:
+Incident-view dashboard source (no live reasoning required):
+
+```bash
+curl "http://localhost:8080/api/incidents?start_date=2026-02-28&end_date=2026-02-28&cluster=minikube-dev&namespace=dev&service=observer-agent&severity=warning&limit=20"
+```
+
+Live reasoning (diagnostic only; dashboard should not depend on this):
 
 ```bash
 curl "http://localhost:8080/api/reasoning/live?namespace=dev&service=all&cluster=minikube-dev&time_window=30m"

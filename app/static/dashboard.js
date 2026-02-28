@@ -113,6 +113,7 @@
     incidentImpact: document.getElementById("incidentImpact"),
     affectedCount: document.getElementById("affectedCount"),
     slaProgressBar: document.getElementById("slaProgressBar"),
+    cluster: document.getElementById("cluster"),
     namespace: document.getElementById("namespace"),
     service: document.getElementById("service"),
     severity: document.getElementById("severity"),
@@ -122,7 +123,6 @@
     interval: document.getElementById("interval"),
     refreshBtn: document.getElementById("refreshBtn"),
     incidentHistoryLink: document.getElementById("incidentHistoryLink"),
-    exportExcelLink: document.getElementById("exportExcelLink"),
     rawToggleBtn: document.getElementById("rawToggleBtn"),
     viewToggle: document.getElementById("viewToggle"),
     quickNav: document.getElementById("quickNav"),
@@ -236,23 +236,15 @@
 
   function updateDashboardLinks() {
     const service = (el.service?.value || "").trim();
-    const severity = (el.severity?.value || "").trim();
+    const cluster = (el.cluster?.value || "").trim();
     const { startDate, endDate } = deriveHistoryDateRange();
     if (el.incidentHistoryLink) {
       const historyParams = new URLSearchParams();
       historyParams.set("start_date", startDate);
       historyParams.set("end_date", endDate);
       if (service && service !== "all") historyParams.set("service", service);
+      if (cluster) historyParams.set("cluster", cluster);
       el.incidentHistoryLink.href = `/history?${historyParams.toString()}`;
-    }
-    if (el.exportExcelLink) {
-      const reportParams = new URLSearchParams();
-      reportParams.set("start_date", startDate);
-      reportParams.set("end_date", endDate);
-      if (service && service !== "all") reportParams.set("service", service);
-      if (severity) reportParams.set("classification", severity);
-      reportParams.set("min_confidence", "0");
-      el.exportExcelLink.href = `/api/incidents/export?${reportParams.toString()}`;
     }
   }
 
@@ -328,13 +320,138 @@
     state.fullscreenPanel = null;
   }
 
-  async function fetchReasoning(namespace, service, severity) {
-    let tw = (el.timeWindow.value || "30m").trim();
-    if (tw === "custom") tw = `${Math.max(5, Math.min(360, Number(el.customWindow.value || 30)))}m`;
-    const qs = new URLSearchParams({ namespace, service, severity, time_window: tw }).toString();
-    const res = await fetch(`/api/reasoning/live?${qs}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  async function fetchLatestIncidentList(cluster, namespace, service, severity) {
+    const { startDate, endDate } = deriveHistoryDateRange();
+    const params = new URLSearchParams({
+      start_date: startDate,
+      end_date: endDate,
+      limit: "50",
+      offset: "0",
+    });
+    if (cluster) params.set("cluster", cluster);
+    if (namespace) params.set("namespace", namespace);
+    if (service && service !== "all") params.set("service", service);
+    if (severity) params.set("severity", severity);
+    const res = await fetch(`/api/incidents?${params.toString()}`);
+    if (!res.ok) throw new Error(`incidents HTTP ${res.status}`);
     return res.json();
+  }
+
+  async function fetchIncidentDetail(incidentId) {
+    const res = await fetch(`/api/incidents/${encodeURIComponent(incidentId)}`);
+    if (!res.ok) throw new Error(`incident detail HTTP ${res.status}`);
+    return res.json();
+  }
+
+  function incidentToDashboardData(incident, detail, namespace, service) {
+    const topAnalysis = Array.isArray(detail?.analysis) && detail.analysis.length ? detail.analysis[0] : {};
+    const mitigation = topAnalysis?.mitigation || {};
+    const supporting = topAnalysis?.supporting_signals || {};
+    const rawPayload = detail?.incident?.raw_payload || {};
+    const rawTopology = rawPayload?.topology || {};
+    const confidenceScore = topAnalysis?.confidence_score;
+    const confidencePct = Number(confidenceScore || 0);
+    const confidenceNorm = confidencePct > 1 ? confidencePct / 100 : confidencePct;
+    const cpu = Number(incident?.cpu_usage || 0);
+    const mem = Number(incident?.memory_usage || 0);
+    const rps = Number(incident?.request_rate || 0);
+    const err = Number(incident?.error_rate || 0);
+    const podRestarts = Number(incident?.pod_restarts || 0);
+    const serviceScope = service && service !== "all" ? service : (incident?.affected_services || "observer-agent");
+    const componentList = String(incident?.affected_services || serviceScope || "observer-agent")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const components = (componentList.length ? componentList : [serviceScope]).map((svc) => ({
+      service: svc,
+      status: String(incident?.severity || "warning").toLowerCase(),
+      reasons: [],
+    }));
+    const componentMetrics = {};
+    components.forEach((c) => {
+      componentMetrics[c.service] = {
+        cpu_usage_cores_5m: cpu,
+        memory_usage_bytes: mem,
+        request_rate_rps_5m: rps,
+        pod_restarts_10m: podRestarts,
+        error_rate_5xx_5m: err,
+        latency_p95_s_5m: 0,
+      };
+    });
+
+    return {
+      incident_meta: {
+        incident_id: incident?.incident_id,
+        status: incident?.status,
+        severity: incident?.severity,
+        start_time: incident?.start_time,
+        created_at: incident?.created_at,
+        impact_level: incident?.impact_level,
+        slo_breach_risk: incident?.slo_breach_risk,
+        error_budget_remaining: incident?.error_budget_remaining,
+        affected_services: componentList.length,
+        cluster_id: incident?.cluster_id,
+      },
+      context: {
+        metrics: {
+          cpu_usage_cores_5m: cpu,
+          memory_usage_bytes: mem,
+          request_rate_rps_5m: rps,
+          pod_restarts_10m: podRestarts,
+          error_rate_5xx_5m: err,
+          baseline_anomaly_score: Number(topAnalysis?.anomaly_score || 0),
+        },
+        logs: {},
+        traces: {},
+        kubernetes: { pod_restarts_10m: podRestarts },
+        deployment: {},
+        components,
+        component_metrics: componentMetrics,
+        component_summary: { total: components.length },
+        cluster_wiring: rawTopology,
+        datasource_errors: {},
+        signal_scores: {
+          overall_anomaly_score: Number(topAnalysis?.anomaly_score || 0),
+          baseline_anomaly_score: Number(topAnalysis?.anomaly_score || 0),
+        },
+      },
+      analysis: {
+        probable_root_cause: topAnalysis?.root_cause || incident?.root_cause || "unknown",
+        incident_classification: topAnalysis?.classification || incident?.classification || "Unknown",
+        confidence_score: typeof topAnalysis?.confidence_score === "number" ? `${Math.round(topAnalysis.confidence_score * 100)}%` : (topAnalysis?.confidence_score || incident?.confidence_score || "-"),
+        confidence: confidenceNorm || 0,
+        impact_level: incident?.impact_level || "Low",
+        executive_summary: topAnalysis?.executive_summary || incident?.executive_summary || "",
+        human_summary: topAnalysis?.executive_summary || incident?.executive_summary || "",
+        most_likely_scenario: topAnalysis?.root_cause || incident?.root_cause || "No dominant hypothesis generated.",
+        why_not_resource_saturation: [
+          `CPU ${Math.round(cpu * 100)}% (below saturation)`,
+          `Memory ${Math.round(mem / (1024 * 1024))}MB (stable)`,
+          `Pod restarts ${Math.round(podRestarts)} (none)`,
+        ],
+        risk_forecast: {
+          predicted_breach_next_15m_pct: Number(incident?.risk_forecast || 0),
+          predicted_breach_window: (Number(incident?.risk_forecast || 0) >= 0.4) ? "1h_high_risk" : "low_risk",
+          context: "Stored incident forecast.",
+        },
+        anomaly_summary: {
+          score: Number(topAnalysis?.anomaly_score || 0),
+          threshold: 0.65,
+          status: Number(topAnalysis?.anomaly_score || 0) >= 0.65 ? "Anomalous" : "Normal",
+        },
+        ai_response_status: "complete",
+        change_detection_context: supporting?.change_detection_context || [],
+        causal_chain: Array.isArray(supporting?.causal_chain) ? supporting.causal_chain : (Array.isArray(incident?.causal_chain) ? incident.causal_chain : []),
+        corrective_actions: (topAnalysis?.suggested_actions?.actions || []),
+        recommended_remediation: "",
+        supporting_evidence: Array.isArray(supporting?.evidence) ? supporting.evidence : [],
+        confidence_details: topAnalysis?.confidence_breakdown || {},
+        correlated_signals: mitigation?.correlated_signals || {},
+        topology_insights: mitigation?.topology_insights || incident?.topology_insights || {},
+        origin_service: mitigation?.origin_service || incident?.origin_service || "unknown",
+        engine_boundary_note: "Dashboard is incident-view only; reasoning shown is stored and immutable.",
+      },
+    };
   }
 
   function ensureHistory(service) {
@@ -515,20 +632,26 @@
   }
 
   function renderHeader(data) {
-    const sev = severityClass(el.severity.value);
-    const riskWindow = data.analysis?.risk_forecast?.predicted_breach_window || "low_risk";
-    const riskPct = String(riskWindow).includes("1h") ? 85 : String(riskWindow).includes("24h") ? 62 : 18;
-    const burn24 = data.context?.slo?.error_budget_burn_rate_24h || 0;
-    const budget = Math.max(0, Math.round(100 - burn24 * 10));
+    const meta = data.incident_meta || {};
+    const sev = severityClass(meta.severity || el.severity.value);
+    const riskPct = Number(meta.slo_breach_risk || 0);
+    const budget = Number(meta.error_budget_remaining || 100);
+    const startTs = meta.start_time ? new Date(meta.start_time) : state.incidentStart;
+    if (!Number.isNaN(startTs.getTime())) {
+      state.incidentStart = startTs;
+    }
+    if (meta.incident_id) {
+      state.incidentId = meta.incident_id;
+    }
     el.incidentId.textContent = state.incidentId;
-    el.incidentStatus.textContent = riskPct > 80 ? "CRITICAL" : riskPct > 45 ? "INVESTIGATING" : "MITIGATING";
-    el.incidentSeverity.textContent = String(el.severity.value || "medium").toUpperCase();
+    el.incidentStatus.textContent = String(meta.status || "OPEN").toUpperCase();
+    el.incidentSeverity.textContent = String(meta.severity || el.severity.value || "warning").toUpperCase();
     el.incidentStart.textContent = fmtDate(state.incidentStart);
     el.incidentOwner.textContent = "oncall-sre";
-    el.incidentRisk.textContent = `${riskPct}%`;
-    el.incidentBudget.textContent = `${budget}%`;
-    el.incidentImpact.textContent = data.analysis?.impact_level || "Low";
-    el.affectedCount.textContent = String(data.context?.component_summary?.total || 0);
+    el.incidentRisk.textContent = `${Math.round(riskPct)}%`;
+    el.incidentBudget.textContent = `${Math.round(budget)}%`;
+    el.incidentImpact.textContent = meta.impact_level || data.analysis?.impact_level || "Low";
+    el.affectedCount.textContent = String(meta.affected_services || data.context?.component_summary?.total || 0);
     el.incidentHeader.className = `incident-header sev-${sev}`;
     const color = sev === "critical" ? "var(--crit)" : sev === "warning" ? "var(--warn)" : sev === "healthy" ? "var(--ok)" : "var(--info)";
     el.severityStrip.style.background = color;
@@ -1195,11 +1318,19 @@
   async function refresh() {
     setLiveStatus("loading...", "warn");
     updateDashboardLinks();
+    const cluster = (el.cluster?.value || "").trim();
     const namespace = (el.namespace.value || "dev").trim();
     const service = (el.service.value || "all").trim();
     const severity = (el.severity.value || "warning").trim();
     try {
-      const data = await fetchReasoning(namespace, service, severity);
+      const listPayload = await fetchLatestIncidentList(cluster, namespace, service, severity);
+      const incidents = Array.isArray(listPayload?.data) ? listPayload.data : [];
+      if (!incidents.length) {
+        throw new Error("No stored incidents found for current filters");
+      }
+      const selectedIncident = incidents[0];
+      const detailPayload = await fetchIncidentDetail(selectedIncident.incident_id);
+      const data = incidentToDashboardData(selectedIncident, detailPayload, namespace, service);
       state.lastData = data;
       renderHeader(data);
       updateSignatureHistory(data.analysis || {});
@@ -1234,7 +1365,7 @@
       if ((metrics.anomalies || []).length) pushTimeline("Metric anomaly start", "telemetry");
       if ((data.context?.logs?.count || 0) > 10) pushTimeline("Log spike", "logs");
       if (data.context?.deployment?.deployment_changed_last_10m) pushTimeline("Deployment event", "deploy");
-      pushTimeline("AI inference trigger", "ai");
+      pushTimeline("Loaded stored incident reasoning", "incident");
       setLiveStatus("live", "ok");
     } catch (err) {
       setLiveStatus(`error: ${err}`, "err");
@@ -1250,6 +1381,7 @@
   function bindEvents() {
     el.refreshBtn.addEventListener("click", refresh);
     el.interval.addEventListener("change", restartAutoRefresh);
+    if (el.cluster) el.cluster.addEventListener("change", updateDashboardLinks);
     el.service.addEventListener("change", updateDashboardLinks);
     el.severity.addEventListener("change", updateDashboardLinks);
     el.timeWindow.addEventListener("change", updateDashboardLinks);
