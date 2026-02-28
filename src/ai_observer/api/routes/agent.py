@@ -165,6 +165,17 @@ def push_from_agent(
     memory_usage = _as_float(metrics.get("memory_usage", 0.0))
     request_rate = _as_float(metrics.get("request_rate", 0.0))
     error_rate = _as_float(metrics.get("error_rate", 0.0))
+    logger.info(
+        "Received telemetry cluster=%s metrics=%s",
+        payload.cluster_id,
+        {
+            "cpu_usage": cpu_usage,
+            "memory_usage": memory_usage,
+            "request_rate": request_rate,
+            "pod_restarts": _as_float(metrics.get("pod_restarts", 0.0)),
+            "error_rate": error_rate,
+        },
+    )
 
     for row in payload.incidents:
         now = datetime.now(timezone.utc)
