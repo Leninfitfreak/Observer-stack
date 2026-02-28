@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
 
 import requests
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class DiscoveryConfig:
     enabled: bool = True
+    kubernetes_enabled: bool = True
+    kubernetes_namespace: str = "dev"
     api_url: str = "https://kubernetes.default.svc"
     verify_ssl: bool = True
     service_account_token_path: str = "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -45,8 +50,11 @@ class DiscoveryEngine:
         return True
 
     def _list_services(self, namespace: str) -> list[dict[str, Any]]:
+        if not self.config.kubernetes_enabled:
+            return []
         token = self._read_token(self.config.service_account_token_path)
         if not token:
+            logger.debug("Kubernetes discovery token unavailable at path=%s", self.config.service_account_token_path)
             return []
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         response = requests.get(
@@ -78,30 +86,68 @@ class DiscoveryEngine:
     def _service_url(name: str, namespace: str, port: int) -> str:
         return f"http://{name}.{namespace}.svc.cluster.local:{port}"
 
+    @staticmethod
+    def _service_signals(service: dict[str, Any]) -> tuple[str, str]:
+        metadata = service.get("metadata") or {}
+        labels = metadata.get("labels") or {}
+        annotations = metadata.get("annotations") or {}
+        spec = service.get("spec") or {}
+        name = str(metadata.get("name", "")).strip()
+        text_blob = " ".join(
+            str(item).lower()
+            for item in [
+                name,
+                labels.get("app"),
+                labels.get("app.kubernetes.io/name"),
+                labels.get("app.kubernetes.io/component"),
+                labels.get("component"),
+                annotations.get("prometheus.io/scrape"),
+                (spec.get("selector") or {}).get("app"),
+                (spec.get("selector") or {}).get("app.kubernetes.io/name"),
+            ]
+            if item
+        )
+        return name, text_blob
+
+    @staticmethod
+    def _matches_prometheus(name: str, signals: str) -> bool:
+        lname = name.lower()
+        return "prometheus" in lname or "prometheus" in signals
+
+    @staticmethod
+    def _matches_loki(name: str, signals: str) -> bool:
+        lname = name.lower()
+        return ("loki" in lname) or ("loki" in signals)
+
+    @staticmethod
+    def _matches_jaeger(name: str, signals: str) -> bool:
+        lname = name.lower()
+        return ("jaeger" in lname) or ("jaeger" in signals)
+
     def discover_observability_services(self) -> DiscoveryResult:
-        if not self.config.enabled:
+        if not self.config.enabled or not self.config.kubernetes_enabled:
             return DiscoveryResult(sources={})
 
         discovered: dict[str, str] = {}
-        for namespace in self.config.namespaces:
+        namespaces = self.config.namespaces or (self.config.kubernetes_namespace,)
+        for namespace in namespaces:
             try:
                 services = self._list_services(namespace)
-            except requests.RequestException:
+            except requests.RequestException as exc:
+                logger.warning("Observability service discovery failed namespace=%s err=%s", namespace, exc)
                 continue
 
             for service in services:
-                metadata = service.get("metadata") or {}
-                name = str(metadata.get("name", "")).strip()
+                name, signals = self._service_signals(service)
                 if not name:
                     continue
-                lname = name.lower()
-                if "prometheus" in lname and "prometheus_url" not in discovered:
+                if self._matches_prometheus(name, signals) and "prometheus_url" not in discovered:
                     discovered["prometheus_url"] = self._service_url(name, namespace, self._service_port(service, 9090))
                     discovered["prometheus_source"] = f"{namespace}/{name}"
-                if "loki" in lname and "gateway" in lname and "loki_url" not in discovered:
+                if self._matches_loki(name, signals) and "loki_url" not in discovered:
                     discovered["loki_url"] = self._service_url(name, namespace, self._service_port(service, 3100))
                     discovered["loki_source"] = f"{namespace}/{name}"
-                if "jaeger" in lname and "jaeger_url" not in discovered:
+                if self._matches_jaeger(name, signals) and "jaeger_url" not in discovered:
                     discovered["jaeger_url"] = self._service_url(name, namespace, self._service_port(service, 16686))
                     discovered["jaeger_source"] = f"{namespace}/{name}"
 

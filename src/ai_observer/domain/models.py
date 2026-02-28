@@ -27,6 +27,7 @@ class ObservabilityContext(BaseModel):
     component_summary: dict[str, Any] = Field(default_factory=dict)
     cluster_wiring: dict[str, Any] = Field(default_factory=dict)
     datasource_errors: dict[str, str] = Field(default_factory=dict)
+    observability_registry: dict[str, Any] = Field(default_factory=dict)
     signal_scores: dict[str, Any] = Field(default_factory=dict)
     causal_likelihoods: dict[str, Any] = Field(default_factory=dict)
     incident_lifecycle: dict[str, Any] = Field(default_factory=dict)

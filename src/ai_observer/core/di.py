@@ -29,6 +29,8 @@ def build_container(settings: AppSettings) -> Container:
     discovery = DiscoveryEngine(
         DiscoveryConfig(
             enabled=settings.discovery.enabled,
+            kubernetes_enabled=settings.discovery.kubernetes_enabled,
+            kubernetes_namespace=settings.discovery.kubernetes_namespace,
             api_url=settings.discovery.k8s_api_url,
             verify_ssl=settings.discovery.verify_ssl,
             service_account_token_path=settings.discovery.service_account_token_path,
@@ -36,7 +38,11 @@ def build_container(settings: AppSettings) -> Container:
             namespaces=settings.discovery.namespaces,
         )
     )
-    registry = ObservabilityRegistry(discovery=discovery)
+    registry = ObservabilityRegistry(
+        discovery=discovery,
+        refresh_interval_seconds=settings.discovery.refresh_interval_seconds,
+        validation_timeout_seconds=settings.discovery.validation_timeout_seconds,
+    )
     resolved = registry.resolve(settings.observability)
     dependency_engine = DependencyEngine()
 
@@ -52,6 +58,7 @@ def build_container(settings: AppSettings) -> Container:
         traces_provider=traces,
         llm_provider=llm,
         cluster_wiring_provider=cluster_wiring,
+        observability_registry=registry,
     )
     return Container(
         settings=settings,

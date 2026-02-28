@@ -21,6 +21,10 @@ Observability:
 - `PROMETHEUS_URL`
 - `LOKI_URL`
 - `JAEGER_URL`
+- For Docker backend + Minikube ingress, use path-based ingress URLs such as:
+  - `PROMETHEUS_URL=http://minikube/prometheus`
+  - `LOKI_URL=http://minikube/loki`
+  - `JAEGER_URL=http://minikube/jaeger`
 
 LLM:
 
@@ -37,12 +41,17 @@ Runtime:
 
 - `HTTP_TIMEOUT_SECONDS`
 - `HTTP_ATTEMPTS`
+- `KUBERNETES_ENABLED`
+- `KUBERNETES_NAMESPACE`
+- `OBS_DISCOVERY_ENABLED`
 - `OBS_AUTO_DISCOVERY_ENABLED`
 - `K8S_API_URL`
 - `K8S_VERIFY_SSL`
 - `K8S_SA_TOKEN_PATH`
 - `K8S_SA_CA_PATH`
 - `DISCOVERY_NAMESPACES`
+- `OBS_DISCOVERY_REFRESH_SECONDS`
+- `OBS_DISCOVERY_VALIDATION_TIMEOUT_SECONDS`
 
 ## Docker Compose
 
@@ -126,6 +135,20 @@ DB telemetry check:
 docker compose exec -T postgres psql -U ai_observer -d ai_observer -c "SELECT cluster_id, raw_payload, created_at FROM incidents ORDER BY created_at DESC LIMIT 5;"
 ```
 
+Observability discovery check:
+
+```bash
+curl "http://localhost:8080/api/reasoning/live?namespace=dev&service=all&cluster=minikube-dev&time_window=30m"
+```
+
+Validate `context.observability_registry` includes:
+
+- `status.prometheus|loki|jaeger`
+- `sources`
+- `checked_at`
+- `last_success_at`
+- `last_error`
+
 ## Troubleshooting Matrix
 
 - `401 invalid_agent_token`:
@@ -146,4 +169,5 @@ docker compose exec -T postgres psql -U ai_observer -d ai_observer -c "SELECT cl
 ## Topology + Discovery References
 
 - See `TOPOLOGY_GUIDE.md` for topology schema, RBAC, and API validation.
-- Backend observability auto-discovery is enabled through `OBS_AUTO_DISCOVERY_ENABLED=true` and resolves Prometheus/Loki/Jaeger dynamically when explicit URLs are not set.
+- Backend observability auto-discovery is enabled through `OBS_DISCOVERY_ENABLED=true` (or legacy `OBS_AUTO_DISCOVERY_ENABLED=true`) and resolves Prometheus/Loki/Jaeger dynamically when explicit URLs are not set.
+- See `OBSERVABILITY_DISCOVERY_GUIDE.md` for service matching, health probes, and troubleshooting.

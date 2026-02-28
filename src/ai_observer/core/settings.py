@@ -45,11 +45,15 @@ class ObservabilitySettings:
 @dataclass(frozen=True)
 class DiscoverySettings:
     enabled: bool = True
+    kubernetes_enabled: bool = True
+    kubernetes_namespace: str = "dev"
     k8s_api_url: str = "https://kubernetes.default.svc"
     verify_ssl: bool = True
     service_account_token_path: str = "/var/run/secrets/kubernetes.io/serviceaccount/token"
     service_account_ca_path: str = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
     namespaces: tuple[str, ...] = ("dev",)
+    refresh_interval_seconds: int = 60
+    validation_timeout_seconds: int = 3
 
 
 @dataclass(frozen=True)
@@ -115,13 +119,20 @@ def load_settings() -> AppSettings:
         loki_url=os.getenv("LOKI_URL", "").strip().rstrip("/"),
         jaeger_url=os.getenv("JAEGER_URL", "").strip().rstrip("/"),
     )
-    discovery_namespaces = tuple(
-        part.strip()
-        for part in os.getenv("DISCOVERY_NAMESPACES", "dev").split(",")
-        if part.strip()
-    ) or ("dev",)
+    kubernetes_enabled = os.getenv("KUBERNETES_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    kubernetes_namespace = os.getenv("KUBERNETES_NAMESPACE", "dev").strip() or "dev"
+    raw_discovery_namespaces = os.getenv("DISCOVERY_NAMESPACES", kubernetes_namespace)
+    discovery_namespaces = tuple(part.strip() for part in raw_discovery_namespaces.split(",") if part.strip()) or (kubernetes_namespace,)
+    obs_discovery_enabled = os.getenv("OBS_DISCOVERY_ENABLED", os.getenv("OBS_AUTO_DISCOVERY_ENABLED", "true")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
     discovery = DiscoverySettings(
-        enabled=(os.getenv("OBS_AUTO_DISCOVERY_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}),
+        enabled=obs_discovery_enabled,
+        kubernetes_enabled=kubernetes_enabled,
+        kubernetes_namespace=kubernetes_namespace,
         k8s_api_url=os.getenv("K8S_API_URL", "https://kubernetes.default.svc").strip().rstrip("/"),
         verify_ssl=(os.getenv("K8S_VERIFY_SSL", "true").strip().lower() in {"1", "true", "yes", "on"}),
         service_account_token_path=os.getenv(
@@ -133,6 +144,8 @@ def load_settings() -> AppSettings:
             "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
         ).strip(),
         namespaces=discovery_namespaces,
+        refresh_interval_seconds=_to_int(os.getenv("OBS_DISCOVERY_REFRESH_SECONDS", "60"), default=60, min_value=10, max_value=900),
+        validation_timeout_seconds=_to_int(os.getenv("OBS_DISCOVERY_VALIDATION_TIMEOUT_SECONDS", "3"), default=3, min_value=1, max_value=20),
     )
 
     http = HttpSettings(

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import math
 from typing import Any
 
+from ai_observer.backend.intelligence.observability_registry import ObservabilityRegistry
 from ai_observer.domain.interfaces import ClusterWiringProvider, LlmProvider, LogsProvider, MetricsProvider, TracesProvider
 from ai_observer.domain.models import AlertSignal, LiveReasoningResponse, ObservabilityContext, ReasoningResult
 from ai_observer.intelligence import (
@@ -26,12 +27,14 @@ class ReasoningService:
         traces_provider: TracesProvider,
         llm_provider: LlmProvider,
         cluster_wiring_provider: ClusterWiringProvider,
+        observability_registry: ObservabilityRegistry | None = None,
     ):
         self.metrics_provider = metrics_provider
         self.logs_provider = logs_provider
         self.traces_provider = traces_provider
         self.llm_provider = llm_provider
         self.cluster_wiring_provider = cluster_wiring_provider
+        self.observability_registry = observability_registry
         self.started_at = datetime.now(timezone.utc)
         self._incident_state: dict[str, dict[str, Any]] = {}
         self.anomaly_engine = AnomalyEngine()
@@ -893,6 +896,22 @@ class ReasoningService:
 
     def analyze(self, alert: AlertSignal, window_minutes: int = 30) -> LiveReasoningResponse:
         errors: dict[str, str] = {}
+        observability_registry_state: dict[str, Any] = {}
+
+        if self.observability_registry is not None:
+            refreshed = self.observability_registry.refresh()
+            observability_registry_state = self.observability_registry.status_view()
+            # Providers are long-lived objects. Keep their endpoints fresh as discovery evolves.
+            if refreshed.prometheus_url:
+                self.metrics_provider.base_url = refreshed.prometheus_url  # type: ignore[attr-defined]
+            if refreshed.loki_url:
+                self.logs_provider.base_url = refreshed.loki_url  # type: ignore[attr-defined]
+            if refreshed.jaeger_url:
+                self.traces_provider.base_url = refreshed.jaeger_url  # type: ignore[attr-defined]
+            for source, source_status in refreshed.status.items():
+                if source_status != "healthy":
+                    source_error = refreshed.last_error.get(source, source_status)
+                    errors[source] = source_error or source_status
 
         try:
             metrics = self.metrics_provider.collect(alert.namespace, alert.service)
@@ -987,6 +1006,7 @@ class ReasoningService:
             "component_summary": component_summary,
             "cluster_wiring": cluster_wiring,
             "datasource_errors": errors,
+            "observability_registry": observability_registry_state,
         }
 
         missing_observability: list[str] = []
