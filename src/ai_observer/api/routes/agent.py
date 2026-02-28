@@ -11,9 +11,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ai_observer.backend.intelligence import TopologyEngine
-from ai_observer.backend.models.incident import Incident, IncidentMetricsSnapshot, IncidentStatusHistory
+from ai_observer.backend.models.incident import Incident, IncidentMetricsSnapshot, IncidentStatusHistory, TelemetrySample
 from ai_observer.incident_analysis.database import get_db_session
-from ai_observer.incident_analysis.service_layer import IncidentAnalysisService
+from ai_observer.backend.services import IncidentsService
+from ai_observer.domain.models import AlertSignal
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
 logger = logging.getLogger(__name__)
@@ -320,12 +321,9 @@ def push_from_agent(
     if not expected or x_agent_token != expected:
         raise HTTPException(status_code=401, detail="invalid_agent_token")
 
-    svc = IncidentAnalysisService(
-        db=db,
-        default_cluster_id=request.app.state.container.settings.telemetry.default_cluster_id,
-    )
-
     inserted = 0
+    cluster_id = payload.cluster_id
+    namespace = (payload.environment or request.app.state.container.settings.telemetry.default_namespace or "default").strip()
     incoming_payload = payload.model_dump()
     metrics = payload.metrics or {}
     topology = payload.topology or {}
@@ -346,7 +344,7 @@ def push_from_agent(
     error_rate = _as_float(metrics.get("error_rate", 0.0))
     logger.info(
         "Received telemetry cluster=%s metrics=%s",
-        payload.cluster_id,
+        cluster_id,
         {
             "cpu_usage": cpu_usage,
             "memory_usage": memory_usage,
@@ -355,215 +353,103 @@ def push_from_agent(
             "error_rate": error_rate,
         },
     )
+    service_name = (
+        payload.incidents[0].service_name
+        if payload.incidents
+        else str((metrics.get("service_name") or incoming_payload.get("service_name") or "observer-agent"))
+    )
+    now = datetime.now(timezone.utc)
+    raw_payload = {
+        **incoming_payload,
+        "cluster_id": cluster_id,
+        "namespace": namespace,
+        "service_name": service_name,
+        "metrics": {
+            "cpu_usage": cpu_usage,
+            "memory_usage": memory_usage,
+            "request_rate": request_rate,
+            "pod_restarts": _as_float(metrics.get("pod_restarts", 0.0)),
+            "error_rate": error_rate,
+            "latency": _as_float(metrics.get("latency", 0.0)),
+        },
+        "topology": topology,
+        "dependency_graph": dependency_graph,
+        "timestamp": payload.timestamp or now.isoformat(),
+    }
 
-    for row in payload.incidents:
-        now = datetime.now(timezone.utc)
-        generated_incident_id = row.incident_id or f"agent-{payload.cluster_id}-{row.service_name}-{now.strftime('%Y%m%d%H%M%S%f')}"
-        classification = row.classification
-        root_cause = row.root_cause or "unspecified"
-        anomaly_score = row.anomaly_score
-        confidence_score = row.confidence_score
-        risk_forecast = row.risk_forecast
-        llm_reasoning: dict[str, Any] = {}
-        executive_summary: str | None = None
-        supporting_signals: dict[str, Any] = {}
-        suggested_actions: dict[str, Any] = {}
-        confidence_breakdown: dict[str, Any] = {}
+    sample = TelemetrySample(
+        cluster_id=cluster_id,
+        namespace=namespace,
+        service_name=service_name,
+        cpu_usage=cpu_usage,
+        memory_usage=memory_usage,
+        request_rate=request_rate,
+        error_rate=error_rate,
+        latency=_as_float(metrics.get("latency", 0.0)),
+        pod_restarts=_as_float(metrics.get("pod_restarts", 0.0)),
+        anomaly_score=min(1.0, max(0.0, (cpu_usage + (error_rate * 4.0)) / 2.0)),
+        raw_payload=raw_payload,
+        captured_at=now,
+    )
+    db.add(sample)
+    db.commit()
+    db.refresh(sample)
 
-        # Prefer real telemetry-based classification when metrics are present.
-        if payload.metrics:
-            if error_rate > 0.05:
-                classification = "Error Spike"
-                root_cause = "error_rate_threshold_breached"
-            elif cpu_usage > 0.8:
-                classification = "CPU Saturation"
-                root_cause = "cpu_usage_threshold_breached"
-            else:
-                classification = "Healthy"
-                root_cause = "metrics_within_expected_range"
+    detector = getattr(request.app.state, "incident_detector", None)
+    decision = None
+    if detector is not None:
+        decision = detector.evaluate_sample(sample, db)
+    anomaly_threshold = float(request.app.state.container.settings.detection.anomaly_threshold)
+    if decision is None:
+        score = min(1.0, max(0.0, sample.anomaly_score))
+        decision_triggered = score >= anomaly_threshold
+        severity = "warning" if score < 0.85 else "critical"
+    else:
+        score = float(decision.score)
+        decision_triggered = bool(decision.triggered)
+        severity = decision.severity
 
-            anomaly_score = min(1.0, max(0.0, (cpu_usage + (error_rate * 4.0)) / 2.0))
-            risk_forecast = min(1.0, max(0.0, (cpu_usage * 0.6) + (error_rate * 0.4)))
-            confidence_score = 0.95
-
-            try:
-                for attempt in range(1, MAX_RETRIES + 1):
-                    candidate = _llm_reasoning_for_metrics(
-                        request=request,
-                        cluster_id=payload.cluster_id,
-                        environment=payload.environment or "dev",
-                        service_name=row.service_name,
-                        metrics={
-                            "cpu_usage": cpu_usage,
-                            "memory_usage": memory_usage,
-                            "request_rate": request_rate,
-                            "error_rate": error_rate,
-                        },
-                        classification=classification,
-                        root_cause=root_cause,
-                        topology=topology,
-                    )
-                    candidate = _ensure_complete_reasoning(
-                        candidate,
-                        cluster_id=payload.cluster_id,
-                        environment=payload.environment or "dev",
-                        service_name=row.service_name,
-                        metrics={
-                            "cpu_usage": cpu_usage,
-                            "memory_usage": memory_usage,
-                            "request_rate": request_rate,
-                            "error_rate": error_rate,
-                        },
-                        classification=classification,
-                        root_cause=root_cause,
-                        topology=topology,
-                    )
-                    if _is_valid_reasoning(candidate):
-                        llm_reasoning = candidate
-                        logger.info("LLM inference successful for incident=%s attempt=%s", generated_incident_id, attempt)
-                        break
-                    logger.warning("LLM inference attempt %s failed for incident=%s", attempt, generated_incident_id)
-                    if attempt < MAX_RETRIES:
-                        time.sleep(RETRY_DELAY_SECONDS)
-                if not llm_reasoning:
-                    llm_reasoning = _deterministic_reasoning_for_metrics(
-                        cluster_id=payload.cluster_id,
-                        environment=payload.environment or "dev",
-                        service_name=row.service_name,
-                        metrics={
-                            "cpu_usage": cpu_usage,
-                            "memory_usage": memory_usage,
-                            "request_rate": request_rate,
-                            "error_rate": error_rate,
-                        },
-                        classification=classification,
-                        root_cause=root_cause,
-                        topology=topology,
-                    )
-                llm_reasoning = _sanitize_reasoning_narrative(
-                    llm_reasoning,
-                    metrics={
-                        "cpu_usage": cpu_usage,
-                        "memory_usage": memory_usage,
-                        "request_rate": request_rate,
-                        "pod_restarts": _as_float(metrics.get("pod_restarts", 0.0)),
-                        "error_rate": error_rate,
-                    },
-                    resolved_origin=str(llm_reasoning.get("origin_service", "") or row.service_name or "observer-agent"),
-                )
-
-                root_cause = str(llm_reasoning.get("root_cause") or llm_reasoning.get("probable_root_cause") or root_cause)
-                executive_summary = str(llm_reasoning.get("human_summary") or "")
-                confidence_score = _extract_confidence_fraction(llm_reasoning.get("confidence"), confidence_score)
-                origin_service = str(llm_reasoning.get("origin_service", "") or "").strip()
-                topology_insights = llm_reasoning.get("topology_insights") if isinstance(llm_reasoning.get("topology_insights"), dict) else {}
-                causal_chain = llm_reasoning.get("causal_chain") if isinstance(llm_reasoning.get("causal_chain"), list) else []
-                supporting_signals = {
-                    "causal_chain": causal_chain,
-                }
-                suggested_actions = {
-                    "corrective_actions": llm_reasoning.get("corrective_actions") or [],
-                    "preventive_hardening": llm_reasoning.get("preventive_hardening") or [],
-                }
-                confidence_breakdown = {
-                    "confidence_score": llm_reasoning.get("confidence_score"),
-                    "risk_forecast": llm_reasoning.get("risk_forecast"),
-                    "ai_response_status": llm_reasoning.get("ai_response_status", "complete"),
-                }
-            except Exception:
-                llm_reasoning = _deterministic_reasoning_for_metrics(
-                    cluster_id=payload.cluster_id,
-                    environment=payload.environment or "dev",
-                    service_name=row.service_name,
-                    metrics={
-                        "cpu_usage": cpu_usage,
-                        "memory_usage": memory_usage,
-                        "request_rate": request_rate,
-                        "error_rate": error_rate,
-                    },
-                    classification=classification,
-                    root_cause=root_cause,
-                    topology=topology,
-                )
-
-        if db.query(Incident).filter(Incident.incident_id == generated_incident_id).first() is None:
-            db.add(
-                Incident(
-                    incident_id=generated_incident_id,
-                    cluster_id=payload.cluster_id,
-                    status="OPEN",
-                    severity="WARNING",
-                    impact_level="Low",
-                    slo_breach_risk=row.risk_forecast * 100.0,
-                    error_budget_remaining=100.0,
-                    affected_services=row.service_name,
-                    start_time=now,
-                    duration="00:00:00",
-                    analysis=llm_reasoning,
-                    raw_payload=incoming_payload,
-                    created_at=now,
-                )
-            )
-            db.add(
-                IncidentStatusHistory(
-                    incident_id=generated_incident_id,
-                    from_status="OPEN",
-                    to_status="OPEN",
-                    changed_at=now,
-                )
-            )
-
-        db.add(
-            IncidentMetricsSnapshot(
-                incident_id=generated_incident_id,
-                cpu_usage=_to_cpu_percent(cpu_usage),
-                memory_usage=_to_memory_mb(memory_usage),
-                latency_p95=0.0,
-                error_rate=_to_error_percent(error_rate),
-                thread_pool_saturation=0.0,
-                raw_metrics_json={
-                    "cpu_usage": cpu_usage,
-                    "memory_usage": memory_usage,
-                    "request_rate": request_rate,
-                    "pod_restarts": _as_float(metrics.get("pod_restarts", 0.0)),
-                    "error_rate": error_rate,
-                    "topology": topology,
-                    "dependency_graph": dependency_graph,
-                },
-                captured_at=now,
-            )
+    if decision_triggered:
+        alert = AlertSignal(
+            alertname="TelemetryAnomaly",
+            namespace=namespace,
+            service=service_name,
+            cluster_id=cluster_id,
+            severity=severity,
+            status="firing",
         )
-        svc.save_incident_analysis(
-            {
-                "incident_id": generated_incident_id,
-                "service_name": row.service_name,
-                "cluster_id": payload.cluster_id,
-                "anomaly_score": anomaly_score,
-                "confidence_score": confidence_score,
-                "classification": classification,
-                "root_cause": root_cause,
-                "mitigation": {
-                    **row.mitigation,
-                    "telemetry": {
-                        "cpu_usage": cpu_usage,
-                        "memory_usage": memory_usage,
-                        "request_rate": request_rate,
-                        "error_rate": error_rate,
-                    },
-                    "origin_service": llm_reasoning.get("origin_service"),
-                    "topology_insights": llm_reasoning.get("topology_insights", {}),
-                    "supporting_signals": llm_reasoning.get("causal_chain", []),
-                    "topology": topology,
-                    "dependency_graph": dependency_graph,
-                },
-                "risk_forecast": risk_forecast,
-                "mitigation_success": row.mitigation_success,
-                "executive_summary": executive_summary,
-                "supporting_signals": supporting_signals,
-                "suggested_actions": suggested_actions,
-                "confidence_breakdown": confidence_breakdown,
-            }
+        IncidentsService(db).persist_from_telemetry_sample(
+            alert=alert,
+            metrics={
+                "cpu_usage": cpu_usage,
+                "memory_usage": memory_usage,
+                "request_rate": request_rate,
+                "error_rate": error_rate,
+                "pod_restarts": _as_float(metrics.get("pod_restarts", 0.0)),
+                "latency": _as_float(metrics.get("latency", 0.0)),
+                "anomaly_score": score,
+            },
+            raw_payload=raw_payload,
+            reasoner=request.app.state.container.reasoning_service,
+            window_minutes=request.app.state.container.settings.telemetry.default_window_minutes,
         )
-        inserted += 1
+        inserted = 1
+        logger.info(
+            "incident_created cluster=%s namespace=%s service=%s anomaly_score=%.3f threshold=%.3f",
+            cluster_id,
+            namespace,
+            service_name,
+            score,
+            anomaly_threshold,
+        )
+    else:
+        logger.info(
+            "telemetry_stored_no_incident cluster=%s namespace=%s service=%s anomaly_score=%.3f threshold=%.3f",
+            cluster_id,
+            namespace,
+            service_name,
+            score,
+            anomaly_threshold,
+        )
 
     return AgentPushResponse(accepted=True, cluster_id=payload.cluster_id, inserted=inserted)

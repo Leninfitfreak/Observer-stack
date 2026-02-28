@@ -63,6 +63,14 @@ class DatabaseSettings:
 
 
 @dataclass(frozen=True)
+class DetectionSettings:
+    interval_seconds: int = 30
+    anomaly_threshold: float = 0.65
+    service_discovery_mode: str = "auto"
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class AppSettings:
     telemetry: TelemetrySettings
     llm: LlmSettings
@@ -70,6 +78,7 @@ class AppSettings:
     discovery: DiscoverySettings
     http: HttpSettings
     database: DatabaseSettings
+    detection: DetectionSettings
     agent_token: str
 
 
@@ -81,6 +90,25 @@ def _to_int(value: str | None, default: int, min_value: int, max_value: int) -> 
     except ValueError:
         return default
     return max(min_value, min(max_value, parsed))
+
+
+def _to_float(value: str | None, default: float, min_value: float, max_value: float) -> float:
+    if value is None:
+        return default
+    try:
+        parsed = float(value)
+    except ValueError:
+        return default
+    return max(min_value, min(max_value, parsed))
+
+
+def _to_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if not normalized:
+        return default
+    return normalized in {"1", "true", "yes", "on"}
 
 
 def load_settings() -> AppSettings:
@@ -162,6 +190,12 @@ def load_settings() -> AppSettings:
         url=os.getenv("DATABASE_URL", "").strip(),
         echo_sql=(os.getenv("DB_ECHO_SQL", "false").strip().lower() in {"1", "true", "yes", "on"}),
     )
+    detection = DetectionSettings(
+        interval_seconds=_to_int(os.getenv("INCIDENT_DETECTION_INTERVAL", "30"), default=30, min_value=5, max_value=3600),
+        anomaly_threshold=_to_float(os.getenv("ANOMALY_THRESHOLD", "0.65"), default=0.65, min_value=0.05, max_value=1.0),
+        service_discovery_mode=os.getenv("SERVICE_DISCOVERY_MODE", "auto").strip() or "auto",
+        enabled=_to_bool(os.getenv("INCIDENT_DETECTION_ENABLED"), True),
+    )
 
     return AppSettings(
         telemetry=telemetry,
@@ -170,5 +204,6 @@ def load_settings() -> AppSettings:
         discovery=discovery,
         http=http,
         database=database,
+        detection=detection,
         agent_token=os.getenv("AGENT_TOKEN", "").strip(),
     )

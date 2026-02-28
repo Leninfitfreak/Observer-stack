@@ -32,6 +32,8 @@ class Incident(Base):
     affected_services: Mapped[str] = mapped_column(Text, nullable=False, default="")
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     duration: Mapped[str] = mapped_column(String(32), nullable=False, default="00:00:00")
+    analysis: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
+    raw_payload: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -72,6 +74,33 @@ class IncidentStatusHistory(Base):
     from_status: Mapped[str] = mapped_column(String(32), nullable=False)
     to_status: Mapped[str] = mapped_column(String(32), nullable=False)
     changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+    )
+
+
+class TelemetrySample(Base):
+    __tablename__ = "telemetry_samples"
+    __table_args__ = (
+        Index("ix_telemetry_samples_cluster_namespace_service_ts", "cluster_id", "namespace", "service_name", "captured_at"),
+        Index("ix_telemetry_samples_captured_at", "captured_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    cluster_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    namespace: Mapped[str] = mapped_column(String(128), nullable=False, default="default")
+    service_name: Mapped[str] = mapped_column(String(256), nullable=False, default="unknown")
+    cpu_usage: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    memory_usage: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    request_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    error_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    latency: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    pod_restarts: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    anomaly_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    raw_payload: Mapped[dict] = mapped_column(JsonType, nullable=False, default=dict)
+    captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),

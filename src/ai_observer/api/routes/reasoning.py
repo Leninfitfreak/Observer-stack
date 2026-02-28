@@ -5,6 +5,7 @@ import math
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from ai_observer.api.routes.schemas import AlertmanagerWebhook
@@ -12,7 +13,7 @@ from ai_observer.backend.intelligence import CausalEngine, TopologyEngine
 from ai_observer.backend.models.incident import Incident, IncidentMetricsSnapshot
 from ai_observer.backend.services.canonical_telemetry import build_canonical_telemetry
 from ai_observer.backend.services import IncidentsService
-from ai_observer.domain.models import AlertSignal, LiveReasoningResponse
+from ai_observer.domain.models import AlertSignal, LiveReasoningResponse, ObservabilityContext, ReasoningResult
 from ai_observer.incident_analysis.database import get_db_session
 from ai_observer.incident_analysis.models import IncidentAnalysis
 from ai_observer.services.reasoning_service import ReasoningService
@@ -471,42 +472,122 @@ def live_reasoning(
     db: Session = Depends(get_db_session),
 ) -> LiveReasoningResponse:
     logger.warning(
-        "Deprecated endpoint /api/reasoning/live invoked; returning computed view only. "
-        "Dashboard must use stored incidents via /api/incidents."
+        "Deprecated endpoint /api/reasoning/live invoked; returning stored incident view only. "
+        "No live reasoning execution is performed."
     )
     default_cluster = request.app.state.container.settings.telemetry.default_cluster_id
-    alert = AlertSignal(
-        alertname="LiveObservabilitySnapshot",
-        namespace=namespace,
-        service=service,
-        cluster_id=cluster or default_cluster,
-        severity=severity,
-        status="firing",
+    cluster_id = cluster or default_cluster
+    conditions = [Incident.created_at.is_not(None)]
+    if cluster_id:
+        conditions.append(Incident.cluster_id == cluster_id)
+    if severity:
+        conditions.append(Incident.severity.ilike(severity))
+    if service and service not in {"all", "*"}:
+        conditions.append(Incident.affected_services.ilike(f"%{service}%"))
+
+    incident = (
+        db.query(Incident)
+        .filter(and_(*conditions))
+        .order_by(Incident.created_at.desc())
+        .first()
     )
-    result = reasoner.analyze(alert, window_minutes=_parse_time_window(time_window))
-    needs_refresh = (not _has_metric_signal(result.context.metrics)) or _needs_canonical_metric_repair(result)
-    if needs_refresh:
-        logger.info("Live reasoning metrics missing; attempting historical telemetry recovery cluster=%s", alert.cluster_id or "")
-        recovered_metrics, recovered_components, recovered_topology = _hydrate_metrics_from_recent_incidents(db, alert.cluster_id or "")
-        if recovered_metrics:
-            logger.info("Applying historical telemetry metrics=%s", recovered_metrics)
-            replaced = False
-            for key, value in recovered_metrics.items():
-                if _as_float(result.context.metrics.get(key, 0.0)) <= 0.0 and _as_float(value) > 0.0:
-                    result.context.metrics[key] = value
-                    replaced = True
-            for service_name, service_metrics in recovered_components.items():
-                result.context.component_metrics[service_name] = service_metrics
-            if recovered_topology:
-                result.context.cluster_wiring = recovered_topology
-                replaced = True
-            if replaced or _needs_canonical_metric_repair(result):
-                _refresh_analysis_from_metrics(result, recovered_topology, alert.service)
-                logger.info("Post-refresh analysis why_not_resource_saturation=%s", result.analysis.why_not_resource_saturation)
-        else:
-            logger.info("No historical telemetry available from incidents for cluster=%s", alert.cluster_id or "")
-    # Intentionally no persistence here to keep reasoning execution scoped to incident creation paths.
-    return result
+    if incident is None:
+        raise HTTPException(status_code=404, detail="no_incident_data")
+
+    analysis = (
+        db.query(IncidentAnalysis)
+        .filter(IncidentAnalysis.incident_id == incident.incident_id)
+        .order_by(IncidentAnalysis.created_at.desc())
+        .first()
+    )
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="no_reasoning_data")
+
+    telemetry = _telemetry_for_incident(db, incident)
+    topology = _topology_for_incident(db, incident)
+    raw_payload = incident.raw_payload if isinstance(incident.raw_payload, dict) else {}
+    mitigation = analysis.mitigation if isinstance(analysis.mitigation, dict) else {}
+    topology_insights = mitigation.get("topology_insights") if isinstance(mitigation.get("topology_insights"), dict) else {}
+    origin_service = str(
+        mitigation.get("origin_service")
+        or topology_insights.get("likely_origin_service")
+        or analysis.service_name
+        or incident.affected_services
+        or "unknown"
+    )
+    likely_origin = str(topology_insights.get("likely_origin_service", "") or "").strip()
+    if not likely_origin:
+        topology_insights = {**topology_insights, "likely_origin_service": origin_service}
+
+    context = ObservabilityContext(
+        alert={
+            "alertname": "StoredIncidentView",
+            "namespace": namespace,
+            "service": service,
+            "cluster_id": cluster_id,
+            "severity": severity,
+            "status": incident.status.lower(),
+            "incident_id": incident.incident_id,
+            "incident_created_at": incident.created_at.isoformat() if incident.created_at else "",
+        },
+        time_window_minutes=_parse_time_window(time_window),
+        metrics={
+            "cpu_usage_cores_5m": float(telemetry.get("cpu_usage", 0.0) or 0.0),
+            "memory_usage_bytes": float(telemetry.get("memory_usage", 0.0) or 0.0),
+            "request_rate_rps_5m": float(telemetry.get("request_rate", 0.0) or 0.0),
+            "pod_restarts_10m": float(telemetry.get("pod_restarts", 0.0) or 0.0),
+            "error_rate_5xx_5m": float(telemetry.get("error_rate", 0.0) or 0.0),
+            "baseline_anomaly_score": float(analysis.anomaly_score or 0.0),
+        },
+        component_metrics={
+            str(analysis.service_name or incident.affected_services or "unknown"): {
+                "cpu_usage_cores_5m": float(telemetry.get("cpu_usage", 0.0) or 0.0),
+                "memory_usage_bytes": float(telemetry.get("memory_usage", 0.0) or 0.0),
+                "request_rate_rps_5m": float(telemetry.get("request_rate", 0.0) or 0.0),
+                "pod_restarts_10m": float(telemetry.get("pod_restarts", 0.0) or 0.0),
+                "error_rate_5xx_5m": float(telemetry.get("error_rate", 0.0) or 0.0),
+                "baseline_anomaly_score": float(analysis.anomaly_score or 0.0),
+            }
+        },
+        cluster_wiring=topology,
+        observability_registry=raw_payload.get("observability_registry") if isinstance(raw_payload.get("observability_registry"), dict) else {},
+    )
+    supporting = analysis.supporting_signals if isinstance(analysis.supporting_signals, dict) else {}
+    evidence = supporting.get("evidence") if isinstance(supporting.get("evidence"), list) else []
+    causal_chain = supporting.get("causal_chain") if isinstance(supporting.get("causal_chain"), list) else []
+    suggested_actions = analysis.suggested_actions if isinstance(analysis.suggested_actions, dict) else {}
+    response = LiveReasoningResponse(
+        context=context,
+        analysis=ReasoningResult(
+            probable_root_cause=analysis.root_cause or "unknown",
+            origin_service=origin_service,
+            impact_level=incident.impact_level or "Low",
+            recommended_remediation=str((suggested_actions.get("actions") or ["Monitor and investigate telemetry drift."])[0]),
+            confidence_score=f"{round(float(analysis.confidence_score or 0.0) * 100)}%",
+            confidence=float(analysis.confidence_score or 0.0),
+            causal_chain=[str(x) for x in causal_chain],
+            corrective_actions=[str(x) for x in (suggested_actions.get("actions") or [])],
+            preventive_hardening=[],
+            risk_forecast={"predicted_breach_next_15m_pct": round(float(analysis.risk_forecast or 0.0) * 100, 2)},
+            deployment_correlation={},
+            error_log_prediction={},
+            missing_observability=[],
+            human_summary=analysis.executive_summary or "",
+            executive_summary=analysis.executive_summary or "",
+            incident_classification=analysis.classification or "",
+            confidence_details=analysis.confidence_breakdown if isinstance(analysis.confidence_breakdown, dict) else {},
+            ai_response_status="stored",
+            supporting_evidence=[str(x) for x in evidence],
+            correlated_signals=supporting.get("correlation") if isinstance(supporting.get("correlation"), dict) else {},
+            causal_analysis=supporting.get("causal_analysis") if isinstance(supporting.get("causal_analysis"), dict) else {},
+            topology_insights=topology_insights if isinstance(topology_insights, dict) else {},
+            anomaly_summary={"score": float(analysis.anomaly_score or 0.0), "threshold": 0.65},
+            signal_scores=(analysis.confidence_breakdown or {}).get("signal_scores", {})
+            if isinstance(analysis.confidence_breakdown, dict)
+            else {},
+        ),
+    )
+    return response
 
 
 @router.post("/webhook/alertmanager", response_model=LiveReasoningResponse)

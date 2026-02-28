@@ -275,6 +275,9 @@ class IncidentsService:
             )
         return total, data
 
+    def filter_options(self, query: IncidentFilterQuery) -> dict[str, list[str]]:
+        return self.repo.list_filter_options(query)
+
     def details(self, incident_id: str) -> dict[str, Any] | None:
         row = self.repo.get_incident_details(incident_id)
         if row is None:
@@ -391,17 +394,25 @@ class IncidentsService:
         }
 
     def export_excel(self, query: IncidentFilterQuery) -> bytes:
-        _total, data = self.list(query)
-        ids = [item["incident_id"] for item in data]
-        detail_rows = [self.details(incident_id) for incident_id in ids]
-        detail_rows = [d for d in detail_rows if d is not None]
-
         def _safe_json(value: Any) -> str:
             if value is None:
                 return ""
             if isinstance(value, (dict, list)):
                 return json.dumps(value, ensure_ascii=False, default=str)
             return str(value)
+
+        def _excel_value(value: Any) -> Any:
+            if value is None:
+                return ""
+            if isinstance(value, datetime):
+                dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+                return dt.isoformat()
+            if isinstance(value, (dict, list)):
+                return _safe_json(value)
+            return value
+
+        def _row_or_placeholder(rows: list[dict[str, Any]], placeholder: dict[str, Any]) -> list[dict[str, Any]]:
+            return rows if rows else [placeholder]
 
         def _sla_countdown(start_time: Any, window_minutes: int = 60) -> str:
             if not isinstance(start_time, datetime):
@@ -414,87 +425,369 @@ class IncidentsService:
             ss = str(remaining % 60).zfill(2)
             return f"{hh}:{mm}:{ss}"
 
-        incident_core_rows: list[dict[str, Any]] = [
-            {
-                "Incident ID": item["incident_id"],
-                "Status": item["status"],
-                "Severity": item["severity"],
-                "Impact Level": item["impact_level"],
-                "SLA Countdown": _sla_countdown(item["start_time"]),
-                "SLO Breach Risk": item["slo_breach_risk"],
-                "Error Budget Remaining": item["error_budget_remaining"],
-                "Affected Services": item["affected_services"],
-                "Start Time": item["start_time"],
-                "Duration": item["duration"],
-            }
-            for item in data
-        ]
+        all_items: list[dict[str, Any]] = []
+        total, first_page = self.list(query)
+        all_items.extend(first_page)
+        page_limit = max(1, min(500, query.limit))
+        next_offset = query.offset + page_limit
+        while len(all_items) < total:
+            page_query = query.model_copy(update={"limit": page_limit, "offset": next_offset})
+            _page_total, page_rows = self.list(page_query)
+            if not page_rows:
+                break
+            all_items.extend(page_rows)
+            next_offset += page_limit
 
-        ai_analysis_rows: list[dict[str, Any]] = []
-        metrics_rows: list[dict[str, Any]] = []
-        raw_json_rows: list[dict[str, Any]] = []
+        ids = [item["incident_id"] for item in all_items]
+        detail_rows = [self.details(incident_id) for incident_id in ids]
+        detail_rows = [d for d in detail_rows if d is not None]
+        details_by_id: dict[str, dict[str, Any]] = {
+            str((d.get("incident") or {}).get("incident_id")): d for d in detail_rows if isinstance(d, dict)
+        }
 
-        for item in detail_rows:
-            incident_obj = item.get("incident", {})
-            incident_id = incident_obj.get("incident_id", "")
+        summary_rows: list[dict[str, Any]] = []
+        telemetry_rows: list[dict[str, Any]] = []
+        reasoning_rows: list[dict[str, Any]] = []
+        causal_chain_rows: list[dict[str, Any]] = []
+        correlation_rows: list[dict[str, Any]] = []
+        topology_rows: list[dict[str, Any]] = []
+        recommendation_rows: list[dict[str, Any]] = []
+        observability_rows: list[dict[str, Any]] = []
+        raw_payload_rows: list[dict[str, Any]] = []
 
-            for analysis in item.get("analysis", []):
-                supporting_signals = analysis.get("supporting_signals")
-                mitigation = analysis.get("mitigation")
-                change_context = []
-                if isinstance(mitigation, dict):
-                    change_context = mitigation.get("change_detection_context") or []
-                if not change_context and isinstance(supporting_signals, dict):
-                    change_context = supporting_signals.get("change_detection_context") or []
+        for item in all_items:
+            incident_id = str(item.get("incident_id", "") or "")
+            detail = details_by_id.get(incident_id, {})
+            incident_obj = detail.get("incident") if isinstance(detail.get("incident"), dict) else {}
+            analyses = detail.get("analysis") if isinstance(detail.get("analysis"), list) else []
+            metrics_snapshot = detail.get("metrics_snapshot") if isinstance(detail.get("metrics_snapshot"), list) else []
+            latest_analysis = analyses[0] if analyses else {}
+            mitigation = latest_analysis.get("mitigation") if isinstance(latest_analysis.get("mitigation"), dict) else {}
+            supporting = latest_analysis.get("supporting_signals") if isinstance(latest_analysis.get("supporting_signals"), dict) else {}
+            chain_rows_before = len(causal_chain_rows)
+            correlation_rows_before = len(correlation_rows)
+            recommendation_rows_before = len(recommendation_rows)
 
-                ai_analysis_rows.append(
+            summary_rows.append(
+                {
+                    "Incident ID": incident_id,
+                    "Cluster ID": item.get("cluster_id", ""),
+                    "Status": item.get("status", ""),
+                    "Severity": item.get("severity", ""),
+                    "Impact Level": item.get("impact_level", ""),
+                    "SLA Countdown": _sla_countdown(item.get("start_time")),
+                    "SLO Breach Risk (%)": _excel_value(item.get("slo_breach_risk")),
+                    "Error Budget Remaining (%)": _excel_value(item.get("error_budget_remaining")),
+                    "Affected Services": item.get("affected_services", ""),
+                    "Classification": item.get("classification", ""),
+                    "Confidence Score": _excel_value(item.get("confidence_score")),
+                    "Start Time": _excel_value(item.get("start_time")),
+                    "Created At": _excel_value(item.get("created_at")),
+                    "Duration": item.get("duration", ""),
+                    "Executive Summary": _excel_value(item.get("executive_summary")),
+                    "Root Cause": _excel_value(item.get("root_cause")),
+                }
+            )
+
+            telemetry_rows.append(
+                {
+                    "Incident ID": incident_id,
+                    "Metric Source": "canonical",
+                    "CPU Usage": _excel_value(item.get("cpu_usage")),
+                    "Memory Usage": _excel_value(item.get("memory_usage")),
+                    "Request Rate": _excel_value(item.get("request_rate")),
+                    "Pod Restarts": _excel_value(item.get("pod_restarts")),
+                    "Error Rate": _excel_value(item.get("error_rate")),
+                    "Captured At": _excel_value(item.get("created_at")),
+                }
+            )
+            for metrics in metrics_snapshot:
+                telemetry_rows.append(
                     {
-                        "Incident ID": incident_id or analysis.get("incident_id", ""),
-                        "Executive Summary": _safe_json(analysis.get("executive_summary")),
-                        "Root Cause": _safe_json(analysis.get("root_cause")),
-                        "Supporting Signals": _safe_json(supporting_signals),
-                        "Change Detection Context": _safe_json(change_context),
-                        "Risk Forecast": analysis.get("risk_forecast"),
-                        "Suggested Actions": _safe_json(analysis.get("suggested_actions")),
-                        "Confidence Score": analysis.get("confidence_score"),
-                        "Confidence Breakdown": _safe_json(analysis.get("confidence_breakdown")),
+                        "Incident ID": incident_id,
+                        "Metric Source": "snapshot",
+                        "CPU Usage": _excel_value(metrics.get("cpu_usage")),
+                        "Memory Usage": _excel_value(metrics.get("memory_usage")),
+                        "Request Rate": _excel_value((metrics.get("raw_metrics_json") or {}).get("request_rate")),
+                        "Pod Restarts": _excel_value((metrics.get("raw_metrics_json") or {}).get("pod_restarts")),
+                        "Error Rate": _excel_value(metrics.get("error_rate")),
+                        "Captured At": _excel_value(metrics.get("captured_at")),
+                        "Raw Metrics JSON": _excel_value(metrics.get("raw_metrics_json")),
                     }
                 )
 
-            for metrics in item.get("metrics_snapshot", []):
-                metrics_rows.append(
+            for analysis in analyses:
+                mitigation_data = analysis.get("mitigation") if isinstance(analysis.get("mitigation"), dict) else {}
+                supporting_signals = analysis.get("supporting_signals") if isinstance(analysis.get("supporting_signals"), dict) else {}
+                reasoning_rows.append(
                     {
-                        "Incident ID": incident_id or metrics.get("incident_id", ""),
-                        "CPU Usage": metrics.get("cpu_usage"),
-                        "Memory Usage": metrics.get("memory_usage"),
-                        "Latency P95": metrics.get("latency_p95"),
-                        "Error Rate": metrics.get("error_rate"),
-                        "Thread Pool Saturation": metrics.get("thread_pool_saturation"),
-                        "Raw Metrics JSON": _safe_json(metrics.get("raw_metrics_json")),
+                        "Incident ID": incident_id,
+                        "Analysis ID": _excel_value(analysis.get("id")),
+                        "Classification": _excel_value(analysis.get("classification")),
+                        "Executive Summary": _excel_value(analysis.get("executive_summary")),
+                        "Root Cause": _excel_value(analysis.get("root_cause")),
+                        "Risk Forecast": _excel_value(analysis.get("risk_forecast")),
+                        "Confidence Score": _excel_value(analysis.get("confidence_score")),
+                        "Confidence Breakdown": _excel_value(analysis.get("confidence_breakdown")),
+                        "Supporting Signals": _excel_value(supporting_signals),
+                        "Mitigation Payload": _excel_value(mitigation_data),
+                        "Created At": _excel_value(analysis.get("created_at")),
                     }
                 )
 
-            raw_json_rows.append({"Incident JSON": _safe_json(item)})
+                chain = supporting_signals.get("causal_chain")
+                if isinstance(chain, list):
+                    for idx, step in enumerate(chain, start=1):
+                        causal_chain_rows.append(
+                            {
+                                "Incident ID": incident_id,
+                                "Analysis ID": _excel_value(analysis.get("id")),
+                                "Step": idx,
+                                "Causal Signal": _excel_value(step),
+                            }
+                        )
+
+                correlated_signals = mitigation_data.get("correlated_signals")
+                if isinstance(correlated_signals, dict):
+                    for key, value in correlated_signals.items():
+                        correlation_rows.append(
+                            {
+                                "Incident ID": incident_id,
+                                "Analysis ID": _excel_value(analysis.get("id")),
+                                "Signal": str(key),
+                                "Value": _excel_value(value),
+                            }
+                        )
+
+                suggested_actions = analysis.get("suggested_actions")
+                if isinstance(suggested_actions, dict):
+                    actions = suggested_actions.get("actions")
+                    if isinstance(actions, list):
+                        for idx, action in enumerate(actions, start=1):
+                            recommendation_rows.append(
+                                {
+                                    "Incident ID": incident_id,
+                                    "Analysis ID": _excel_value(analysis.get("id")),
+                                    "Priority": idx,
+                                    "Recommendation": _excel_value(action),
+                                }
+                            )
+                elif isinstance(suggested_actions, list):
+                    for idx, action in enumerate(suggested_actions, start=1):
+                        recommendation_rows.append(
+                            {
+                                "Incident ID": incident_id,
+                                "Analysis ID": _excel_value(analysis.get("id")),
+                                "Priority": idx,
+                                "Recommendation": _excel_value(action),
+                            }
+                        )
+
+            top = item.get("topology_insights") if isinstance(item.get("topology_insights"), dict) else {}
+            raw_payload = incident_obj.get("raw_payload") if isinstance(incident_obj.get("raw_payload"), dict) else {}
+            topology = raw_payload.get("topology") if isinstance(raw_payload.get("topology"), dict) else {}
+            topology_rows.append(
+                {
+                    "Incident ID": incident_id,
+                    "Origin Service": _excel_value(item.get("origin_service")),
+                    "Affected Services": _excel_value(top.get("impacted_services")),
+                    "Service Count": _excel_value(top.get("service_count")),
+                    "Pod Count": _excel_value(top.get("pod_count")),
+                    "Topology Insights": _excel_value(top),
+                    "Topology Graph": _excel_value(topology),
+                }
+            )
+
+            observability = raw_payload.get("observability_registry") if isinstance(raw_payload.get("observability_registry"), dict) else {}
+            if observability:
+                for source, status in observability.items():
+                    observability_rows.append(
+                        {
+                            "Incident ID": incident_id,
+                            "Source": str(source),
+                            "Status": _excel_value(status.get("status") if isinstance(status, dict) else status),
+                            "Endpoint": _excel_value(status.get("endpoint") if isinstance(status, dict) else ""),
+                            "Last Success": _excel_value(status.get("last_success_at") if isinstance(status, dict) else ""),
+                            "Raw Status": _excel_value(status),
+                        }
+                    )
+            else:
+                observability_rows.append(
+                    {
+                        "Incident ID": incident_id,
+                        "Source": "",
+                        "Status": "not_available",
+                        "Endpoint": "",
+                        "Last Success": "",
+                        "Raw Status": "",
+                    }
+                )
+
+            raw_payload_rows.append(
+                {
+                    "Incident ID": incident_id,
+                    "Cluster ID": _excel_value(incident_obj.get("cluster_id")),
+                    "Created At": _excel_value(incident_obj.get("created_at")),
+                    "Incident JSON": _excel_value(detail),
+                    "Raw Payload": _excel_value(raw_payload),
+                    "Incident Analysis JSON": _excel_value(incident_obj.get("analysis_json")),
+                }
+            )
+
+            if len(causal_chain_rows) == chain_rows_before and isinstance(item.get("causal_chain"), list):
+                for idx, step in enumerate(item.get("causal_chain") or [], start=1):
+                    causal_chain_rows.append(
+                        {
+                            "Incident ID": incident_id,
+                            "Analysis ID": "",
+                            "Step": idx,
+                            "Causal Signal": _excel_value(step),
+                        }
+                    )
+
+            if len(correlation_rows) == correlation_rows_before:
+                fallback_correlation = mitigation.get("correlated_signals") if isinstance(mitigation.get("correlated_signals"), dict) else {}
+                for key, value in fallback_correlation.items():
+                    correlation_rows.append(
+                        {
+                            "Incident ID": incident_id,
+                            "Analysis ID": "",
+                            "Signal": str(key),
+                            "Value": _excel_value(value),
+                        }
+                    )
+
+            if len(recommendation_rows) == recommendation_rows_before:
+                fallback_actions = mitigation.get("actions") if isinstance(mitigation.get("actions"), list) else []
+                for idx, action in enumerate(fallback_actions, start=1):
+                    recommendation_rows.append(
+                        {
+                            "Incident ID": incident_id,
+                            "Analysis ID": "",
+                            "Priority": idx,
+                            "Recommendation": _excel_value(action),
+                        }
+                    )
 
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            if not incident_core_rows:
-                pd.DataFrame([{"message": "No data available"}]).to_excel(
-                    writer, index=False, sheet_name="No data available"
+            pd.DataFrame(
+                _row_or_placeholder(
+                    summary_rows,
+                    {"Message": "No incidents found for the selected filters."},
                 )
-            else:
-                pd.DataFrame(incident_core_rows).to_excel(writer, index=False, sheet_name="Incident Core")
-                pd.DataFrame(ai_analysis_rows or [{"Incident ID": "", "Executive Summary": "", "Root Cause": ""}]).to_excel(
-                    writer, index=False, sheet_name="AI Analysis"
+            ).to_excel(writer, index=False, sheet_name="Incident Summary")
+            pd.DataFrame(
+                _row_or_placeholder(
+                    telemetry_rows,
+                    {"Message": "No telemetry metrics available."},
                 )
-                pd.DataFrame(metrics_rows or [{"Incident ID": "", "CPU Usage": "", "Memory Usage": ""}]).to_excel(
-                    writer, index=False, sheet_name="Metrics Snapshot"
+            ).to_excel(writer, index=False, sheet_name="Telemetry Metrics")
+            pd.DataFrame(
+                _row_or_placeholder(
+                    reasoning_rows,
+                    {"Message": "No reasoning analysis available."},
                 )
-                pd.DataFrame(raw_json_rows).to_excel(writer, index=False, sheet_name="Raw JSON")
+            ).to_excel(writer, index=False, sheet_name="Reasoning Analysis")
+            pd.DataFrame(
+                _row_or_placeholder(
+                    causal_chain_rows,
+                    {"Message": "No causal chain data available."},
+                )
+            ).to_excel(writer, index=False, sheet_name="Causal Chain")
+            pd.DataFrame(
+                _row_or_placeholder(
+                    correlation_rows,
+                    {"Message": "No correlated signals available."},
+                )
+            ).to_excel(writer, index=False, sheet_name="Correlated Signals")
+            pd.DataFrame(
+                _row_or_placeholder(
+                    topology_rows,
+                    {"Message": "No topology or origin data available."},
+                )
+            ).to_excel(writer, index=False, sheet_name="Topology and Origin")
+            pd.DataFrame(
+                _row_or_placeholder(
+                    recommendation_rows,
+                    {"Message": "No recommendations available."},
+                )
+            ).to_excel(writer, index=False, sheet_name="Recommendations")
+            pd.DataFrame(
+                _row_or_placeholder(
+                    observability_rows,
+                    {"Message": "No observability registry status available."},
+                )
+            ).to_excel(writer, index=False, sheet_name="Observability Registry Status")
+            pd.DataFrame(
+                _row_or_placeholder(
+                    raw_payload_rows,
+                    {"Message": "No raw incident payload available."},
+                )
+            ).to_excel(writer, index=False, sheet_name="Raw Incident Payload")
         output.seek(0)
         return output.getvalue()
 
-    def persist_from_reasoning(self, alert: AlertSignal, response: LiveReasoningResponse) -> None:
+    def persist_from_telemetry_sample(
+        self,
+        *,
+        alert: AlertSignal,
+        metrics: dict[str, float],
+        raw_payload: dict[str, Any],
+        reasoner,
+        window_minutes: int = 30,
+    ) -> str:
+        response = reasoner.analyze(alert, window_minutes=window_minutes)
+        response.context.metrics.update(
+            {
+                "cpu_usage_cores_5m": float(metrics.get("cpu_usage", 0.0) or 0.0),
+                "memory_usage_bytes": float(metrics.get("memory_usage", 0.0) or 0.0),
+                "request_rate_rps_5m": float(metrics.get("request_rate", 0.0) or 0.0),
+                "pod_restarts_10m": float(metrics.get("pod_restarts", 0.0) or 0.0),
+                "error_rate_5xx_5m": float(metrics.get("error_rate", 0.0) or 0.0),
+                "latency_p95_s_5m": float(metrics.get("latency", 0.0) or 0.0),
+            }
+        )
+        cpu = float(metrics.get("cpu_usage", 0.0) or 0.0)
+        err = float(metrics.get("error_rate", 0.0) or 0.0)
+        mem_mb = float(metrics.get("memory_usage", 0.0) or 0.0) / (1024.0 * 1024.0)
+        rps = float(metrics.get("request_rate", 0.0) or 0.0)
+        if err > 0.05:
+            response.analysis.probable_root_cause = "error_rate_threshold_breached"
+            response.analysis.incident_classification = "Performance Degradation"
+        elif cpu > 0.8:
+            response.analysis.probable_root_cause = "cpu_usage_threshold_breached"
+            response.analysis.incident_classification = "Performance Degradation"
+        response.analysis.executive_summary = (
+            f"Incident-scoped telemetry snapshot: CPU {cpu*100:.1f}%, "
+            f"Memory {mem_mb:.0f}MB, RPS {rps:.2f}, 5xx {err*100:.2f}%."
+        )
+        response.analysis.human_summary = response.analysis.executive_summary
+        topology = raw_payload.get("topology") if isinstance(raw_payload.get("topology"), dict) else {}
+        if topology:
+            response.context.cluster_wiring = topology
+            top = response.analysis.topology_insights if isinstance(response.analysis.topology_insights, dict) else {}
+            if not top:
+                top = {"service_count": 0, "impacted_services": []}
+            if str(top.get("likely_origin_service", "")).strip().lower() in {"", "unknown", "all", "*"}:
+                top["likely_origin_service"] = alert.service
+            response.analysis.topology_insights = top
+            if str(response.analysis.origin_service or "").strip().lower() in {"", "unknown", "all", "*"}:
+                response.analysis.origin_service = str(top.get("likely_origin_service") or alert.service)
+        incident_id = self.persist_from_reasoning(alert, response)
+        incident = self.db.query(Incident).filter(Incident.incident_id == incident_id).first()
+        if incident:
+            merged_payload = dict(raw_payload or {})
+            merged_payload.setdefault("cluster_id", alert.cluster_id or "")
+            merged_payload.setdefault("namespace", alert.namespace)
+            merged_payload.setdefault("service_name", alert.service)
+            merged_payload.setdefault("metrics", metrics)
+            incident.raw_payload = merged_payload
+            incident.analysis = response.analysis.model_dump()
+            self.db.commit()
+        return incident_id
+
+    def persist_from_reasoning(self, alert: AlertSignal, response: LiveReasoningResponse) -> str:
         now = datetime.now(timezone.utc)
         analysis = response.analysis
         context = response.context
@@ -613,3 +906,4 @@ class IncidentsService:
             )
         )
         self.db.commit()
+        return incident_id

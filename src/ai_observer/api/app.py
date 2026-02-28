@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -7,6 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ai_observer.api.routes import agent_router, health_router, incident_analysis_router, incidents_router, reasoning_router
+from ai_observer.backend.services.incident_detection_service import IncidentDetectionEngine
 from ai_observer.core.di import build_container
 from ai_observer.core.logging import setup_logging
 from ai_observer.core.settings import AppSettings, load_settings
@@ -17,7 +19,17 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
     setup_logging()
     cfg = settings or load_settings()
 
-    app = FastAPI(title="AI Observer Agent", version="3.0.0")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        detector = IncidentDetectionEngine(app)
+        app.state.incident_detector = detector
+        await detector.start()
+        try:
+            yield
+        finally:
+            await detector.stop()
+
+    app = FastAPI(title="AI Observer Agent", version="3.0.0", lifespan=lifespan)
     app.state.container = build_container(cfg)
     init_database(cfg.database.url, cfg.database.echo_sql)
 

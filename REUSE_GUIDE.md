@@ -10,7 +10,7 @@ Core flow:
 
 Incident-driven runtime contract:
 
-- Reasoning is executed during incident creation/persistence paths (agent push / webhook), not dashboard refresh.
+- Reasoning is executed only when an incident is created (threshold breach in detector/push/webhook), not dashboard refresh.
 - Dashboard and history pages read stored incident + stored reasoning from `/api/incidents` and `/api/incidents/{id}`.
 - `/api/reasoning/live` is for diagnostics and must not be used as the primary UI data source.
 
@@ -52,6 +52,7 @@ All modules accept structured telemetry and produce structured output without ha
 - DB connection (`DATABASE_URL` or DB vars)
 - Agent auth token (`AGENT_TOKEN`)
 - Central push URL (`CENTRAL_URL` on agent side)
+- Detection config (`INCIDENT_DETECTION_INTERVAL`, `ANOMALY_THRESHOLD`, `INCIDENT_DETECTION_ENABLED`)
 
 ## Deploy Backend (Central)
 
@@ -121,6 +122,9 @@ Key env variables:
 6. Dashboard is incident-view only:
    - open `/dashboard`
    - confirm backend logs show `/api/incidents` calls during refresh, not `/api/reasoning/live`
+7. Detector creates incidents only on anomalies:
+   - verify `telemetry_samples` grows continuously
+   - verify incidents are created only when sample score crosses threshold
 
 ## Canonical Narrative Consistency
 

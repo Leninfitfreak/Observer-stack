@@ -69,6 +69,10 @@ Runtime:
 - `DISCOVERY_NAMESPACES`
 - `OBS_DISCOVERY_REFRESH_SECONDS`
 - `OBS_DISCOVERY_VALIDATION_TIMEOUT_SECONDS`
+- `INCIDENT_DETECTION_ENABLED`
+- `INCIDENT_DETECTION_INTERVAL`
+- `ANOMALY_THRESHOLD`
+- `SERVICE_DISCOVERY_MODE`
 
 ## Docker Compose
 
@@ -145,6 +149,12 @@ Live reasoning (diagnostic only; dashboard should not depend on this):
 ```bash
 curl "http://localhost:8080/api/reasoning/live?namespace=dev&service=all&cluster=minikube-dev&time_window=30m"
 ```
+
+Detector behavior:
+
+- Telemetry is always written into `telemetry_samples`.
+- Incidents are created only when anomaly score crosses `ANOMALY_THRESHOLD`.
+- Reasoning runs only when a new incident is created (push path or detector loop), never on dashboard refresh.
 
 Incidents API:
 
