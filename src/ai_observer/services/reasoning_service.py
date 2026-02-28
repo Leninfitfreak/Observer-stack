@@ -68,8 +68,11 @@ class ReasoningService:
     def _incident_classification(metrics: dict[str, Any], missing_observability: list[str]) -> str:
         error_rate = float(metrics.get("error_rate_5xx_5m", 0) or 0)
         latency = float(metrics.get("latency_p95_s_5m", 0) or 0)
+        baseline_anomaly = float(metrics.get("baseline_anomaly_score", 0) or 0)
         if missing_observability:
             return "Observability Gap"
+        if baseline_anomaly >= 0.65:
+            return "Performance Degradation"
         if error_rate > 0.05 or latency > 0.75:
             return "Performance Degradation"
         return "False Positive"
@@ -95,6 +98,12 @@ class ReasoningService:
         db_pool = float(metrics.get("db_connection_pool_usage_5m", 0) or 0)
         thread_sat = float(metrics.get("thread_pool_saturation_5m", 0) or 0)
         kafka_lag = float(metrics.get("kafka_consumer_lag", 0) or 0)
+        baseline_anomaly = float(metrics.get("baseline_anomaly_score", 0) or 0)
+        cpu_baseline_score = float(metrics.get("cpu_baseline_anomaly_30m", 0) or 0)
+        memory_baseline_score = float(metrics.get("memory_baseline_anomaly_30m", 0) or 0)
+        request_baseline_score = float(metrics.get("request_rate_baseline_anomaly_30m", 0) or 0)
+        error_baseline_score = float(metrics.get("error_rate_baseline_anomaly_30m", 0) or 0)
+        restart_baseline_score = float(metrics.get("pod_restarts_baseline_anomaly_30m", 0) or 0)
 
         cpu_saturation_score = ReasoningService._clamp(cpu_pct / 80.0)
         latency_deviation_score = ReasoningService._clamp(((p95_cur - p95_base) / p95_base) if p95_base > 0 else (p95_cur / 0.75 if p95_cur > 0 else 0))
@@ -114,8 +123,16 @@ class ReasoningService:
             + (0.10 * db_pressure_score)
             + (0.07 * thread_pressure_score)
             + (0.07 * kafka_pressure_score)
+            + (0.22 * baseline_anomaly)
+            + (0.08 * cpu_baseline_score)
+            + (0.07 * memory_baseline_score)
+            + (0.06 * request_baseline_score)
+            + (0.08 * error_baseline_score)
+            + (0.04 * restart_baseline_score)
             - (0.12 * observability_penalty)
         )
+        # Ensure baseline deviation has a direct effect on anomaly score even with sparse observability.
+        overall_anomaly_score = max(overall_anomaly_score, ReasoningService._clamp(baseline_anomaly * 0.7))
 
         return {
             "cpu_saturation_score": cpu_saturation_score,
@@ -126,6 +143,12 @@ class ReasoningService:
             "thread_pressure_score": thread_pressure_score,
             "kafka_pressure_score": kafka_pressure_score,
             "observability_penalty": observability_penalty,
+            "baseline_anomaly_score": baseline_anomaly,
+            "cpu_baseline_anomaly_score": cpu_baseline_score,
+            "memory_baseline_anomaly_score": memory_baseline_score,
+            "request_baseline_anomaly_score": request_baseline_score,
+            "error_baseline_anomaly_score": error_baseline_score,
+            "restart_baseline_anomaly_score": restart_baseline_score,
             "overall_anomaly_score": overall_anomaly_score,
         }
 
@@ -235,8 +258,12 @@ class ReasoningService:
         err_pct = float(metrics.get("error_rate_5xx_5m", 0) or 0) * 100
         cpu_pct = float(metrics.get("cpu_usage_cores_5m", 0) or 0) * 100
         mem_mb = float(metrics.get("memory_usage_bytes", 0) or 0) / (1024 * 1024)
+        baseline_score = float(metrics.get("baseline_anomaly_score", 0) or 0)
+        baseline_window = str(metrics.get("baseline_window_used", "30m"))
 
-        if err_pct > 5 or p95_ms > 750:
+        if baseline_score >= 0.65:
+            summary = "Behavioral anomaly detected from historical baseline deviation."
+        elif err_pct > 5 or p95_ms > 750:
             summary = "Service behavior indicates active degradation with elevated latency and/or error pressure."
         elif rps <= 0.01:
             summary = "Traffic is currently minimal; no reliable evidence of active degradation in this window."
@@ -247,6 +274,7 @@ class ReasoningService:
             "No error-rate growth detected." if err_pct <= 1 else "Error-rate growth detected and requires watch.",
             "Resource utilization is below saturation thresholds." if cpu_pct < 80 and mem_mb < 1024 else "Resource utilization is approaching saturation thresholds.",
             "No evidence of active degradation." if err_pct <= 1 and p95_ms <= 750 else "Latency or failure signals indicate active degradation.",
+            f"Baseline anomaly score ({baseline_window}) = {baseline_score:.2f}.",
         ]
         return summary, bullets
 

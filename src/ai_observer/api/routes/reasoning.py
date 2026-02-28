@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -127,7 +128,7 @@ def _telemetry_for_incident(db: Session, incident: Incident) -> dict[str, float]
     }
 
 
-def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tuple[dict[str, Any], dict[str, dict[str, float]]]:
     query = db.query(Incident).filter(Incident.incident_id.ilike("agent-%")).order_by(Incident.created_at.desc())
     if cluster_id:
         rows = query.filter(Incident.cluster_id == cluster_id).limit(100).all()
@@ -136,6 +137,13 @@ def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tupl
     else:
         rows = query.limit(100).all()
     component_metrics: dict[str, dict[str, float]] = {}
+    metric_samples: dict[str, list[tuple[float, Any]]] = {
+        "cpu_usage_cores_5m": [],
+        "memory_usage_bytes": [],
+        "request_rate_rps_5m": [],
+        "error_rate_5xx_5m": [],
+        "pod_restarts_10m": [],
+    }
 
     for row in rows:
         resolved = _telemetry_for_incident(db, row)
@@ -146,17 +154,138 @@ def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tupl
         if service not in component_metrics:
             component_metrics[service] = resolved
 
+        ts = row.created_at
+        for key in metric_samples.keys():
+            metric_samples[key].append((float(resolved.get(key, 0.0) or 0.0), ts))
+
     if not component_metrics:
         return {}, {}
 
-    aggregated = {
+    aggregated: dict[str, float | str] = {
         "cpu_usage_cores_5m": max(v.get("cpu_usage_cores_5m", 0.0) for v in component_metrics.values()),
         "memory_usage_bytes": sum(v.get("memory_usage_bytes", 0.0) for v in component_metrics.values()),
         "request_rate_rps_5m": sum(v.get("request_rate_rps_5m", 0.0) for v in component_metrics.values()),
         "pod_restarts_10m": sum(v.get("pod_restarts_10m", 0.0) for v in component_metrics.values()),
         "error_rate_5xx_5m": sum(v.get("error_rate_5xx_5m", 0.0) for v in component_metrics.values()),
     }
-    return aggregated, component_metrics
+
+    def _mean_std(values: list[float]) -> tuple[float, float]:
+        if not values:
+            return 0.0, 0.0
+        mean = sum(values) / len(values)
+        if len(values) == 1:
+            return mean, 0.0
+        var = sum((v - mean) ** 2 for v in values) / len(values)
+        return mean, math.sqrt(max(var, 0.0))
+
+    def _zscore(current: float, mean: float, stddev: float) -> float:
+        effective_std = max(abs(stddev), abs(mean) * 0.1, 1e-6)
+        return (current - mean) / effective_std
+
+    def _zscore_to_score(z: float) -> float:
+        return max(0.0, min(1.0, abs(z) / 3.0))
+
+    # Build historical baselines using recent incident telemetry as fallback.
+    now_ts = rows[0].created_at if rows else None
+    windows = {"5m": 5 * 60, "30m": 30 * 60, "1h": 60 * 60}
+    for suffix, seconds in windows.items():
+        for metric_key, samples in metric_samples.items():
+            if now_ts is None:
+                window_values = [v for v, _ in samples]
+            else:
+                window_values = [
+                    v
+                    for v, ts in samples
+                    if ts is not None and abs((now_ts - ts).total_seconds()) <= seconds
+                ]
+                if not window_values:
+                    window_values = [v for v, _ in samples]
+            mean, stddev = _mean_std(window_values)
+            aggregated[f"{metric_key.replace('_5m', '').replace('_10m', '')}_baseline_mean_{suffix}"] = mean
+            aggregated[f"{metric_key.replace('_5m', '').replace('_10m', '')}_baseline_stddev_{suffix}"] = stddev
+            current = float(aggregated.get(metric_key, 0.0) or 0.0)
+            z = _zscore(current, mean, stddev)
+            aggregated[f"{metric_key.replace('_5m', '').replace('_10m', '')}_baseline_zscore_{suffix}"] = z
+            aggregated[f"{metric_key.replace('_5m', '').replace('_10m', '')}_baseline_anomaly_{suffix}"] = _zscore_to_score(z)
+
+    # Normalize names to match Prometheus provider contract exactly.
+    rename_pairs = {
+        "cpu_usage_cores_baseline_mean_5m": "cpu_baseline_mean_5m",
+        "cpu_usage_cores_baseline_mean_30m": "cpu_baseline_mean_30m",
+        "cpu_usage_cores_baseline_mean_1h": "cpu_baseline_mean_1h",
+        "cpu_usage_cores_baseline_stddev_5m": "cpu_baseline_stddev_5m",
+        "cpu_usage_cores_baseline_stddev_30m": "cpu_baseline_stddev_30m",
+        "cpu_usage_cores_baseline_stddev_1h": "cpu_baseline_stddev_1h",
+        "cpu_usage_cores_baseline_zscore_5m": "cpu_baseline_zscore_5m",
+        "cpu_usage_cores_baseline_zscore_30m": "cpu_baseline_zscore_30m",
+        "cpu_usage_cores_baseline_zscore_1h": "cpu_baseline_zscore_1h",
+        "cpu_usage_cores_baseline_anomaly_5m": "cpu_baseline_anomaly_5m",
+        "cpu_usage_cores_baseline_anomaly_30m": "cpu_baseline_anomaly_30m",
+        "cpu_usage_cores_baseline_anomaly_1h": "cpu_baseline_anomaly_1h",
+        "memory_usage_bytes_baseline_mean_5m": "memory_baseline_mean_5m",
+        "memory_usage_bytes_baseline_mean_30m": "memory_baseline_mean_30m",
+        "memory_usage_bytes_baseline_mean_1h": "memory_baseline_mean_1h",
+        "memory_usage_bytes_baseline_stddev_5m": "memory_baseline_stddev_5m",
+        "memory_usage_bytes_baseline_stddev_30m": "memory_baseline_stddev_30m",
+        "memory_usage_bytes_baseline_stddev_1h": "memory_baseline_stddev_1h",
+        "memory_usage_bytes_baseline_zscore_5m": "memory_baseline_zscore_5m",
+        "memory_usage_bytes_baseline_zscore_30m": "memory_baseline_zscore_30m",
+        "memory_usage_bytes_baseline_zscore_1h": "memory_baseline_zscore_1h",
+        "memory_usage_bytes_baseline_anomaly_5m": "memory_baseline_anomaly_5m",
+        "memory_usage_bytes_baseline_anomaly_30m": "memory_baseline_anomaly_30m",
+        "memory_usage_bytes_baseline_anomaly_1h": "memory_baseline_anomaly_1h",
+        "request_rate_rps_baseline_mean_5m": "request_rate_baseline_mean_5m",
+        "request_rate_rps_baseline_mean_30m": "request_rate_baseline_mean_30m",
+        "request_rate_rps_baseline_mean_1h": "request_rate_baseline_mean_1h",
+        "request_rate_rps_baseline_stddev_5m": "request_rate_baseline_stddev_5m",
+        "request_rate_rps_baseline_stddev_30m": "request_rate_baseline_stddev_30m",
+        "request_rate_rps_baseline_stddev_1h": "request_rate_baseline_stddev_1h",
+        "request_rate_rps_baseline_zscore_5m": "request_rate_baseline_zscore_5m",
+        "request_rate_rps_baseline_zscore_30m": "request_rate_baseline_zscore_30m",
+        "request_rate_rps_baseline_zscore_1h": "request_rate_baseline_zscore_1h",
+        "request_rate_rps_baseline_anomaly_5m": "request_rate_baseline_anomaly_5m",
+        "request_rate_rps_baseline_anomaly_30m": "request_rate_baseline_anomaly_30m",
+        "request_rate_rps_baseline_anomaly_1h": "request_rate_baseline_anomaly_1h",
+        "error_rate_5xx_baseline_mean_5m": "error_rate_baseline_mean_5m",
+        "error_rate_5xx_baseline_mean_30m": "error_rate_baseline_mean_30m",
+        "error_rate_5xx_baseline_mean_1h": "error_rate_baseline_mean_1h",
+        "error_rate_5xx_baseline_stddev_5m": "error_rate_baseline_stddev_5m",
+        "error_rate_5xx_baseline_stddev_30m": "error_rate_baseline_stddev_30m",
+        "error_rate_5xx_baseline_stddev_1h": "error_rate_baseline_stddev_1h",
+        "error_rate_5xx_baseline_zscore_5m": "error_rate_baseline_zscore_5m",
+        "error_rate_5xx_baseline_zscore_30m": "error_rate_baseline_zscore_30m",
+        "error_rate_5xx_baseline_zscore_1h": "error_rate_baseline_zscore_1h",
+        "error_rate_5xx_baseline_anomaly_5m": "error_rate_baseline_anomaly_5m",
+        "error_rate_5xx_baseline_anomaly_30m": "error_rate_baseline_anomaly_30m",
+        "error_rate_5xx_baseline_anomaly_1h": "error_rate_baseline_anomaly_1h",
+        "pod_restarts_baseline_mean_5m": "pod_restarts_baseline_mean_5m",
+        "pod_restarts_baseline_mean_30m": "pod_restarts_baseline_mean_30m",
+        "pod_restarts_baseline_mean_1h": "pod_restarts_baseline_mean_1h",
+        "pod_restarts_baseline_stddev_5m": "pod_restarts_baseline_stddev_5m",
+        "pod_restarts_baseline_stddev_30m": "pod_restarts_baseline_stddev_30m",
+        "pod_restarts_baseline_stddev_1h": "pod_restarts_baseline_stddev_1h",
+        "pod_restarts_baseline_zscore_5m": "pod_restarts_baseline_zscore_5m",
+        "pod_restarts_baseline_zscore_30m": "pod_restarts_baseline_zscore_30m",
+        "pod_restarts_baseline_zscore_1h": "pod_restarts_baseline_zscore_1h",
+        "pod_restarts_baseline_anomaly_5m": "pod_restarts_baseline_anomaly_5m",
+        "pod_restarts_baseline_anomaly_30m": "pod_restarts_baseline_anomaly_30m",
+        "pod_restarts_baseline_anomaly_1h": "pod_restarts_baseline_anomaly_1h",
+    }
+    for src, dst in rename_pairs.items():
+        if src in aggregated:
+            aggregated[dst] = float(aggregated[src] or 0.0)
+
+    aggregated["baseline_window_used"] = "30m"
+    weighted = (
+        0.25 * float(aggregated.get("cpu_baseline_anomaly_30m", 0.0) or 0.0)
+        + 0.2 * float(aggregated.get("memory_baseline_anomaly_30m", 0.0) or 0.0)
+        + 0.2 * float(aggregated.get("request_rate_baseline_anomaly_30m", 0.0) or 0.0)
+        + 0.25 * float(aggregated.get("error_rate_baseline_anomaly_30m", 0.0) or 0.0)
+        + 0.1 * float(aggregated.get("pod_restarts_baseline_anomaly_30m", 0.0) or 0.0)
+    )
+    aggregated["baseline_anomaly_score"] = max(0.0, min(1.0, weighted))
+
+    return {k: float(v) if isinstance(v, (int, float)) else v for k, v in aggregated.items()}, component_metrics
 
 
 def _refresh_analysis_from_metrics(response: LiveReasoningResponse) -> None:
@@ -166,9 +295,13 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse) -> None:
     rps = _as_float(metrics.get("request_rate_rps_5m", 0.0))
     restarts = _as_float(metrics.get("pod_restarts_10m", 0.0))
     err = _as_float(metrics.get("error_rate_5xx_5m", 0.0))
+    baseline_score = _as_float(metrics.get("baseline_anomaly_score", 0.0))
 
     if err > 0.05:
         response.analysis.probable_root_cause = "error_rate_threshold_breached"
+        response.analysis.incident_classification = "Performance Degradation"
+    elif baseline_score >= 0.65:
+        response.analysis.probable_root_cause = "baseline_deviation_zscore_high"
         response.analysis.incident_classification = "Performance Degradation"
     elif cpu > 0.8:
         response.analysis.probable_root_cause = "cpu_usage_threshold_breached"
@@ -192,6 +325,24 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse) -> None:
         f"Telemetry source resolved via prioritized incident pipeline (snapshot/raw_payload/mitigation).",
         f"Current metrics: CPU {cpu*100:.2f}%, Memory {mem_mb:.0f}MB, RPS {rps:.3f}, 5xx {err*100:.2f}%.",
     ]
+    evidence_lines = [
+        f"Baseline anomaly score (30m): {baseline_score:.3f}.",
+        f"CPU deviation z-score (30m): {_as_float(metrics.get('cpu_baseline_zscore_30m', 0.0)):.3f}.",
+        f"Memory deviation z-score (30m): {_as_float(metrics.get('memory_baseline_zscore_30m', 0.0)):.3f}.",
+        f"Request rate deviation z-score (30m): {_as_float(metrics.get('request_rate_baseline_zscore_30m', 0.0)):.3f}.",
+    ]
+    response.analysis.change_detection_context = list(response.analysis.change_detection_context or []) + evidence_lines
+    response.analysis.anomaly_summary = {
+        "score": round(baseline_score, 3),
+        "threshold": 0.65,
+        "status": "Anomalous" if baseline_score >= 0.65 else "Normal",
+    }
+    response.context.signal_scores = response.context.signal_scores or {}
+    response.context.signal_scores["baseline_anomaly_score"] = baseline_score
+    response.context.signal_scores["overall_anomaly_score"] = max(
+        _as_float(response.context.signal_scores.get("overall_anomaly_score", 0.0)),
+        baseline_score * 0.7,
+    )
     logger.info("Refreshed analysis why_not_resource_saturation=%s", response.analysis.why_not_resource_saturation)
 
 
