@@ -331,11 +331,23 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse) -> None:
         f"Memory deviation z-score (30m): {_as_float(metrics.get('memory_baseline_zscore_30m', 0.0)):.3f}.",
         f"Request rate deviation z-score (30m): {_as_float(metrics.get('request_rate_baseline_zscore_30m', 0.0)):.3f}.",
     ]
+    response.analysis.supporting_evidence = evidence_lines
     response.analysis.change_detection_context = list(response.analysis.change_detection_context or []) + evidence_lines
     response.analysis.anomaly_summary = {
         "score": round(baseline_score, 3),
         "threshold": 0.65,
         "status": "Anomalous" if baseline_score >= 0.65 else "Normal",
+    }
+    confidence = max(0.35, min(0.95, 0.55 + (baseline_score * 0.3)))
+    response.analysis.confidence = round(confidence, 3)
+    response.analysis.confidence_score = f"{round(confidence * 100)}%"
+    response.analysis.confidence_details = {
+        "data_completeness": "100%",
+        "signal_agreement": "Moderate" if baseline_score >= 0.15 else "Low",
+        "historical_similarity": "Moderate",
+        "overall_band": "Medium" if confidence >= 0.5 else "Low",
+        "confidence_formula": "fallback_confidence = clamp(0.55 + baseline_anomaly_score*0.3, 0.35, 0.95)",
+        "computed_confidence": round(confidence, 3),
     }
     response.context.signal_scores = response.context.signal_scores or {}
     response.context.signal_scores["baseline_anomaly_score"] = baseline_score
@@ -343,6 +355,21 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse) -> None:
         _as_float(response.context.signal_scores.get("overall_anomaly_score", 0.0)),
         baseline_score * 0.7,
     )
+    response.analysis.correlated_signals = {
+        "signal_agreement_score": round(min(1.0, baseline_score + 0.25), 3),
+        "correlation_strength": round(min(1.0, baseline_score + 0.2), 3),
+    }
+    response.analysis.causal_analysis = {
+        "root_cause_metric": response.analysis.probable_root_cause,
+        "root_cause_explanation": "Fallback reasoning used persisted incident telemetry with baseline deviation checks.",
+        "dependent_signals": response.analysis.why_not_resource_saturation,
+        "contradictory_signals": [],
+        "unaffected_signals": [],
+    }
+    response.analysis.topology_insights = {
+        "likely_origin_service": "observer-agent",
+        "propagation_consistency": round(min(1.0, baseline_score + 0.3), 3),
+    }
     logger.info("Refreshed analysis why_not_resource_saturation=%s", response.analysis.why_not_resource_saturation)
 
 

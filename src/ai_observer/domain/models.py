@@ -59,6 +59,10 @@ class ReasoningResult(BaseModel):
     causal_likelihoods: dict[str, Any] = Field(default_factory=dict)
     incident_lifecycle: dict[str, Any] = Field(default_factory=dict)
     anomaly_summary: dict[str, Any] = Field(default_factory=dict)
+    supporting_evidence: list[str] = Field(default_factory=list)
+    correlated_signals: dict[str, Any] = Field(default_factory=dict)
+    causal_analysis: dict[str, Any] = Field(default_factory=dict)
+    topology_insights: dict[str, Any] = Field(default_factory=dict)
     engine_boundary_note: str | None = None
 
 

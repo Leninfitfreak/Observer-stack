@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from typing import Any
 
 from ai_observer.domain.interfaces import ClusterWiringProvider, LlmProvider, LogsProvider, MetricsProvider, TracesProvider
@@ -27,6 +28,41 @@ class ReasoningService:
     @staticmethod
     def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
         return max(lo, min(hi, value))
+
+    @staticmethod
+    def _num(metrics: dict[str, Any], key: str, default: float = 0.0) -> float:
+        try:
+            return float(metrics.get(key, default) or default)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _mean(values: list[float]) -> float:
+        if not values:
+            return 0.0
+        return sum(values) / len(values)
+
+    @staticmethod
+    def _stddev(values: list[float]) -> float:
+        if len(values) <= 1:
+            return 0.0
+        avg = ReasoningService._mean(values)
+        variance = sum((v - avg) ** 2 for v in values) / len(values)
+        return math.sqrt(max(variance, 0.0))
+
+    @staticmethod
+    def _pearson(xs: list[float], ys: list[float]) -> float:
+        if len(xs) != len(ys) or len(xs) < 3:
+            return 0.0
+        mx = ReasoningService._mean(xs)
+        my = ReasoningService._mean(ys)
+        num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        den_x = math.sqrt(sum((x - mx) ** 2 for x in xs))
+        den_y = math.sqrt(sum((y - my) ** 2 for y in ys))
+        den = den_x * den_y
+        if den <= 0:
+            return 0.0
+        return max(-1.0, min(1.0, num / den))
 
     @staticmethod
     def _is_infra_service(name: str) -> bool:
@@ -182,13 +218,18 @@ class ReasoningService:
         }
 
     def _lifecycle_progression(self, incident_key: str, metrics: dict[str, Any]) -> dict[str, Any]:
-        prev = self._incident_state.get(incident_key, {})
+        state = self._incident_state.get(incident_key, {})
+        history = list(state.get("history", []))
+        prev = history[-1] if history else {}
         current = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "p95": float(metrics.get("latency_p95_s_5m", 0) or 0),
             "err": float(metrics.get("error_rate_5xx_5m", 0) or 0),
             "score": float(metrics.get("overall_anomaly_score", 0) or 0),
             "restarts": float(metrics.get("pod_restarts_10m", 0) or 0),
+            "cpu": float(metrics.get("cpu_usage_cores_5m", 0) or 0),
+            "memory": float(metrics.get("memory_usage_bytes", 0) or 0),
+            "rps": float(metrics.get("request_rate_rps_5m", 0) or 0),
         }
         progression = "steady"
         if prev:
@@ -204,12 +245,25 @@ class ReasoningService:
             else:
                 mitigation_effect = "Post-restart, no improvement observed; infrastructure issue likelihood reduced."
 
-        self._incident_state[incident_key] = current
+        history.append(current)
+        history = history[-12:]
+        anomaly_samples = [float(s.get("score", 0) or 0) for s in history]
+        stability = 1.0 - self._clamp(self._stddev(anomaly_samples) / 0.25)
+        short = anomaly_samples[-3:] if len(anomaly_samples) >= 3 else anomaly_samples
+        long = anomaly_samples
+        trend_delta = (self._mean(short) - self._mean(long)) if long else 0.0
+        temporal_consistency = 1.0 - self._clamp(abs(trend_delta) / 0.25)
+
+        self._incident_state[incident_key] = {"history": history}
         return {
             "progression": progression,
             "mitigation_effect": mitigation_effect,
             "previous": prev or None,
             "current": current,
+            "history": history,
+            "signal_stability": round(stability, 3),
+            "temporal_consistency": round(temporal_consistency, 3),
+            "trend_delta": round(trend_delta, 4),
         }
 
     @staticmethod
@@ -227,7 +281,268 @@ class ReasoningService:
         return round(max(1.0, min(99.0, prob)), 1)
 
     @staticmethod
+    def _topology_awareness(
+        alert: AlertSignal,
+        cluster_wiring: dict[str, Any],
+        component_metrics: dict[str, dict[str, Any]],
+    ) -> dict[str, Any]:
+        edges = cluster_wiring.get("edges", []) or []
+        services = sorted({str(n.get("id")) for n in cluster_wiring.get("nodes", []) if n.get("kind") == "service"})
+        service_to_pods: dict[str, list[str]] = {}
+        for edge in edges:
+            src = str(edge.get("from", "")).strip()
+            dst = str(edge.get("to", "")).strip()
+            if src and dst:
+                service_to_pods.setdefault(src, []).append(dst)
+        for svc in list(service_to_pods.keys()):
+            service_to_pods[svc] = sorted(set(service_to_pods[svc]))
+
+        def svc_anomaly(svc_metrics: dict[str, Any]) -> float:
+            baseline = float(svc_metrics.get("baseline_anomaly_score", 0) or 0)
+            err = float(svc_metrics.get("error_rate_5xx_5m", 0) or 0)
+            lat = float(svc_metrics.get("latency_p95_s_5m", 0) or 0)
+            cpu = float(svc_metrics.get("cpu_usage_cores_5m", 0) or 0)
+            return ReasoningService._clamp((0.35 * baseline) + (0.3 * (err / 0.05 if err > 0 else 0)) + (0.2 * (lat / 0.75 if lat > 0 else 0)) + (0.15 * (cpu / 0.8 if cpu > 0 else 0)))
+
+        ranked: list[tuple[str, float]] = []
+        for svc, svc_metrics in component_metrics.items():
+            ranked.append((svc, svc_anomaly(svc_metrics)))
+        ranked.sort(key=lambda item: item[1], reverse=True)
+        likely_origin = ranked[0][0] if ranked else (alert.service if alert.service not in {"all", "*"} else "unknown")
+        likely_origin_score = ranked[0][1] if ranked else 0.0
+
+        impacted = [svc for svc, score in ranked if score >= 0.2]
+        downstream_coverage = ReasoningService._clamp((len(impacted) / max(len(services), 1)) if services else 0.0)
+        propagation_consistency = ReasoningService._clamp((0.7 * likely_origin_score) + (0.3 * downstream_coverage))
+        return {
+            "service_count": len(services),
+            "service_to_pods": service_to_pods,
+            "ranked_services": [{"service": s, "score": round(v, 3)} for s, v in ranked[:8]],
+            "likely_origin_service": likely_origin,
+            "likely_origin_score": round(likely_origin_score, 3),
+            "impacted_services": impacted,
+            "propagation_consistency": round(propagation_consistency, 3),
+            "has_dependency_graph": bool(services and edges),
+        }
+
+    @staticmethod
+    def _correlation_engine(metrics: dict[str, Any], component_metrics: dict[str, dict[str, Any]], lifecycle: dict[str, Any]) -> dict[str, Any]:
+        cpu = float(metrics.get("cpu_usage_cores_5m", 0) or 0)
+        memory = float(metrics.get("memory_usage_bytes", 0) or 0)
+        rps = float(metrics.get("request_rate_rps_5m", 0) or 0)
+        error = float(metrics.get("error_rate_5xx_5m", 0) or 0)
+        restarts = float(metrics.get("pod_restarts_10m", 0) or 0)
+        latency = float(metrics.get("latency_p95_s_5m", 0) or 0)
+
+        agreement_votes = 0
+        total_votes = 0
+        if latency > 0 and error > 0:
+            total_votes += 1
+            agreement_votes += 1 if (latency > 0.5 and error > 0.02) else 0
+        if cpu > 0 and latency > 0:
+            total_votes += 1
+            agreement_votes += 1 if (cpu > 0.6 and latency > 0.5) else 0
+        if rps > 0 and latency > 0:
+            total_votes += 1
+            agreement_votes += 1 if (rps > 0.2 and latency > 0.4) else 0
+        if restarts > 0:
+            total_votes += 1
+            agreement_votes += 1 if (error > 0.01 or latency > 0.4) else 0
+        if memory > 0 and latency > 0:
+            total_votes += 1
+            agreement_votes += 1 if (memory > (512 * 1024 * 1024) and latency > 0.4) else 0
+        signal_agreement = ReasoningService._clamp((agreement_votes / total_votes) if total_votes else 0.4)
+
+        rows = list(component_metrics.items())
+        pairwise: dict[str, float] = {}
+        if len(rows) >= 3:
+            cpu_series = [float(v.get("cpu_usage_cores_5m", 0) or 0) for _, v in rows]
+            err_series = [float(v.get("error_rate_5xx_5m", 0) or 0) for _, v in rows]
+            lat_series = [float(v.get("latency_p95_s_5m", 0) or 0) for _, v in rows]
+            rps_series = [float(v.get("request_rate_rps_5m", 0) or 0) for _, v in rows]
+            pairwise["cpu_vs_latency"] = round(ReasoningService._pearson(cpu_series, lat_series), 3)
+            pairwise["error_vs_latency"] = round(ReasoningService._pearson(err_series, lat_series), 3)
+            pairwise["rps_vs_latency"] = round(ReasoningService._pearson(rps_series, lat_series), 3)
+            pairwise["cpu_vs_error"] = round(ReasoningService._pearson(cpu_series, err_series), 3)
+        else:
+            pairwise["cpu_vs_latency"] = round(ReasoningService._clamp((cpu / 0.8) * (latency / 0.75) if latency > 0 else 0), 3)
+            pairwise["error_vs_latency"] = round(ReasoningService._clamp((error / 0.05) * (latency / 0.75) if latency > 0 else 0), 3)
+            pairwise["rps_vs_latency"] = round(ReasoningService._clamp((rps / 1.0) * (latency / 0.75) if latency > 0 else 0), 3)
+            pairwise["cpu_vs_error"] = round(ReasoningService._clamp((cpu / 0.8) * (error / 0.05) if error > 0 else 0), 3)
+
+        correlation_strength = ReasoningService._clamp(
+            (
+                abs(pairwise.get("cpu_vs_latency", 0))
+                + abs(pairwise.get("error_vs_latency", 0))
+                + abs(pairwise.get("rps_vs_latency", 0))
+                + abs(pairwise.get("cpu_vs_error", 0))
+            )
+            / 4.0
+        )
+
+        temporal = float(lifecycle.get("temporal_consistency", 0.5) or 0.5)
+        return {
+            "signal_agreement_score": round(signal_agreement, 3),
+            "correlation_strength": round(correlation_strength, 3),
+            "pairwise_correlations": pairwise,
+            "temporal_alignment_score": round(temporal, 3),
+        }
+
+    @staticmethod
+    def _advanced_confidence(
+        metrics: dict[str, Any],
+        missing_observability: list[str],
+        datasource_errors: dict[str, Any],
+        signal_scores: dict[str, Any],
+        correlation: dict[str, Any],
+        topology: dict[str, Any],
+        lifecycle: dict[str, Any],
+    ) -> dict[str, Any]:
+        metric_keys = [
+            "cpu_usage_cores_5m",
+            "memory_usage_bytes",
+            "request_rate_rps_5m",
+            "error_rate_5xx_5m",
+            "pod_restarts_10m",
+            "latency_p95_s_5m",
+            "baseline_anomaly_score",
+        ]
+        present = sum(1 for k in metric_keys if float(metrics.get(k, 0) or 0) > 0 or k == "pod_restarts_10m")
+        telemetry_completeness = ReasoningService._clamp(present / len(metric_keys))
+        anomaly_strength = ReasoningService._clamp(float(signal_scores.get("overall_anomaly_score", 0) or 0))
+        baseline_magnitude = ReasoningService._clamp(float(metrics.get("baseline_anomaly_score", 0) or 0))
+        # Confidence represents certainty, not severity: both clearly-normal and clearly-anomalous
+        # conditions can have high confidence.
+        anomaly_certainty = abs((anomaly_strength * 2.0) - 1.0)
+        baseline_certainty = abs((baseline_magnitude * 2.0) - 1.0)
+        agreement = ReasoningService._clamp(float(correlation.get("signal_agreement_score", 0.4) or 0.4))
+        corr_strength = ReasoningService._clamp(float(correlation.get("correlation_strength", 0.4) or 0.4))
+        stability = ReasoningService._clamp(float(lifecycle.get("signal_stability", 0.5) or 0.5))
+        temporal_consistency = ReasoningService._clamp(float(lifecycle.get("temporal_consistency", 0.5) or 0.5))
+        topology_consistency = ReasoningService._clamp(float(topology.get("propagation_consistency", 0.5) or 0.5))
+        data_penalty = ReasoningService._clamp((len(missing_observability) * 0.06) + (len(datasource_errors or {}) * 0.1))
+        historical_consistency = ReasoningService._clamp((0.55 * stability) + (0.45 * temporal_consistency))
+
+        confidence = ReasoningService._clamp(
+            (0.22 * telemetry_completeness)
+            + (0.14 * agreement)
+            + (0.10 * baseline_certainty)
+            + (0.14 * anomaly_certainty)
+            + (0.10 * stability)
+            + (0.10 * historical_consistency)
+            + (0.10 * corr_strength)
+            + (0.10 * topology_consistency)
+            + (0.10 * (1.0 - data_penalty))
+            - data_penalty
+        )
+        band = "High" if confidence >= 0.75 else "Medium" if confidence >= 0.5 else "Low"
+        return {
+            "computed_confidence": round(confidence, 3),
+            "confidence_band": band,
+            "telemetry_completeness": round(telemetry_completeness, 3),
+            "signal_agreement": round(agreement, 3),
+            "baseline_deviation_magnitude": round(baseline_magnitude, 3),
+            "anomaly_strength": round(anomaly_strength, 3),
+            "anomaly_certainty": round(anomaly_certainty, 3),
+            "baseline_certainty": round(baseline_certainty, 3),
+            "signal_stability": round(stability, 3),
+            "historical_consistency": round(historical_consistency, 3),
+            "correlation_strength": round(corr_strength, 3),
+            "topology_propagation_consistency": round(topology_consistency, 3),
+            "data_penalty": round(data_penalty, 3),
+        }
+
+    @staticmethod
+    def _causal_reasoning(
+        metrics: dict[str, Any],
+        signal_scores: dict[str, Any],
+        correlation: dict[str, Any],
+        topology: dict[str, Any],
+        lifecycle: dict[str, Any],
+    ) -> dict[str, Any]:
+        cpu = float(metrics.get("cpu_usage_cores_5m", 0) or 0)
+        err = float(metrics.get("error_rate_5xx_5m", 0) or 0)
+        lat = float(metrics.get("latency_p95_s_5m", 0) or 0)
+        memory = float(metrics.get("memory_usage_bytes", 0) or 0)
+        rps = float(metrics.get("request_rate_rps_5m", 0) or 0)
+        baseline = float(metrics.get("baseline_anomaly_score", 0) or 0)
+        trend_delta = float(lifecycle.get("trend_delta", 0.0) or 0.0)
+
+        root_candidates: list[tuple[str, float, str]] = [
+            ("error_rate_5xx_5m", err / 0.05 if err > 0 else 0.0, "Error pressure exceeded expected baseline."),
+            ("latency_p95_s_5m", lat / 0.75 if lat > 0 else 0.0, "Latency drift exceeded service objective window."),
+            ("cpu_usage_cores_5m", cpu / 0.8 if cpu > 0 else 0.0, "CPU utilization shifted away from baseline."),
+            ("memory_usage_bytes", memory / (1024 * 1024 * 1024), "Memory working set increased relative to baseline."),
+            ("request_rate_rps_5m", rps / 1.0 if rps > 0 else 0.0, "Traffic pattern changed from normal request profile."),
+            ("baseline_anomaly_score", baseline / 0.65 if baseline > 0 else 0.0, "Adaptive baseline deviation indicates non-normal behavior."),
+        ]
+        root_candidates.sort(key=lambda x: x[1], reverse=True)
+        root_metric, root_score, root_reason = root_candidates[0]
+
+        pairwise = correlation.get("pairwise_correlations", {}) or {}
+        dependent_signals: list[str] = []
+        contradictory: list[str] = []
+        unaffected: list[str] = []
+        if abs(float(pairwise.get("error_vs_latency", 0) or 0)) > 0.45 and lat > 0 and err > 0:
+            dependent_signals.append("Latency tracks error-rate changes (strong coupling).")
+        if abs(float(pairwise.get("cpu_vs_latency", 0) or 0)) > 0.45 and cpu > 0 and lat > 0:
+            dependent_signals.append("Latency follows CPU pressure trend.")
+        if rps <= 0.05 and (lat > 0.5 or err > 0.02):
+            contradictory.append("Low traffic with elevated latency/errors suggests internal bottleneck.")
+        if memory <= (256 * 1024 * 1024):
+            unaffected.append("Memory pressure is not a dominant contributor.")
+        if float(metrics.get("pod_restarts_10m", 0) or 0) <= 0:
+            unaffected.append("No restart storm observed in current window.")
+
+        origin_service = topology.get("likely_origin_service", "unknown")
+        causal_narrative = (
+            f"{root_metric} appears primary (score={root_score:.2f}); "
+            f"propagation consistency={float(topology.get('propagation_consistency', 0) or 0):.2f}, "
+            f"temporal trend delta={trend_delta:+.3f}, origin service={origin_service}."
+        )
+        return {
+            "root_cause_metric": root_metric,
+            "root_cause_strength": round(ReasoningService._clamp(root_score), 3),
+            "root_cause_explanation": root_reason,
+            "dependent_signals": dependent_signals,
+            "unaffected_signals": unaffected,
+            "contradictory_signals": contradictory,
+            "causal_narrative": causal_narrative,
+        }
+
+    @staticmethod
     def _confidence_details(context: dict[str, Any]) -> dict[str, Any]:
+        advanced = context.get("advanced_confidence")
+        if isinstance(advanced, dict) and advanced:
+            computed = float(advanced.get("computed_confidence", 0.0) or 0.0)
+            return {
+                "data_completeness": f"{round(float(advanced.get('telemetry_completeness', 0.0) or 0.0) * 100)}%",
+                "signal_agreement": (
+                    "High"
+                    if float(advanced.get("signal_agreement", 0.0) or 0.0) >= 0.75
+                    else "Moderate"
+                    if float(advanced.get("signal_agreement", 0.0) or 0.0) >= 0.45
+                    else "Low"
+                ),
+                "historical_similarity": (
+                    "High"
+                    if float(advanced.get("historical_consistency", 0.0) or 0.0) >= 0.75
+                    else "Moderate"
+                    if float(advanced.get("historical_consistency", 0.0) or 0.0) >= 0.45
+                    else "Low"
+                ),
+                "overall_band": advanced.get("confidence_band", "Low"),
+                "confidence_formula": (
+                    "weighted(telemetry_completeness, signal_agreement, baseline_deviation_magnitude, "
+                    "anomaly_strength, signal_stability, historical_consistency, correlation_strength, "
+                    "topology_propagation_consistency) - data_penalty"
+                ),
+                "signal_strength": round(float(advanced.get("anomaly_strength", 0.0) or 0.0), 3),
+                "causal_consistency": round(float(advanced.get("topology_propagation_consistency", 0.0) or 0.0), 3),
+                "computed_confidence": round(computed, 3),
+                "factors": advanced,
+            }
+
         missing = context.get("analysis_missing_observability", []) or []
         ds_errors = context.get("datasource_errors", {}) or {}
         score = context.get("signal_scores", {}) or {}
@@ -286,22 +601,30 @@ class ReasoningService:
         signal_scores = context.get("signal_scores", {}) or {}
         causal_likelihoods = context.get("causal_likelihoods", {}) or {}
         lifecycle = context.get("lifecycle", {}) or {}
+        correlation = context.get("correlation", {}) or {}
+        topology_insights = context.get("topology_insights", {}) or {}
+        causal_analysis = context.get("causal_analysis", {}) or {}
+        advanced_conf = context.get("advanced_confidence", {}) or {}
         classification = self._incident_classification(metrics, missing_observability)
         metric_summary, metric_bullets = self._metric_narrative(metrics)
         why_not_resource = self._resource_saturation_signals(metrics)
         p95_dev = float(metrics.get("latency_deviation_7d_pct", 0) or 0)
         p95_yesterday = float(metrics.get("p95_yesterday_s_5m", 0) or 0) * 1000
 
-        if error_rate > 0.05:
-            root = "5xx error-rate spike"
+        if causal_analysis.get("root_cause_metric"):
+            root = str(causal_analysis.get("root_cause_metric"))
+            impact = "High" if float(causal_analysis.get("root_cause_strength", 0) or 0) >= 0.7 else "Medium" if float(causal_analysis.get("root_cause_strength", 0) or 0) >= 0.45 else "Low"
+            confidence = float(advanced_conf.get("computed_confidence", 0.5) or 0.5)
+        elif error_rate > 0.05:
+            root = "error_rate_5xx_5m"
             impact = "High"
             confidence = 0.78
         elif latency > 0.75:
-            root = "sustained p95 latency breach"
+            root = "latency_p95_s_5m"
             impact = "Medium"
             confidence = 0.64
         else:
-            root = "No dominant fault domain identified"
+            root = "metrics_within_expected_range"
             impact = "Low"
             confidence = 0.48
 
@@ -318,11 +641,22 @@ class ReasoningService:
             change_detection_context.append("AI Observer frontend changed recently.")
         else:
             change_detection_context.append("No AI Observer frontend/config update detected in last 15 minutes.")
-        change_detection_context.append(
-            f"Latency deviation from 7-day baseline: {p95_dev:+.1f}%."
-        )
+        change_detection_context.append(f"Latency deviation from 7-day baseline: {p95_dev:+.1f}%.")
         if p95_yesterday > 0:
             change_detection_context.append(f"Same window yesterday p95: {round(p95_yesterday)}ms.")
+        if advanced_conf:
+            change_detection_context.append(
+                "Confidence factors: "
+                f"telemetry={float(advanced_conf.get('telemetry_completeness', 0) or 0):.2f}, "
+                f"agreement={float(advanced_conf.get('signal_agreement', 0) or 0):.2f}, "
+                f"correlation={float(advanced_conf.get('correlation_strength', 0) or 0):.2f}, "
+                f"topology={float(advanced_conf.get('topology_propagation_consistency', 0) or 0):.2f}."
+            )
+        if topology_insights:
+            change_detection_context.append(
+                f"Topology origin service: {topology_insights.get('likely_origin_service', 'unknown')} "
+                f"(propagation={float(topology_insights.get('propagation_consistency', 0) or 0):.2f})."
+            )
 
         top_domain = "internal_runtime"
         if causal_likelihoods:
@@ -339,17 +673,32 @@ class ReasoningService:
         anomaly_threshold = 0.65
         anomaly_status = "Anomalous" if anomaly_score >= anomaly_threshold else "Normal"
 
+        supporting_evidence = list(metric_bullets)
+        if causal_analysis.get("root_cause_explanation"):
+            supporting_evidence.append(str(causal_analysis.get("root_cause_explanation")))
+        supporting_evidence.extend([str(x) for x in (causal_analysis.get("dependent_signals") or [])])
+        supporting_evidence.extend([f"Contradiction: {x}" for x in (causal_analysis.get("contradictory_signals") or [])])
+
+        causal_chain = [
+            f"Primary root signal: {root}.",
+            f"Assessment: {'Correlated anomaly observed.' if signal_scores.get('overall_anomaly_score', 0) >= 0.35 else 'No high-risk anomaly across combined signals.'}",
+            f"Incident progression: {lifecycle.get('progression', 'steady')}.",
+            lifecycle.get("mitigation_effect", "No mitigation event observed."),
+        ]
+        if causal_analysis.get("causal_narrative"):
+            causal_chain.append(str(causal_analysis.get("causal_narrative")))
+
+        confidence = max(confidence, float(advanced_conf.get("computed_confidence", 0.0) or 0.0))
+        confidence_floor = 0.35 if len(missing_observability) <= 2 else 0.2
+        confidence = max(confidence, confidence_floor)
+        confidence = self._clamp(confidence)
         return {
             "probable_root_cause": root,
             "impact_level": impact,
             "recommended_remediation": "Continue monitoring for 10-15 minutes; no active mitigation is recommended at current signal confidence.",
             "confidence": confidence,
             "confidence_score": f"{round(confidence * 100)}%",
-            "causal_chain": [
-                "Assessment: No correlated anomaly detected across metrics and logs.",
-                f"Incident progression: {lifecycle.get('progression', 'steady')}.",
-                lifecycle.get("mitigation_effect", "No mitigation event observed."),
-            ],
+            "causal_chain": causal_chain,
             "corrective_actions": [
                 "Restart Pod - 58% likelihood of resolving transient application stalls.",
                 "Scale Deployment - 34% likelihood if latency persists under load.",
@@ -366,17 +715,20 @@ class ReasoningService:
             "missing_observability": missing_observability,
             "human_summary": f"{metric_summary} Impact remains {impact.lower()}.",
             "executive_summary": metric_summary,
-            "assessment": "No correlated anomaly detected across metrics and logs." if signal_scores.get("overall_anomaly_score", 0) < 0.35 else "Metrics and logs indicate correlated performance pressure.",
+            "assessment": "No correlated anomaly detected across metrics and logs." if signal_scores.get("overall_anomaly_score", 0) < 0.35 else "Metrics, topology, and temporal correlation indicate performance pressure.",
             "most_likely_scenario": most_likely,
             "why_not_resource_saturation": why_not_resource,
             "incident_classification": classification,
             "confidence_details": confidence_details,
             "ai_response_status": "complete",
             "change_detection_context": change_detection_context,
-            "supporting_evidence": metric_bullets,
+            "supporting_evidence": supporting_evidence,
             "signal_scores": signal_scores,
             "causal_likelihoods": causal_likelihoods,
             "incident_lifecycle": lifecycle,
+            "correlated_signals": correlation,
+            "causal_analysis": causal_analysis,
+            "topology_insights": topology_insights,
             "anomaly_summary": {
                 "score": round(anomaly_score, 3),
                 "threshold": anomaly_threshold,
@@ -403,6 +755,7 @@ class ReasoningService:
         out["missing_observability"] = to_list_str(out.get("missing_observability"))
         out["why_not_resource_saturation"] = to_list_str(out.get("why_not_resource_saturation"))
         out["change_detection_context"] = to_list_str(out.get("change_detection_context"))
+        out["supporting_evidence"] = to_list_str(out.get("supporting_evidence"))
         if not isinstance(out.get("deployment_correlation"), dict):
             out["deployment_correlation"] = {"value": out.get("deployment_correlation")}
         if not isinstance(out.get("error_log_prediction"), dict):
@@ -415,6 +768,12 @@ class ReasoningService:
             out["causal_likelihoods"] = {}
         if not isinstance(out.get("incident_lifecycle"), dict):
             out["incident_lifecycle"] = {}
+        if not isinstance(out.get("correlated_signals"), dict):
+            out["correlated_signals"] = {}
+        if not isinstance(out.get("causal_analysis"), dict):
+            out["causal_analysis"] = {}
+        if not isinstance(out.get("topology_insights"), dict):
+            out["topology_insights"] = {}
         if not isinstance(out.get("anomaly_summary"), dict):
             out["anomaly_summary"] = {}
 
@@ -542,6 +901,28 @@ class ReasoningService:
         lifecycle = self._lifecycle_progression(incident_key, context_data["metrics"])
         context_data["incident_lifecycle"] = lifecycle
         context_data["lifecycle"] = lifecycle
+        topology_insights = self._topology_awareness(alert, cluster_wiring, component_metrics)
+        context_data["topology_insights"] = topology_insights
+        correlation = self._correlation_engine(context_data["metrics"], component_metrics, lifecycle)
+        context_data["correlation"] = correlation
+        advanced_confidence = self._advanced_confidence(
+            context_data["metrics"],
+            missing_observability,
+            errors,
+            signal_scores,
+            correlation,
+            topology_insights,
+            lifecycle,
+        )
+        context_data["advanced_confidence"] = advanced_confidence
+        causal_analysis = self._causal_reasoning(
+            context_data["metrics"],
+            signal_scores,
+            correlation,
+            topology_insights,
+            lifecycle,
+        )
+        context_data["causal_analysis"] = causal_analysis
 
         baseline = self._baseline(context_data)
         try:
@@ -553,8 +934,10 @@ class ReasoningService:
                 merged["ai_response_status"] = "partial_fallback"
                 merged["confidence"] = min(float(merged.get("confidence") or 0.4), 0.55)
                 merged["confidence_score"] = f"{round(float(merged.get('confidence') or 0.4) * 100)}%"
-                merged["human_summary"] = "No service degradation detected. AI model response was incomplete; deterministic fallback reasoning is applied."
-                merged["probable_root_cause"] = "No correlated degradation; fallback reasoning in effect."
+                merged["human_summary"] = (
+                    str(merged.get("human_summary") or "")
+                    or "LLM response was partial; deterministic causal reasoning remains authoritative."
+                )
             analysis_data = self._normalize(merged)
         except Exception as exc:
             errors["llm"] = str(exc)
@@ -562,8 +945,10 @@ class ReasoningService:
             baseline["ai_response_status"] = "partial_fallback"
             baseline["confidence"] = min(float(baseline.get("confidence") or 0.4), 0.55)
             baseline["confidence_score"] = f"{round(float(baseline.get('confidence') or 0.4) * 100)}%"
-            baseline["human_summary"] = "No service degradation detected. AI model response was incomplete; deterministic fallback reasoning is applied."
-            baseline["probable_root_cause"] = "No correlated degradation; fallback reasoning in effect."
+            baseline["human_summary"] = (
+                str(baseline.get("human_summary") or "")
+                or "LLM unavailable; deterministic causal reasoning remains authoritative."
+            )
             analysis_data = self._normalize(baseline)
 
         analysis_data["policy_note"] = "No auto-remediation was applied. Explicit approval required before changes."

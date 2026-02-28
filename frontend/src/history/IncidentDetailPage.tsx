@@ -36,6 +36,8 @@ export default function IncidentDetailPage() {
 
   const latestAnalysis = useMemo(() => data?.analysis?.[0] ?? null, [data]);
   const latestMetrics = useMemo(() => data?.metrics_snapshot?.[0] ?? null, [data]);
+  const supportingSignals = useMemo(() => (latestAnalysis?.supporting_signals as Record<string, unknown> | undefined) ?? {}, [latestAnalysis]);
+  const confidenceBreakdown = useMemo(() => (latestAnalysis?.confidence_breakdown as Record<string, unknown> | undefined) ?? {}, [latestAnalysis]);
   const fallbackTelemetry = useMemo(() => {
     const fromSnapshot = (latestMetrics?.raw_metrics_json as Record<string, unknown> | undefined) ?? {};
     const fromMitigation = (latestAnalysis?.mitigation?.telemetry as Record<string, unknown> | undefined) ?? {};
@@ -92,8 +94,17 @@ export default function IncidentDetailPage() {
           <div className="detail-card">
             <h3>Supporting Signals</h3>
             <ul>
-              {renderList(latestAnalysis?.supporting_signals).map((signal) => (
+              {renderList(supportingSignals).map((signal) => (
                 <li key={signal}>{signal}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="detail-card">
+            <h3>Supporting Evidence</h3>
+            <ul>
+              {renderList((supportingSignals as Record<string, unknown>)?.evidence).map((evidence) => (
+                <li key={evidence}>{evidence}</li>
               ))}
             </ul>
           </div>
@@ -111,7 +122,22 @@ export default function IncidentDetailPage() {
 
           <div className="detail-card">
             <h3>Confidence Breakdown</h3>
-            <pre>{JSON.stringify(latestAnalysis?.confidence_breakdown || {}, null, 2)}</pre>
+            <pre>{JSON.stringify(confidenceBreakdown || {}, null, 2)}</pre>
+          </div>
+
+          <div className="detail-card">
+            <h3>Correlated Signals</h3>
+            <pre>{JSON.stringify((supportingSignals as Record<string, unknown>)?.correlation || {}, null, 2)}</pre>
+          </div>
+
+          <div className="detail-card">
+            <h3>Causal Analysis</h3>
+            <pre>{JSON.stringify((supportingSignals as Record<string, unknown>)?.causal_analysis || {}, null, 2)}</pre>
+          </div>
+
+          <div className="detail-card">
+            <h3>Topology Insights</h3>
+            <pre>{JSON.stringify((supportingSignals as Record<string, unknown>)?.topology_insights || {}, null, 2)}</pre>
           </div>
 
           <div className="detail-card">
