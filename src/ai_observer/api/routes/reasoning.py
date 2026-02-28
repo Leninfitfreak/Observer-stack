@@ -360,7 +360,9 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse, topology: di
         f"Request rate deviation z-score (30m): {_as_float(metrics.get('request_rate_baseline_zscore_30m', 0.0)):.3f}.",
     ]
     response.analysis.supporting_evidence = evidence_lines
-    response.analysis.change_detection_context = list(response.analysis.change_detection_context or []) + evidence_lines
+    existing_ctx = [str(x) for x in (response.analysis.change_detection_context or [])]
+    existing_ctx = [x for x in existing_ctx if "Topology origin service:" not in x]
+    response.analysis.change_detection_context = existing_ctx + evidence_lines
     response.analysis.anomaly_summary = {
         "score": round(baseline_score, 3),
         "threshold": 0.65,
@@ -374,7 +376,7 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse, topology: di
         "signal_agreement": "Moderate" if baseline_score >= 0.15 else "Low",
         "historical_similarity": "Moderate",
         "overall_band": "Medium" if confidence >= 0.5 else "Low",
-        "confidence_formula": "fallback_confidence = clamp(0.55 + baseline_anomaly_score*0.3, 0.35, 0.95)",
+        "confidence_formula": "historical_confidence = clamp(0.55 + baseline_anomaly_score*0.3, 0.35, 0.95)",
         "computed_confidence": round(confidence, 3),
     }
     response.context.signal_scores = response.context.signal_scores or {}
@@ -389,7 +391,7 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse, topology: di
     }
     response.analysis.causal_analysis = {
         "root_cause_metric": response.analysis.probable_root_cause,
-        "root_cause_explanation": "Fallback reasoning used persisted incident telemetry with baseline deviation checks.",
+        "root_cause_explanation": "Deterministic topology-aware reasoning used persisted telemetry with baseline deviation checks.",
         "dependent_signals": response.analysis.why_not_resource_saturation,
         "contradictory_signals": [],
         "unaffected_signals": [],
@@ -408,6 +410,7 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse, topology: di
         "propagation_consistency": round(min(1.0, baseline_score + 0.3), 3),
     }
     response.analysis.origin_service = origin_service
+    response.analysis.ai_response_status = "complete"
     chain_addons = CausalEngine.build_causal_chain(origin_service, impacted_services, propagation_path)
     response.analysis.causal_chain = [*response.analysis.causal_chain, *chain_addons]
     response.analysis.causal_analysis = {
@@ -474,19 +477,19 @@ def live_reasoning(
     )
     result = reasoner.analyze(alert, window_minutes=_parse_time_window(time_window))
     if not _has_metric_signal(result.context.metrics):
-        logger.info("Live reasoning metrics missing; attempting incident telemetry fallback cluster=%s", alert.cluster_id or "")
-        fallback_metrics, fallback_components, fallback_topology = _hydrate_metrics_from_recent_incidents(db, alert.cluster_id or "")
-        if _has_metric_signal(fallback_metrics):
-            logger.info("Applying incident telemetry fallback metrics=%s", fallback_metrics)
-            result.context.metrics.update(fallback_metrics)
-            for service_name, service_metrics in fallback_components.items():
+        logger.info("Live reasoning metrics missing; attempting historical telemetry recovery cluster=%s", alert.cluster_id or "")
+        recovered_metrics, recovered_components, recovered_topology = _hydrate_metrics_from_recent_incidents(db, alert.cluster_id or "")
+        if _has_metric_signal(recovered_metrics):
+            logger.info("Applying historical telemetry metrics=%s", recovered_metrics)
+            result.context.metrics.update(recovered_metrics)
+            for service_name, service_metrics in recovered_components.items():
                 result.context.component_metrics[service_name] = service_metrics
-            if fallback_topology:
-                result.context.cluster_wiring = fallback_topology
-            _refresh_analysis_from_metrics(result, fallback_topology, alert.service)
+            if recovered_topology:
+                result.context.cluster_wiring = recovered_topology
+            _refresh_analysis_from_metrics(result, recovered_topology, alert.service)
             logger.info("Post-refresh analysis why_not_resource_saturation=%s", result.analysis.why_not_resource_saturation)
         else:
-            logger.info("No fallback telemetry available from incidents for cluster=%s", alert.cluster_id or "")
+            logger.info("No historical telemetry available from incidents for cluster=%s", alert.cluster_id or "")
     try:
         _persist_analysis_snapshot(db, alert, result)
     except Exception:

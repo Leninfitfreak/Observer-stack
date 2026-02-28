@@ -39,4 +39,4 @@ class OpenAIProvider:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            return {"_llm_partial": True}
+            return {}

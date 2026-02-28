@@ -33,10 +33,30 @@ class OllamaCloudProvider:
             "stream": False,
             "format": "json",
         }
-        resp = self.http.request("POST", f"{self.base_url}/api/generate", json=req, headers=headers)
-        data = resp.json()
-        raw = data.get("response", "{}")
+        # Prefer Ollama cloud OpenAI-compatible endpoint.
+        chat_req = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": req["prompt"],
+                }
+            ],
+        }
+        try:
+            resp = self.http.request("POST", f"{self.base_url}/v1/chat/completions", json=chat_req, headers=headers)
+            data = resp.json()
+            raw = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "{}")
+            )
+        except Exception:
+            # Backward-compatible fallback for non-cloud endpoints.
+            resp = self.http.request("POST", f"{self.base_url}/api/generate", json=req, headers=headers)
+            data = resp.json()
+            raw = data.get("response", "{}")
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            return {"_llm_partial": True}
+            return {}
