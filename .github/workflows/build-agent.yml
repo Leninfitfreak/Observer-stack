@@ -1,0 +1,96 @@
+name: Build and Push Observer Agent
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+env:
+  INFRA_REPO: Leninfitfreak/leninkart-infra
+  INFRA_BRANCH: dev
+  INFRA_DEPLOYMENT_FILE: k8s/observer-agent/deployment.yaml
+
+jobs:
+  build-agent:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve image repo
+        id: vars
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME_IN: ${{ secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME }}
+        run: |
+          if [ -z "${DOCKERHUB_USERNAME_IN}" ]; then
+            echo "DOCKERHUB_USERNAME is missing. Set repo variable DOCKERHUB_USERNAME or secret DOCKERHUB_USERNAME."
+            exit 1
+          fi
+          echo "dockerhub_agent_image=docker.io/${DOCKERHUB_USERNAME_IN}/observer-agent" >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.vars.outputs.dockerhub_agent_image }}
+          tags: |
+            type=raw,value=dev
+            type=sha
+
+      - name: Build and push observer-agent image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./agent/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Checkout infra repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.INFRA_REPO }}
+          ref: ${{ env.INFRA_BRANCH }}
+          token: ${{ secrets.INFRA_REPO_PAT }}
+          path: infra-repo
+
+      - name: Update observer-agent image in infra
+        shell: bash
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TARGET_IMAGE="${{ steps.vars.outputs.dockerhub_agent_image }}:sha-${SHORT_SHA}"
+          FILE="infra-repo/${{ env.INFRA_DEPLOYMENT_FILE }}"
+          sed -i "s|image: .*observer-agent.*|image: ${TARGET_IMAGE}|g" "${FILE}"
+          echo "Updated ${FILE} to ${TARGET_IMAGE}"
+
+      - name: Commit and push infra update
+        shell: bash
+        run: |
+          cd infra-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${{ env.INFRA_DEPLOYMENT_FILE }}"
+          if git diff --cached --quiet; then
+            echo "No infra manifest changes to commit."
+            exit 0
+          fi
+          git commit -m "chore(observer-agent): bump image to ${GITHUB_SHA::7}"
+          git push origin "${{ env.INFRA_BRANCH }}"

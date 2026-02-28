@@ -218,6 +218,7 @@ def _discover_topology() -> dict[str, Any]:
     namespace_set = set(namespace_filter)
 
     try:
+        nodes_items = _k8s_api_get(session, base_url, "/api/v1/nodes", timeout_seconds).get("items", [])
         pods_items = _k8s_api_get(session, base_url, "/api/v1/pods", timeout_seconds).get("items", [])
         services_items = _k8s_api_get(session, base_url, "/api/v1/services", timeout_seconds).get("items", [])
         endpoints_items = _k8s_api_get(session, base_url, "/api/v1/endpoints", timeout_seconds).get("items", [])
@@ -240,6 +241,46 @@ def _discover_topology() -> dict[str, Any]:
     deployments = [item for item in deployments_items if _namespace_ok(item)]
     ingresses = [item for item in ingresses_items if _namespace_ok(item)]
     namespaces = namespaces_items
+    nodes = nodes_items
+
+    detected_cluster_id = _env("CLUSTER_ID")
+    if nodes:
+        first_node = nodes[0].get("metadata") or {}
+        node_name = str(first_node.get("name", "")).strip()
+        if node_name:
+            detected_cluster_id = node_name
+
+    namespace_inventory = sorted(
+        {
+            str((ns.get("metadata") or {}).get("name", "")).strip()
+            for ns in namespaces
+            if str((ns.get("metadata") or {}).get("name", "")).strip()
+        }
+    )
+    service_inventory = sorted(
+        [
+            {
+                "namespace": str((svc.get("metadata") or {}).get("namespace", "")).strip(),
+                "name": str((svc.get("metadata") or {}).get("name", "")).strip(),
+            }
+            for svc in services
+            if str((svc.get("metadata") or {}).get("namespace", "")).strip()
+            and str((svc.get("metadata") or {}).get("name", "")).strip()
+        ],
+        key=lambda x: (x["namespace"], x["name"]),
+    )
+    pod_inventory = sorted(
+        [
+            {
+                "namespace": str((pod.get("metadata") or {}).get("namespace", "")).strip(),
+                "name": str((pod.get("metadata") or {}).get("name", "")).strip(),
+            }
+            for pod in pods
+            if str((pod.get("metadata") or {}).get("namespace", "")).strip()
+            and str((pod.get("metadata") or {}).get("name", "")).strip()
+        ],
+        key=lambda x: (x["namespace"], x["name"]),
+    )
 
     service_to_pods: list[dict[str, Any]] = []
     pod_to_containers: list[dict[str, Any]] = []
@@ -429,10 +470,16 @@ def _discover_topology() -> dict[str, Any]:
         dedup_s2s.append({"from_service": src, "to_service": dst, "evidence": ev})
 
     topology = {
-        "cluster_id": _env("CLUSTER_ID"),
+        "cluster_id": detected_cluster_id,
         "discovered_at": datetime.now(timezone.utc).isoformat(),
         "observability_services": observability_services,
+        "inventory": {
+            "namespaces": namespace_inventory,
+            "services": service_inventory,
+            "pods": pod_inventory,
+        },
         "counts": {
+            "nodes": len(nodes),
             "namespaces": len(namespaces),
             "pods": len(pods),
             "services": len(services),
@@ -461,11 +508,46 @@ def _discover_topology() -> dict[str, Any]:
     return topology
 
 
-def build_payload(cluster_id: str, environment: str, prom_url: str) -> dict[str, Any]:
+def _select_namespace_and_service(topology: dict[str, Any], default_namespace: str, default_service: str) -> tuple[str, str]:
+    inventory = topology.get("inventory") or {}
+    namespaces = [str(x).strip() for x in (inventory.get("namespaces") or []) if str(x).strip()]
+    services = inventory.get("services") or []
+
+    selected_namespace = default_namespace
+    preferred_namespaces = [part.strip() for part in _env("K8S_DISCOVERY_NAMESPACES", "").split(",") if part.strip()]
+    if preferred_namespaces:
+        for ns in preferred_namespaces:
+            if ns in namespaces:
+                selected_namespace = ns
+                break
+    elif namespaces:
+        selected_namespace = namespaces[0]
+
+    namespace_services = [
+        str(item.get("name", "")).strip()
+        for item in services
+        if isinstance(item, dict) and str(item.get("namespace", "")).strip() == selected_namespace and str(item.get("name", "")).strip()
+    ]
+    namespace_services = sorted(set(namespace_services))
+
+    configured_service = _env("AGENT_SERVICE_NAME", default_service)
+    if configured_service in namespace_services:
+        selected_service = configured_service
+    elif "observer-agent" in namespace_services:
+        selected_service = "observer-agent"
+    elif namespace_services:
+        selected_service = namespace_services[0]
+    else:
+        selected_service = default_service
+
+    return selected_namespace, selected_service
+
+
+def build_payload(configured_cluster_id: str, environment: str, prom_url: str) -> dict[str, Any]:
     now_dt = datetime.now(timezone.utc)
     now = now_dt.strftime("%Y%m%d%H%M%S")
     timestamp = now_dt.isoformat()
-    service_name = _env("AGENT_SERVICE_NAME", "observer-agent")
+    default_service_name = _env("AGENT_SERVICE_NAME", "observer-agent")
     cpu_usage = _query_metric_with_fallback(
         prom_url,
         "cpu_usage",
@@ -500,14 +582,27 @@ def build_payload(cluster_id: str, environment: str, prom_url: str) -> dict[str,
     )
     classification, root_cause = _classification_from_metrics(cpu_usage=cpu_usage, error_rate=error_rate)
     topology = _discover_topology()
+    detected_cluster_id = str(topology.get("cluster_id", "")).strip() or configured_cluster_id
+    selected_namespace, selected_service_name = _select_namespace_and_service(topology, environment, default_service_name)
+    if not detected_cluster_id:
+        detected_cluster_id = "unknown-cluster"
+
+    log.info(
+        "Kubernetes identity detected cluster_id=%s namespace_count=%s service_count=%s",
+        detected_cluster_id,
+        len((topology.get("inventory") or {}).get("namespaces") or []),
+        len((topology.get("inventory") or {}).get("services") or []),
+    )
 
     anomaly_score = _clamp((cpu_usage + (error_rate * 4.0)) / 2.0, 0.0, 1.0)
     risk_forecast = _clamp((cpu_usage * 0.6) + (error_rate * 0.4), 0.0, 1.0)
     confidence_score = 0.95 if prom_url else 0.6
 
     return {
-        "cluster_id": cluster_id,
-        "environment": environment,
+        "cluster_id": detected_cluster_id,
+        "environment": selected_namespace,
+        "namespace": selected_namespace,
+        "service": selected_service_name,
         "timestamp": timestamp,
         "metrics": {
             "cpu_usage": cpu_usage,
@@ -519,8 +614,8 @@ def build_payload(cluster_id: str, environment: str, prom_url: str) -> dict[str,
         "topology": topology,
         "incidents": [
             {
-                "incident_id": f"agent-{cluster_id}-{service_name}-{now}",
-                "service_name": service_name,
+                "incident_id": f"agent-{detected_cluster_id}-{selected_service_name}-{now}",
+                "service_name": selected_service_name,
                 "anomaly_score": anomaly_score,
                 "confidence_score": confidence_score,
                 "classification": classification,
@@ -548,8 +643,8 @@ def run() -> int:
     push_timeout_seconds = _float(_env("PUSH_TIMEOUT_SECONDS", "25"), 25.0)
     run_once = _env("RUN_ONCE", "false").lower() in {"1", "true", "yes", "on"}
 
-    if not cluster_id or not central_url or not agent_token:
-        logging.error("Missing required env vars: CLUSTER_ID, CENTRAL_URL, AGENT_TOKEN")
+    if not central_url or not agent_token:
+        logging.error("Missing required env vars: CENTRAL_URL, AGENT_TOKEN")
         return 1
 
     headers = {
