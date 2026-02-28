@@ -7,10 +7,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from ai_observer.api.routes.schemas import AlertmanagerWebhook
-from ai_observer.backend.models.incident import Incident
+from ai_observer.backend.models.incident import Incident, IncidentMetricsSnapshot
 from ai_observer.backend.services import IncidentsService
 from ai_observer.domain.models import AlertSignal, LiveReasoningResponse
 from ai_observer.incident_analysis.database import get_db_session
+from ai_observer.incident_analysis.models import IncidentAnalysis
 from ai_observer.services.reasoning_service import ReasoningService
 
 router = APIRouter()
@@ -45,6 +46,87 @@ def _as_float(value: Any) -> float:
         return 0.0
 
 
+def _normalize_telemetry_metrics(metrics: dict[str, Any] | None) -> dict[str, float]:
+    source = metrics if isinstance(metrics, dict) else {}
+    cpu = _as_float(source.get("cpu_usage_cores_5m", source.get("cpu_usage", 0.0)))
+    memory = _as_float(source.get("memory_usage_bytes", source.get("memory_usage", 0.0)))
+    request_rate = _as_float(source.get("request_rate_rps_5m", source.get("request_rate", 0.0)))
+    restarts = _as_float(source.get("pod_restarts_10m", source.get("pod_restarts", 0.0)))
+    error_rate = _as_float(source.get("error_rate_5xx_5m", source.get("error_rate", 0.0)))
+
+    if cpu > 1.0:
+        cpu = cpu / 100.0
+    if 0.0 < memory < 1024.0:
+        memory = memory * 1024.0 * 1024.0
+    if error_rate > 1.0:
+        error_rate = error_rate / 100.0
+
+    return {
+        "cpu_usage_cores_5m": cpu,
+        "memory_usage_bytes": memory,
+        "request_rate_rps_5m": request_rate,
+        "pod_restarts_10m": restarts,
+        "error_rate_5xx_5m": error_rate,
+    }
+
+
+def _has_nonzero(metrics: dict[str, float]) -> bool:
+    return any(_as_float(metrics.get(k, 0.0)) > 0.0 for k in metrics.keys())
+
+
+def _telemetry_for_incident(db: Session, incident: Incident) -> dict[str, float]:
+    # Priority 1: incident_metrics_snapshot
+    snapshot = (
+        db.query(IncidentMetricsSnapshot)
+        .filter(IncidentMetricsSnapshot.incident_id == incident.incident_id)
+        .order_by(IncidentMetricsSnapshot.captured_at.desc())
+        .first()
+    )
+    if snapshot is not None:
+        raw_snapshot = snapshot.raw_metrics_json if isinstance(snapshot.raw_metrics_json, dict) else {}
+        normalized_snapshot = _normalize_telemetry_metrics(raw_snapshot)
+        if _has_nonzero(normalized_snapshot):
+            return normalized_snapshot
+        reconstructed = _normalize_telemetry_metrics(
+            {
+                "cpu_usage": _as_float(snapshot.cpu_usage) / 100.0,
+                "memory_usage": _as_float(snapshot.memory_usage) * 1024.0 * 1024.0,
+                "error_rate": _as_float(snapshot.error_rate) / 100.0,
+            }
+        )
+        if _has_nonzero(reconstructed):
+            return reconstructed
+
+    # Priority 2: incidents.raw_payload.metrics
+    raw_payload = incident.raw_payload if isinstance(incident.raw_payload, dict) else {}
+    payload_metrics = raw_payload.get("metrics") if isinstance(raw_payload, dict) else {}
+    normalized_payload = _normalize_telemetry_metrics(payload_metrics if isinstance(payload_metrics, dict) else {})
+    if _has_nonzero(normalized_payload):
+        return normalized_payload
+
+    # Priority 3: incident_analysis.mitigation.telemetry
+    latest_analysis = (
+        db.query(IncidentAnalysis)
+        .filter(IncidentAnalysis.incident_id == incident.incident_id)
+        .order_by(IncidentAnalysis.created_at.desc())
+        .first()
+    )
+    mitigation = latest_analysis.mitigation if latest_analysis and isinstance(latest_analysis.mitigation, dict) else {}
+    mitigation_metrics = mitigation.get("telemetry") if isinstance(mitigation, dict) else {}
+    normalized_mitigation = _normalize_telemetry_metrics(mitigation_metrics if isinstance(mitigation_metrics, dict) else {})
+    if _has_nonzero(normalized_mitigation):
+        return normalized_mitigation
+
+    # Priority 4: reconstructed fallback (zeros if no signal exists anywhere)
+    return {
+        "cpu_usage_cores_5m": 0.0,
+        "memory_usage_bytes": 0.0,
+        "request_rate_rps_5m": 0.0,
+        "pod_restarts_10m": 0.0,
+        "error_rate_5xx_5m": 0.0,
+    }
+
+
 def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
     query = db.query(Incident).filter(Incident.incident_id.ilike("agent-%")).order_by(Incident.created_at.desc())
     if cluster_id:
@@ -56,27 +138,13 @@ def _hydrate_metrics_from_recent_incidents(db: Session, cluster_id: str) -> tupl
     component_metrics: dict[str, dict[str, float]] = {}
 
     for row in rows:
-        payload = row.raw_payload if isinstance(row.raw_payload, dict) else {}
-        raw = payload.get("metrics") if isinstance(payload, dict) else {}
-        if not isinstance(raw, dict):
-            continue
-        cpu = _as_float(raw.get("cpu_usage", 0.0))
-        mem = _as_float(raw.get("memory_usage", 0.0))
-        rps = _as_float(raw.get("request_rate", 0.0))
-        restarts = _as_float(raw.get("pod_restarts", 0.0))
-        err = _as_float(raw.get("error_rate", 0.0))
-        if cpu <= 0 and mem <= 0 and rps <= 0 and restarts <= 0 and err <= 0:
+        resolved = _telemetry_for_incident(db, row)
+        if not _has_nonzero(resolved):
             continue
 
         service = (row.affected_services or "observer-agent").split(",")[0].strip() or "observer-agent"
         if service not in component_metrics:
-            component_metrics[service] = {
-                "cpu_usage_cores_5m": cpu,
-                "memory_usage_bytes": mem,
-                "request_rate_rps_5m": rps,
-                "pod_restarts_10m": restarts,
-                "error_rate_5xx_5m": err,
-            }
+            component_metrics[service] = resolved
 
     if not component_metrics:
         return {}, {}
@@ -115,6 +183,16 @@ def _refresh_analysis_from_metrics(response: LiveReasoningResponse) -> None:
     )
     response.analysis.human_summary = response.analysis.executive_summary
     response.analysis.assessment = "Analysis refreshed from recent persisted agent telemetry."
+    response.analysis.why_not_resource_saturation = [
+        f"CPU {round(cpu * 100)}% {'(high)' if (cpu * 100) > 80 else '(below saturation)'}",
+        f"Memory {round(mem_mb)}MB {'(high)' if mem_mb > 1024 else '(stable)'}",
+        f"Pod restarts {int(restarts)} {'(elevated)' if restarts > 0 else '(none)'}",
+    ]
+    response.analysis.causal_chain = [
+        f"Telemetry source resolved via prioritized incident pipeline (snapshot/raw_payload/mitigation).",
+        f"Current metrics: CPU {cpu*100:.2f}%, Memory {mem_mb:.0f}MB, RPS {rps:.3f}, 5xx {err*100:.2f}%.",
+    ]
+    logger.info("Refreshed analysis why_not_resource_saturation=%s", response.analysis.why_not_resource_saturation)
 
 
 def _parse_time_window(value: str) -> int:
@@ -180,6 +258,7 @@ def live_reasoning(
             for service_name, service_metrics in fallback_components.items():
                 result.context.component_metrics[service_name] = service_metrics
             _refresh_analysis_from_metrics(result)
+            logger.info("Post-refresh analysis why_not_resource_saturation=%s", result.analysis.why_not_resource_saturation)
         else:
             logger.info("No fallback telemetry available from incidents for cluster=%s", alert.cluster_id or "")
     try:

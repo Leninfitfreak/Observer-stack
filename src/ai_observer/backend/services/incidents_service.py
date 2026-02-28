@@ -21,30 +21,90 @@ class IncidentsService:
         self.repo = IncidentsRepository(db)
 
     @staticmethod
-    def _extract_telemetry(incident: Incident, analysis: IncidentAnalysis | None) -> dict[str, float]:
+    def _num(metrics: dict[str, Any], key: str, default: float = 0.0) -> float:
+        try:
+            return float(metrics.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _normalize_metrics(cls, metrics: dict[str, Any]) -> dict[str, float]:
+        if not isinstance(metrics, dict):
+            return {
+                "cpu_usage": 0.0,
+                "memory_usage": 0.0,
+                "request_rate": 0.0,
+                "pod_restarts": 0.0,
+                "error_rate": 0.0,
+            }
+        cpu = cls._num(metrics, "cpu_usage_cores_5m", cls._num(metrics, "cpu_usage"))
+        memory = cls._num(metrics, "memory_usage_bytes", cls._num(metrics, "memory_usage"))
+        request_rate = cls._num(metrics, "request_rate_rps_5m", cls._num(metrics, "request_rate"))
+        restarts = cls._num(metrics, "pod_restarts_10m", cls._num(metrics, "pod_restarts"))
+        error_rate = cls._num(metrics, "error_rate_5xx_5m", cls._num(metrics, "error_rate"))
+
+        if cpu > 1.0:
+            cpu = cpu / 100.0
+        if 0.0 < memory < 1024.0:
+            memory = memory * 1024.0 * 1024.0
+        if error_rate > 1.0:
+            error_rate = error_rate / 100.0
+
+        return {
+            "cpu_usage": cpu,
+            "memory_usage": memory,
+            "request_rate": request_rate,
+            "pod_restarts": restarts,
+            "error_rate": error_rate,
+        }
+
+    @staticmethod
+    def _has_signal(metrics: dict[str, float]) -> bool:
+        return any(float(metrics.get(k, 0.0) or 0.0) > 0.0 for k in ("cpu_usage", "memory_usage", "request_rate", "pod_restarts", "error_rate"))
+
+    def _metrics_from_snapshot(self, incident_id: str) -> dict[str, float]:
+        snapshot = (
+            self.db.query(IncidentMetricsSnapshot)
+            .filter(IncidentMetricsSnapshot.incident_id == incident_id)
+            .order_by(IncidentMetricsSnapshot.captured_at.desc())
+            .first()
+        )
+        if snapshot is None:
+            return {"cpu_usage": 0.0, "memory_usage": 0.0, "request_rate": 0.0, "pod_restarts": 0.0, "error_rate": 0.0}
+        raw = snapshot.raw_metrics_json if isinstance(snapshot.raw_metrics_json, dict) else {}
+        raw_metrics = self._normalize_metrics(raw)
+        if self._has_signal(raw_metrics):
+            return raw_metrics
+        # Reconstructed fallback from typed snapshot columns.
+        return {
+            "cpu_usage": (float(snapshot.cpu_usage or 0.0) / 100.0),
+            "memory_usage": (float(snapshot.memory_usage or 0.0) * 1024.0 * 1024.0),
+            "request_rate": 0.0,
+            "pod_restarts": 0.0,
+            "error_rate": (float(snapshot.error_rate or 0.0) / 100.0),
+        }
+
+    def _extract_telemetry(self, incident: Incident, analysis: IncidentAnalysis | None) -> dict[str, float]:
+        # Source priority: snapshot -> raw_payload.metrics -> mitigation.telemetry -> reconstructed fallback.
+        snapshot_metrics = self._metrics_from_snapshot(incident.incident_id)
+        if self._has_signal(snapshot_metrics):
+            return snapshot_metrics
+
         payload_metrics = {}
         if isinstance(incident.raw_payload, dict):
             payload_metrics = incident.raw_payload.get("metrics") or {}
+        normalized_payload = self._normalize_metrics(payload_metrics if isinstance(payload_metrics, dict) else {})
+        if self._has_signal(normalized_payload):
+            return normalized_payload
+
         mitigation_metrics = {}
         if analysis and isinstance(analysis.mitigation, dict):
             mitigation_metrics = analysis.mitigation.get("telemetry") or {}
-        metrics = payload_metrics if isinstance(payload_metrics, dict) else {}
-        if not metrics and isinstance(mitigation_metrics, dict):
-            metrics = mitigation_metrics
+        normalized_mitigation = self._normalize_metrics(mitigation_metrics if isinstance(mitigation_metrics, dict) else {})
+        if self._has_signal(normalized_mitigation):
+            return normalized_mitigation
 
-        def _num(key: str, default: float = 0.0) -> float:
-            try:
-                return float(metrics.get(key, default))
-            except (TypeError, ValueError):
-                return default
-
-        return {
-            "cpu_usage": _num("cpu_usage"),
-            "memory_usage": _num("memory_usage"),
-            "request_rate": _num("request_rate"),
-            "pod_restarts": _num("pod_restarts"),
-            "error_rate": _num("error_rate"),
-        }
+        return snapshot_metrics
 
     @staticmethod
     def _to_cpu_percent(value: float) -> float:
