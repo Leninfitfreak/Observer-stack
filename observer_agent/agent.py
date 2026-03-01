@@ -69,6 +69,59 @@ def _query_prometheus_value(prom_url: str, query: str, metric_name: str) -> tupl
         return 0.0, False
 
 
+def _query_prometheus_series(prom_url: str, query: str, metric_name: str) -> list[dict[str, Any]]:
+    if not prom_url:
+        log.warning("Prometheus URL missing; metric=%s has no series", metric_name)
+        return []
+    try:
+        response = requests.get(
+            f"{prom_url.rstrip('/')}/api/v1/query",
+            params={"query": query},
+            timeout=5,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data", {})
+        results = data.get("result", [])
+        if not isinstance(results, list) or not results:
+            log.warning("Prometheus returned empty series for metric=%s query=%s", metric_name, query)
+            return []
+        out: list[dict[str, Any]] = []
+        for row in results:
+            if not isinstance(row, dict):
+                continue
+            metric = row.get("metric")
+            sample = row.get("value")
+            if not isinstance(metric, dict) or not isinstance(sample, list) or len(sample) < 2:
+                continue
+            try:
+                out.append({"metric": metric, "value": float(sample[1])})
+            except (TypeError, ValueError):
+                continue
+        return out
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        log.warning("Prometheus series query failed for metric=%s query=%s err=%s", metric_name, query, exc)
+        return []
+
+
+def _query_pod_cpu_rates(prom_url: str) -> dict[tuple[str, str], float]:
+    series = _query_prometheus_series(
+        prom_url,
+        'sum(rate(container_cpu_usage_seconds_total{namespace!="",pod!="",container!=""}[2m])) by (namespace,pod)',
+        "cpu_usage_pod_series",
+    )
+    rates: dict[tuple[str, str], float] = {}
+    for row in series:
+        metric = row.get("metric") or {}
+        namespace = str(metric.get("namespace", "")).strip()
+        pod = str(metric.get("pod", "")).strip()
+        if not namespace or not pod:
+            continue
+        key = (namespace, pod)
+        rates[key] = rates.get(key, 0.0) + float(row.get("value", 0.0) or 0.0)
+    return rates
+
+
 def _query_metric_with_fallback(prom_url: str, metric_name: str, primary_query: str, fallback_queries: list[str]) -> float:
     value, has_data = _query_prometheus_value(prom_url, primary_query, metric_name)
     if has_data:
@@ -180,11 +233,7 @@ def _discover_observability_services(services: list[dict[str, Any]]) -> dict[str
     return out
 
 
-def _discover_topology() -> dict[str, Any]:
-    discovery_enabled = _env("K8S_DISCOVERY_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-    if not discovery_enabled:
-        return {}
-
+def _init_k8s_client() -> tuple[requests.Session, str, float] | None:
     in_cluster_token_path = _env(
         "K8S_SA_TOKEN_PATH",
         "/var/run/secrets/kubernetes.io/serviceaccount/token",
@@ -195,12 +244,9 @@ def _discover_topology() -> dict[str, Any]:
     )
     token = _env("K8S_BEARER_TOKEN") or _read_file(in_cluster_token_path)
     if not token:
-        log.warning("Kubernetes discovery enabled but service account token is unavailable")
-        return {}
-
+        return None
     base_url = _env("K8S_API_URL", "https://kubernetes.default.svc")
     timeout_seconds = _float(_env("K8S_DISCOVERY_TIMEOUT_SECONDS", "4"), 4.0)
-
     verify_ssl_env = _env("K8S_VERIFY_SSL", "true").lower()
     verify_ssl: bool | str
     if verify_ssl_env in {"0", "false", "no", "off"}:
@@ -209,10 +255,22 @@ def _discover_topology() -> dict[str, Any]:
         verify_ssl = in_cluster_ca_path
     else:
         verify_ssl = True
-
     session = requests.Session()
     session.headers.update({"Authorization": f"Bearer {token}"})
     session.verify = verify_ssl
+    return session, base_url, timeout_seconds
+
+
+def _discover_topology() -> dict[str, Any]:
+    discovery_enabled = _env("K8S_DISCOVERY_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+    if not discovery_enabled:
+        return {}
+
+    k8s_client = _init_k8s_client()
+    if not k8s_client:
+        log.warning("Kubernetes discovery enabled but service account token is unavailable")
+        return {}
+    session, base_url, timeout_seconds = k8s_client
 
     namespace_filter = [part.strip() for part in _env("K8S_DISCOVERY_NAMESPACES", "").split(",") if part.strip()]
     namespace_set = set(namespace_filter)
@@ -508,6 +566,47 @@ def _discover_topology() -> dict[str, Any]:
     return topology
 
 
+def _service_from_topology(topology: dict[str, Any], namespace: str, pod: str) -> str:
+    relations = topology.get("relations") if isinstance(topology, dict) else {}
+    service_to_pod = relations.get("service_to_pod") if isinstance(relations, dict) else []
+    pod_key = f"{namespace}/{pod}"
+    if not isinstance(service_to_pod, list):
+        return ""
+    for rel in service_to_pod:
+        if not isinstance(rel, dict):
+            continue
+        if str(rel.get("pod", "")).strip() != pod_key:
+            continue
+        service = str(rel.get("service", "")).strip()
+        if not service:
+            continue
+        parts = service.split("/", 1)
+        return parts[1] if len(parts) == 2 and parts[1] else service
+    return ""
+
+
+def _resolve_service_for_pod(topology: dict[str, Any], namespace: str, pod: str, default_service: str) -> str:
+    from_topology = _service_from_topology(topology, namespace, pod)
+    if from_topology:
+        return from_topology
+
+    k8s_client = _init_k8s_client()
+    if not k8s_client:
+        return default_service
+    session, base_url, timeout_seconds = k8s_client
+    try:
+        pod_obj = _k8s_api_get(session, base_url, f"/api/v1/namespaces/{namespace}/pods/{pod}", timeout_seconds)
+    except (requests.RequestException, ValueError):
+        return default_service
+
+    labels = ((pod_obj.get("metadata") or {}).get("labels") or {})
+    for key in ("app", "app.kubernetes.io/name", "k8s-app"):
+        value = str(labels.get(key, "")).strip()
+        if value:
+            return value
+    return default_service
+
+
 def _select_namespace_and_service(topology: dict[str, Any], default_namespace: str, default_service: str) -> tuple[str, str]:
     inventory = topology.get("inventory") or {}
     namespaces = [str(x).strip() for x in (inventory.get("namespaces") or []) if str(x).strip()]
@@ -551,9 +650,10 @@ def build_payload(configured_cluster_id: str, environment: str, prom_url: str) -
     cpu_usage = _query_metric_with_fallback(
         prom_url,
         "cpu_usage",
-        'sum(rate(container_cpu_usage_seconds_total{container!="",pod!=""}[2m]))',
+        'sum(rate(container_cpu_usage_seconds_total{namespace!="",pod!="",container!=""}[2m])) by (namespace,pod)',
         ["avg(process_cpu_usage)", "sum(rate(process_cpu_time_ns_total[2m])) / 1e9"],
     )
+    pod_cpu_rates = _query_pod_cpu_rates(prom_url)
     memory_usage = _query_metric_with_fallback(
         prom_url,
         "memory_usage",
@@ -580,10 +680,19 @@ def build_payload(configured_cluster_id: str, environment: str, prom_url: str) -
         pod_restarts,
         request_rate,
     )
-    classification, root_cause = _classification_from_metrics(cpu_usage=cpu_usage, error_rate=error_rate)
     topology = _discover_topology()
     detected_cluster_id = str(topology.get("cluster_id", "")).strip() or configured_cluster_id
     selected_namespace, selected_service_name = _select_namespace_and_service(topology, environment, default_service_name)
+
+    dominant_pod = ""
+    if pod_cpu_rates:
+        (selected_namespace, dominant_pod), dominant_cpu = max(pod_cpu_rates.items(), key=lambda item: item[1])
+        selected_service_name = _resolve_service_for_pod(topology, selected_namespace, dominant_pod, selected_service_name)
+        cpu_usage = float(dominant_cpu)
+
+    pod_count = float(len(pod_cpu_rates)) if pod_cpu_rates else float((topology.get("counts") or {}).get("pods", 0) or 0)
+    restart_count = float(pod_restarts)
+    classification, root_cause = _classification_from_metrics(cpu_usage=cpu_usage, error_rate=error_rate)
     if not detected_cluster_id:
         detected_cluster_id = "unknown-cluster"
 
@@ -606,8 +715,11 @@ def build_payload(configured_cluster_id: str, environment: str, prom_url: str) -
         "timestamp": timestamp,
         "metrics": {
             "cpu_usage": cpu_usage,
+            "cluster_cpu_usage": float(sum(pod_cpu_rates.values())) if pod_cpu_rates else cpu_usage,
             "memory_usage": memory_usage,
             "pod_restarts": pod_restarts,
+            "restart_count": restart_count,
+            "pod_count": pod_count,
             "request_rate": request_rate,
             "error_rate": error_rate,
         },
