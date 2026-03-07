@@ -241,11 +241,27 @@ function SideNav({ isPinned }: { isPinned: boolean }): JSX.Element {
 
 		// If preference exists with non-empty array, use stored shortcuts
 		if (isArray(navShortcuts) && navShortcuts.length > 0) {
-			return navShortcuts
+			const resolvedShortcuts = navShortcuts
 				.map((shortcut) =>
 					defaultMoreMenuItems.find((item) => item.itemKey === shortcut),
 				)
 				.filter((item): item is SidebarItem => item !== undefined);
+
+			const hasAiObserver = resolvedShortcuts.some(
+				(item) => item.itemKey === 'ai-observer',
+			);
+			const servicesIndex = resolvedShortcuts.findIndex(
+				(item) => item.itemKey === 'services',
+			);
+			const aiObserverItem = defaultMoreMenuItems.find(
+				(item) => item.itemKey === 'ai-observer',
+			);
+
+			if (!hasAiObserver && servicesIndex !== -1 && aiObserverItem) {
+				resolvedShortcuts.splice(servicesIndex + 1, 0, aiObserverItem);
+			}
+
+			return resolvedShortcuts;
 		}
 
 		// No preference, or empty array → use defaults
@@ -959,55 +975,6 @@ function SideNav({ isPinned }: { isPinned: boolean }): JSX.Element {
 								<Telescope size={18} aria-label="Observer Stack" />
 							</div>
 
-							{licenseTag && (
-								<div
-									className={cx(
-										'brand-title-section',
-										isCommunityEnterpriseUser && 'community-enterprise-user',
-										isCloudUser && 'cloud-user',
-										showVersionUpdateNotification &&
-											changelog &&
-											'version-update-notification',
-									)}
-								>
-									<span className="license-type"> {licenseTag} </span>
-
-									{currentVersion && (
-										<Tooltip
-											placement="bottomLeft"
-											overlayClassName="version-tooltip-overlay"
-											arrow={false}
-											overlay={
-												showVersionUpdateNotification &&
-												changelog && (
-													<div className="version-update-notification-tooltip">
-														<div className="version-update-notification-tooltip-title">
-															There&apos;s a new version available.
-														</div>
-
-														<div className="version-update-notification-tooltip-content">
-															{latestVersion}
-														</div>
-													</div>
-												)
-											}
-										>
-											<div className="version-container">
-												<span
-													className={cx('version', changelog && 'version-clickable')}
-													onClick={onClickVersionHandler}
-												>
-													{currentVersion}
-												</span>
-
-												{showVersionUpdateNotification && changelog && (
-													<span className="version-update-notification-dot-icon" />
-												)}
-											</div>
-										</Tooltip>
-									)}
-								</div>
-							)}
 						</div>
 					</div>
 				</div>

@@ -3,11 +3,10 @@ import { useLocation } from 'react-router-dom';
 import { Button, Popover } from 'antd';
 import logEvent from 'api/common/logEvent';
 import { useGetTenantLicense } from 'hooks/useGetTenantLicense';
-import { Globe, Inbox, SquarePen } from 'lucide-react';
+import { Inbox, SquarePen } from 'lucide-react';
 
 import AnnouncementsModal from './AnnouncementsModal';
 import FeedbackModal from './FeedbackModal';
-import ShareURLModal from './ShareURLModal';
 
 import './HeaderRightSection.styles.scss';
 
@@ -25,7 +24,6 @@ function HeaderRightSection({
 	const location = useLocation();
 
 	const [openFeedbackModal, setOpenFeedbackModal] = useState(false);
-	const [openShareURLModal, setOpenShareURLModal] = useState(false);
 	const [openAnnouncementsModal, setOpenAnnouncementsModal] = useState(false);
 
 	const { isCloudUser, isEnterpriseSelfHostedUser } = useGetTenantLicense();
@@ -36,17 +34,6 @@ function HeaderRightSection({
 		});
 
 		setOpenFeedbackModal(true);
-		setOpenShareURLModal(false);
-		setOpenAnnouncementsModal(false);
-	}, [location.pathname]);
-
-	const handleOpenShareURLModal = useCallback((): void => {
-		logEvent('Share: Clicked', {
-			page: location.pathname,
-		});
-
-		setOpenShareURLModal(true);
-		setOpenFeedbackModal(false);
 		setOpenAnnouncementsModal(false);
 	}, [location.pathname]);
 
@@ -60,10 +47,6 @@ function HeaderRightSection({
 
 	const handleOpenAnnouncementsModalChange = (open: boolean): void => {
 		setOpenAnnouncementsModal(open);
-	};
-
-	const handleOpenShareURLModalChange = (open: boolean): void => {
-		setOpenShareURLModal(open);
 	};
 
 	const isLicenseEnabled = isEnterpriseSelfHostedUser || isCloudUser;
@@ -116,27 +99,7 @@ function HeaderRightSection({
 				</Popover>
 			)}
 
-			{enableShare && (
-				<Popover
-					rootClassName="header-section-popover-root"
-					className="shareable-link-popover"
-					placement="bottomRight"
-					content={<ShareURLModal />}
-					open={openShareURLModal}
-					destroyTooltipOnHide
-					arrow={false}
-					trigger="click"
-					onOpenChange={handleOpenShareURLModalChange}
-				>
-					<Button
-						className="share-link-btn periscope-btn ghost"
-						icon={<Globe size={14} />}
-						onClick={handleOpenShareURLModal}
-					>
-						Share
-					</Button>
-				</Popover>
-			)}
+			{enableShare && null}
 		</div>
 	);
 }

@@ -23,6 +23,7 @@ const breadcrumbNameMap: Record<string, string> = {
 	[ROUTES.ERROR_DETAIL]: 'Exceptions',
 	[ROUTES.LIST_ALL_ALERT]: 'Alerts',
 	[ROUTES.ALL_DASHBOARD]: 'Dashboard',
+	[ROUTES.DEEP_OBSERVER]: 'AI Observer',
 	[ROUTES.LOGS_EXPLORER]: 'Logs Explorer',
 	[ROUTES.OLD_LOGS_EXPLORER]: 'Old Logs Explorer',
 	[ROUTES.LIVE_LOGS]: 'Live View',

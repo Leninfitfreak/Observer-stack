@@ -1,0 +1,124 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: deep-observer-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-deep_observer}
+      POSTGRES_USER: ${POSTGRES_USER:-deep_observer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deep_observer}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deep_observer} -d ${POSTGRES_DB:-deep_observer}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ai-core:
+    build:
+      context: .
+      dockerfile: docker/ai-core/Dockerfile
+    container_name: deep-observer-ai-core
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      AI_CORE_PORT: 8081
+      AI_BRAIN_URL: ${AI_BRAIN_URL:-http://ai-brain:8090}
+      PROJECT_ID: ${PROJECT_ID:-default-project}
+      CLUSTER_ID: ${CLUSTER_ID:-}
+      NAMESPACE_FILTER: ${NAMESPACE_FILTER:-}
+      SERVICE_FILTER: ${SERVICE_FILTER:-}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-deep_observer}
+      POSTGRES_USER: ${POSTGRES_USER:-deep_observer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deep_observer}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-clickhouse}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-9000}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-signoz_traces}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      INCIDENT_DETECTION_INTERVAL: ${INCIDENT_DETECTION_INTERVAL:-60s}
+      ANOMALY_THRESHOLD_ZSCORE: ${ANOMALY_THRESHOLD_ZSCORE:-2.5}
+      LOOKBACK_MINUTES: ${LOOKBACK_MINUTES:-15}
+      DETECTOR_INTERVAL: ${DETECTOR_INTERVAL:-60s}
+      LOOKBACK_WINDOW: ${LOOKBACK_WINDOW:-15m}
+      BASELINE_WINDOW: ${BASELINE_WINDOW:-6h}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      KUBECONFIG: /root/.kube/config
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+      - signoz-net
+    volumes:
+      - ${USERPROFILE}/.kube:/root/.kube:ro
+      - ${USERPROFILE}/.minikube:/root/.minikube:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  ai-brain:
+    build:
+      context: .
+      dockerfile: docker/ai-brain/Dockerfile
+    container_name: deep-observer-ai-brain
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PROJECT_ID: ${PROJECT_ID:-default-project}
+      CLUSTER_ID: ${CLUSTER_ID:-}
+      NAMESPACE_FILTER: ${NAMESPACE_FILTER:-}
+      SERVICE_FILTER: ${SERVICE_FILTER:-}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-deep_observer}
+      POSTGRES_USER: ${POSTGRES_USER:-deep_observer}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deep_observer}
+      CLICKHOUSE_HOST: ${CLICKHOUSE_HOST:-clickhouse}
+      CLICKHOUSE_PORT: ${CLICKHOUSE_PORT:-9000}
+      CLICKHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:-8123}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-signoz_traces}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama_cloud}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-https://api.ollama.com}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+      - signoz-net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    container_name: deep-observer-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8081}
+    ports:
+      - "3000:80"
+    depends_on:
+      - ai-core
+
+volumes:
+  postgres_data:
+
+networks:
+  signoz-net:
+    external: true

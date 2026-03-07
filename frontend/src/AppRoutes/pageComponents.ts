@@ -320,3 +320,8 @@ export const MeterExplorerPage = Loadable(
 	() =>
 		import(/* webpackChunkName: "Meter Explorer Page" */ 'pages/MeterExplorer'),
 );
+
+export const DeepObserverPage = Loadable(
+	() =>
+		import(/* webpackChunkName: "DeepObserverPage" */ 'pages/DeepObserver'),
+);

@@ -13,6 +13,7 @@ import {
 	DashboardPage,
 	DashboardsListPage,
 	DashboardWidget,
+	DeepObserverPage,
 	EditRulesPage,
 	ErrorDetails,
 	ForgotPassword,
@@ -164,6 +165,13 @@ const routes: AppRoutes[] = [
 		component: DashboardsListPage,
 		isPrivate: true,
 		key: 'ALL_DASHBOARD',
+	},
+	{
+		path: ROUTES.DEEP_OBSERVER,
+		exact: true,
+		component: DeepObserverPage,
+		isPrivate: true,
+		key: 'DEEP_OBSERVER',
 	},
 	{
 		path: ROUTES.DASHBOARD,

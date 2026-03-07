@@ -30,6 +30,7 @@ import {
 	Settings,
 	Shield,
 	Slack,
+	Sparkles,
 	Unplug,
 	User,
 	UserPlus,
@@ -104,7 +105,12 @@ const menuItems: SidebarItem[] = [
 		icon: <HardDrive size={16} />,
 		itemKey: 'services',
 	},
-
+	{
+		key: ROUTES.DEEP_OBSERVER,
+		label: 'AI Observer',
+		icon: <Sparkles size={16} />,
+		itemKey: 'ai-observer',
+	},
 	{
 		key: ROUTES.LOGS,
 		label: 'Logs',
@@ -217,6 +223,14 @@ export const defaultMoreMenuItems: SidebarItem[] = [
 		isPinned: true,
 		isEnabled: true,
 		itemKey: 'services',
+	},
+	{
+		key: ROUTES.DEEP_OBSERVER,
+		label: 'AI Observer',
+		icon: <Sparkles size={16} />,
+		isPinned: true,
+		isEnabled: true,
+		itemKey: 'ai-observer',
 	},
 	{
 		key: ROUTES.LOGS,
