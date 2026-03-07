@@ -1,0 +1,4 @@
+ARG BASE_IMAGE=signoz/signoz:v0.113.0
+FROM ${BASE_IMAGE}
+
+COPY frontend/build/ /etc/signoz/web/

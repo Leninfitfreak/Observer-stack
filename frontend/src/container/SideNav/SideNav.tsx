@@ -55,6 +55,7 @@ import {
 	MousePointerClick,
 	PackagePlus,
 	ScrollText,
+	Telescope,
 	X,
 } from 'lucide-react';
 import { useAppContext } from 'providers/App/App';
@@ -955,7 +956,7 @@ function SideNav({ isPinned }: { isPinned: boolean }): JSX.Element {
 									onClickHandler(ROUTES.HOME, event);
 								}}
 							>
-								<img src="/Logos/signoz-brand-logo.svg" alt="SigNoz" />
+								<Telescope size={18} aria-label="Observer Stack" />
 							</div>
 
 							{licenseTag && (

@@ -8,12 +8,9 @@ import { FeatureKeys } from 'constants/features';
 import { useNotifications } from 'hooks/useNotifications';
 import {
 	ArrowUpRight,
-	Book,
 	CreditCard,
-	Github,
 	LifeBuoy,
 	MessageSquare,
-	Slack,
 	X,
 } from 'lucide-react';
 import { useAppContext } from 'providers/App/App';
@@ -45,39 +42,12 @@ const channelsMap = {
 
 const supportChannels = [
 	{
-		key: 'documentation',
-		name: 'Documentation',
-		icon: <Book size={16} />,
-		title: 'Find answers in the documentation.',
-		url: 'https://signoz.io/docs/',
-		btnText: 'Visit docs',
-		isExternal: true,
-	},
-	{
-		key: 'github',
-		name: 'Github',
-		icon: <Github size={16} />,
-		title: 'Create an issue on GitHub to report bugs or request new features.',
-		url: 'https://github.com/SigNoz/signoz/issues',
-		btnText: 'Create issue',
-		isExternal: true,
-	},
-	{
-		key: 'slack_community',
-		name: 'Slack Community',
-		icon: <Slack size={16} />,
-		title: 'Get support from the SigNoz community on Slack.',
-		url: 'https://signoz.io/slack',
-		btnText: 'Join Slack',
-		isExternal: true,
-	},
-	{
 		key: 'chat',
-		name: 'Chat',
+		name: 'Support',
 		icon: <MessageSquare size={16} />,
-		title: 'Get quick support directly from the team.',
+		title: 'Use the in-product support workflow available in this workspace.',
 		url: '',
-		btnText: 'Launch chat',
+		btnText: 'Open support',
 		isExternal: false,
 	},
 ];
@@ -91,9 +61,6 @@ export default function Support(): JSX.Element {
 	);
 
 	const { pathname } = useLocation();
-	const handleChannelWithRedirects = (url: string): void => {
-		window.open(url, '_blank');
-	};
 
 	useEffect(() => {
 		if (history?.location?.state) {
@@ -170,16 +137,11 @@ export default function Support(): JSX.Element {
 		logEvent(`Support : ${channel.name}`, {});
 
 		switch (channel.key) {
-			case channelsMap.documentation:
-			case channelsMap.github:
-			case channelsMap.slack_community:
-				handleChannelWithRedirects(channel.url);
-				break;
 			case channelsMap.chat:
 				handleChat();
 				break;
 			default:
-				handleChannelWithRedirects('https://signoz.io/slack');
+				history.push('/');
 				break;
 		}
 	};
@@ -195,8 +157,8 @@ export default function Support(): JSX.Element {
 
 			<div className="support-page-content">
 				<div className="support-page-content-description">
-					We are here to help in case of questions or issues. Pick the channel that
-					is most convenient for you.
+					Observer Stack support is handled inside the product interface. External
+					community and marketing links have been removed from this workspace.
 				</div>
 
 				<div className="support-channels">
@@ -260,7 +222,7 @@ export default function Support(): JSX.Element {
 			>
 				<Typography.Text className="add-credit-card-text">
 					You&apos;re currently on <span className="highlight-text">Trial plan</span>
-					. Add a credit card to access SigNoz chat support to your workspace.
+					. Add a credit card to access Observer Stack chat support in your workspace.
 				</Typography.Text>
 			</Modal>
 		</div>

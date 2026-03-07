@@ -9,17 +9,7 @@ export function ComingSoon(): JSX.Element {
 	return (
 		<Tooltip
 			title={
-				<div>
-					Join our Slack community for more details:{' '}
-					<a
-						href="https://signoz.io/slack"
-						rel="noopener noreferrer"
-						target="_blank"
-						onClick={(e): void => e.stopPropagation()}
-					>
-						SigNoz Community
-					</a>
-				</div>
+				<div>Messaging queue support is being prepared for a future release.</div>
 			}
 			placement="top"
 			overlayClassName="tooltip-overlay"

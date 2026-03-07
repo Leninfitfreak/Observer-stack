@@ -1,10 +1,10 @@
 {
 	"display_name": "Display Name",
-	"signoz": "SigNoz",
+	"signoz": "Observer Stack",
 	"email_address": "Email address",
 	"name_optional": "Name (optional)",
 	"role": "Role",
-	"email_placeholder": "john@signoz.io",
+	"email_placeholder": "john@example.com",
 	"name_placeholder": "John",
 	"add_another_team_member": "Add another team member",
 	"invite_team_members": "Invite team members",

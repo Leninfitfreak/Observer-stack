@@ -720,13 +720,13 @@ function ExplorerOptions({
 
 	const infoIconLink = useMemo(() => {
 		if (isLogsExplorer) {
-			return 'https://signoz.io/docs/product-features/logs-explorer/?utm_source=product&utm_medium=logs-explorer-toolbar';
+			return '';
 		}
 		// TODO: Add metrics explorer info icon link
 		if (isMetricsExplorer) {
 			return '';
 		}
-		return 'https://signoz.io/docs/product-features/trace-explorer/?utm_source=product&utm_medium=trace-explorer-toolbar';
+		return '';
 	}, [isLogsExplorer, isMetricsExplorer]);
 
 	const getQueryName = (query: Query): string => {
@@ -964,13 +964,7 @@ function ExplorerOptions({
 						{!isMetricsExplorer && (
 							<Tooltip
 								title={
-									<div>
-										{infoIconText}
-										<Typography.Link href={infoIconLink} target="_blank">
-											{' '}
-											here
-										</Typography.Link>{' '}
-									</div>
+									<div>{infoIconText}</div>
 								}
 							>
 								<InfoCircleOutlined className="info-icon" />

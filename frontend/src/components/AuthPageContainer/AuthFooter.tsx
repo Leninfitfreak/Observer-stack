@@ -1,6 +1,4 @@
 import React from 'react';
-import { ArrowUpRight } from 'lucide-react';
-
 import './AuthFooter.styles.scss';
 
 interface FooterItem {
@@ -13,16 +11,13 @@ interface FooterItem {
 const footerItems: FooterItem[] = [
 	{
 		text: 'All systems operational',
-		url: 'https://status.signoz.io/',
 		statusIndicator: true,
 	},
 	{
 		text: 'Privacy',
-		url: 'https://www.signoz.io/privacy',
 	},
 	{
 		text: 'Security',
-		url: 'https://www.signoz.io/security',
 	},
 ];
 
@@ -44,23 +39,7 @@ function AuthFooter(): JSX.Element {
 									className="auth-footer-icon"
 								/>
 							)}
-							{item.url ? (
-								<a
-									href={item.url}
-									className={`auth-footer-link ${
-										item.statusIndicator ? 'auth-footer-link-status' : ''
-									}`}
-									target="_blank"
-									rel="noopener noreferrer"
-								>
-									<span className="auth-footer-text">{item.text}</span>
-									{!item.statusIndicator && (
-										<ArrowUpRight size={12} className="auth-footer-link-icon" />
-									)}
-								</a>
-							) : (
-								<span className="auth-footer-text">{item.text}</span>
-							)}
+							<span className="auth-footer-text">{item.text}</span>
 						</div>
 						{index < footerItems.length - 1 && (
 							<div className="auth-footer-separator" />

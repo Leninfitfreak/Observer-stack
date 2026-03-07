@@ -7,8 +7,8 @@ function InstrumentationPage(): JSX.Element {
 	return (
 		<>
 			<Typography>
-				Congrats, you have successfully installed SigNoz! Now lets get some data in
-				and start deriving insights from them
+				Observer Stack is ready. Send telemetry from your applications and start
+				deriving insights.
 			</Typography>
 			{GetStartedContent().map((section) => (
 				<DocSection key={section.heading} sectionData={section} />

@@ -109,7 +109,12 @@ services:
       # - ../common/clickhouse/storage.xml:/etc/clickhouse-server/config.d/storage.xml
   signoz:
     !!merge <<: *db-depend
-    image: signoz/signoz:${VERSION:-v0.113.0}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.observer-stack
+      args:
+        BASE_IMAGE: signoz/signoz:${VERSION:-v0.113.0}
+    image: observer-stack/signoz:${VERSION:-v0.113.0}
     container_name: signoz
     ports:
       - "8080:8080" # signoz port

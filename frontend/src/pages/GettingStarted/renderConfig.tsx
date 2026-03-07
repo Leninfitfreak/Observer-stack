@@ -7,7 +7,6 @@ import {
 	SoundFilled,
 } from '@ant-design/icons';
 import { Typography } from 'antd';
-import Slack from 'container/SideNav/Slack';
 import store from 'store';
 
 import { TGetStartedContentSection } from './types';
@@ -18,21 +17,21 @@ export const GetStartedContent = (): TGetStartedContentSection[] => {
 	} = store.getState();
 	return [
 		{
-			heading: 'Send data from your applications to SigNoz',
+			heading: 'Send data from your applications to Observer Stack',
 			items: [
 				{
 					title: 'Instrument your Java Application',
 					icon: (
 						<img src={`/Logos/java.png?currentVersion=${currentVersion}`} alt="" />
 					),
-					url: 'https://signoz.io/docs/instrumentation/java/',
+					url: '/support',
 				},
 				{
 					title: 'Instrument your Python Application',
 					icon: (
 						<img src={`/Logos/python.png?currentVersion=${currentVersion}`} alt="" />
 					),
-					url: 'https://signoz.io/docs/instrumentation/python/',
+					url: '/support',
 				},
 				{
 					title: 'Instrument your JS Application',
@@ -42,14 +41,14 @@ export const GetStartedContent = (): TGetStartedContentSection[] => {
 							alt=""
 						/>
 					),
-					url: 'https://signoz.io/docs/instrumentation/javascript/',
+					url: '/support',
 				},
 				{
 					title: 'Instrument your Go Application',
 					icon: (
 						<img src={`/Logos/go.png?currentVersion=${currentVersion}`} alt="" />
 					),
-					url: 'https://signoz.io/docs/instrumentation/golang/',
+					url: '/support',
 				},
 				{
 					title: 'Instrument your .NET Application',
@@ -59,35 +58,35 @@ export const GetStartedContent = (): TGetStartedContentSection[] => {
 							alt=""
 						/>
 					),
-					url: 'https://signoz.io/docs/instrumentation/dotnet/',
+					url: '/support',
 				},
 				{
 					title: 'Instrument your PHP Application',
 					icon: (
 						<img src={`/Logos/php.png?currentVersion=${currentVersion}`} alt="" />
 					),
-					url: 'https://signoz.io/docs/instrumentation/php/',
+					url: '/support',
 				},
 				{
 					title: 'Instrument your Rails Application',
 					icon: (
 						<img src={`/Logos/rails.png?currentVersion=${currentVersion}`} alt="" />
 					),
-					url: 'https://signoz.io/docs/instrumentation/ruby-on-rails/',
+					url: '/support',
 				},
 				{
 					title: 'Instrument your Rust Application',
 					icon: (
 						<img src={`/Logos/rust.png?currentVersion=${currentVersion}`} alt="" />
 					),
-					url: 'https://signoz.io/docs/instrumentation/rust/',
+					url: '/support',
 				},
 				{
 					title: 'Instrument your Elixir Application',
 					icon: (
 						<img src={`/Logos/elixir.png?currentVersion=${currentVersion}`} alt="" />
 					),
-					url: 'https://signoz.io/docs/instrumentation/elixir/',
+					url: '/support',
 				},
 			],
 		},
@@ -95,29 +94,29 @@ export const GetStartedContent = (): TGetStartedContentSection[] => {
 			heading: 'Send Metrics from your Infrastructure & create Dashboards',
 			items: [
 				{
-					title: 'Send metrics to SigNoz',
+					title: 'Send metrics to Observer Stack',
 					icon: <BarChartOutlined style={{ fontSize: '3.5rem' }} />,
-					url: 'https://signoz.io/docs/userguide/send-metrics/',
+					url: '/support',
 				},
 				{
 					title: 'Create and Manage Dashboards',
 					icon: <DashboardFilled style={{ fontSize: '3.5rem' }} />,
-					url: 'https://signoz.io/docs/userguide/manage-dashboards-and-panels/',
+					url: '/support',
 				},
 			],
 		},
 		{
-			heading: 'Send your logs to SigNoz',
+			heading: 'Send your logs to Observer Stack',
 			items: [
 				{
-					title: 'Send your logs to SigNoz',
+					title: 'Send your logs to Observer Stack',
 					icon: <AlignLeftOutlined style={{ fontSize: '3.5rem' }} />,
-					url: 'https://signoz.io/docs/userguide/logs/',
+					url: '/support',
 				},
 				{
-					title: 'Existing log collectors to SigNoz',
+					title: 'Existing log collectors to Observer Stack',
 					icon: <ApiFilled style={{ fontSize: '3.5rem' }} />,
-					url: 'https://signoz.io/docs/userguide/fluentbit_to_signoz/',
+					url: '/support',
 				},
 			],
 		},
@@ -127,46 +126,24 @@ export const GetStartedContent = (): TGetStartedContentSection[] => {
 				{
 					title: 'Create alert rules on metrics',
 					icon: <AlertFilled style={{ fontSize: '3.5rem' }} />,
-					url: 'https://signoz.io/docs/userguide/alerts-management/',
+					url: '/support',
 				},
 				{
 					title: 'Configure alert notification channels',
 					icon: <SoundFilled style={{ fontSize: '3.5rem' }} />,
-					url:
-						'https://signoz.io/docs/userguide/alerts-management/#setting-up-a-notification-channel',
+					url: '/support',
 				},
 			],
 		},
 		{
 			heading: 'Need help?',
-			description: (
-				<>
-					{'Join our slack community and ask any question you may have on '}
-					<Typography.Link
-						href="https://signoz-community.slack.com/archives/C01HWUTP4HH"
-						target="_blank"
-					>
-						#support
-					</Typography.Link>
-					{' or '}
-					<Typography.Link
-						href="https://signoz-community.slack.com/archives/C01HWQ1R0BC"
-						target="_blank"
-					>
-						#dummy_channel
-					</Typography.Link>
-				</>
-			),
+			description: <>Use the built-in support workflow inside Observer Stack.</>,
 
 			items: [
 				{
-					title: 'Join SigNoz slack community ',
-					icon: (
-						<div style={{ padding: '0.7rem' }}>
-							<Slack width={30} height={30} />
-						</div>
-					),
-					url: 'https://signoz.io/slack',
+					title: 'Open Support',
+					icon: <Typography.Text strong>OS</Typography.Text>,
+					url: '/support',
 				},
 			],
 		},

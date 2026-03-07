@@ -35,8 +35,8 @@ function DataSourceInfo({
 		if (hostsData) {
 			const defaultHost = hostsData?.data.hosts?.find((h) => h.is_default);
 			if (defaultHost?.url) {
-				const url = defaultHost?.url?.split('://')[1] ?? '';
-				setUrl(url);
+				const hostUrl = defaultHost?.url?.split('://')[1] ?? '';
+				setUrl(hostUrl);
 			}
 		}
 	}, [hostsData]);
@@ -44,13 +44,13 @@ function DataSourceInfo({
 	const renderNotSendingData = (): JSX.Element => (
 		<>
 			<Typography className="welcome-title">
-				Hello there, Welcome to your SigNoz workspace
+				Hello there, Welcome to your Observer Stack workspace
 			</Typography>
 
 			<Typography className="welcome-description">
-				You’re not sending any data yet. <br />
-				SigNoz is so much better with your data ⎯ start by sending your telemetry
-				data to SigNoz.
+				You are not sending any data yet. <br />
+				Observer Stack works best with your data. Start by sending your telemetry
+				data to Observer Stack.
 			</Typography>
 
 			<Card className="welcome-card">
@@ -131,7 +131,7 @@ function DataSourceInfo({
 	const renderDataReceived = (): JSX.Element => (
 		<>
 			<Typography className="welcome-title">
-				Hello there, Welcome to your SigNoz workspace
+				Hello there, Welcome to your Observer Stack workspace
 			</Typography>
 
 			{!isError && hostsData && (

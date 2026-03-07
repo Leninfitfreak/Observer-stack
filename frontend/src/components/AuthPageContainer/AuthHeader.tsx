@@ -6,18 +6,13 @@ import './AuthHeader.styles.scss';
 
 function AuthHeader(): JSX.Element {
 	const handleGetHelp = useCallback((): void => {
-		window.open('https://signoz.io/support/', '_blank');
+		window.location.assign('/support');
 	}, []);
 
 	return (
 		<header className="auth-header">
 			<div className="auth-header-logo">
-				<img
-					src="/Logos/signoz-brand-logo.svg"
-					alt="SigNoz"
-					className="auth-header-logo-icon"
-				/>
-				<span className="auth-header-logo-text">SigNoz</span>
+				<span className="auth-header-logo-text">Observer Stack</span>
 			</div>
 			<Button
 				className="auth-header-help-button"

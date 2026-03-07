@@ -1,4 +1,3 @@
-import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 // eslint-disable-next-line no-restricted-imports
 import { useSelector } from 'react-redux';
@@ -8,7 +7,6 @@ import { AppState } from 'store/reducers';
 import AppReducer from 'types/reducer/app';
 import { checkVersionState } from 'utils/app';
 
-import { githubReleaseURL } from './constant';
 import { InputComponent } from './styles';
 
 import './Version.styles.scss';
@@ -27,14 +25,6 @@ function Version(): JSX.Element {
 	const isLatestVersion = checkVersionState(currentVersion, latestVersion);
 
 	const isError = isCurrentVersionError || isLatestVersionError;
-
-	const latestVersionUrl = useMemo(
-		() =>
-			isLatestVersionError
-				? githubReleaseURL
-				: `${githubReleaseURL}/tag/${latestVersion}`,
-		[isLatestVersionError, latestVersion],
-	);
 
 	return (
 		<div className="version-container">
@@ -72,9 +62,6 @@ function Version(): JSX.Element {
 								value={isLatestVersionError ? t('n_a').toString() : latestVersion}
 								placeholder={t('latest_version')}
 							/>
-							<Button href={latestVersionUrl} target="_blank" type="link">
-								{t('release_notes')}
-							</Button>
 						</Form.Item>
 					</Form>
 
@@ -99,13 +86,7 @@ function Version(): JSX.Element {
 
 					{!isError && !isLatestVersion && (
 						<div className="version-page-upgrade-container">
-							<Button
-								href="https://signoz.io/docs/operate/docker-standalone/#upgrade"
-								target="_blank"
-								type="primary"
-								className="periscope-btn primary"
-								icon={<CloudUpload size={16} />}
-							>
+							<Button type="primary" className="periscope-btn primary" icon={<CloudUpload size={16} />} disabled>
 								{t('read_how_to_upgrade')}
 							</Button>
 						</div>

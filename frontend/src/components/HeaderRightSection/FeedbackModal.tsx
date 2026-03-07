@@ -141,15 +141,6 @@ function FeedbackModal({ onClose }: { onClose: () => void }): JSX.Element {
 						>
 							Contact Support{' '}
 						</Typography.Link>
-						or{' '}
-						<a
-							href="https://signoz.io/docs/introduction/"
-							target="_blank"
-							rel="noreferrer"
-							className="read-docs-link"
-						>
-							Read our docs
-						</a>
 					</Typography.Text>
 				</div>
 			</div>
