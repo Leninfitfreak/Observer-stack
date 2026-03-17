@@ -109,12 +109,7 @@ services:
       # - ../common/clickhouse/storage.xml:/etc/clickhouse-server/config.d/storage.xml
   signoz:
     !!merge <<: *db-depend
-    build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile.observer-stack
-      args:
-        BASE_IMAGE: signoz/signoz:${VERSION:-v0.113.0}
-    image: observer-stack/signoz:${VERSION:-v0.113.0}
+    image: signoz/signoz:${VERSION:-v0.113.0}
     container_name: signoz
     ports:
       - "8080:8080" # signoz port
@@ -216,6 +211,13 @@ services:
       CLICKHOUSE_DATABASE: default
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: ""
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama_cloud}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-https://api.ollama.com}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-local-demo-key}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
     depends_on:
       deep-observer-postgres:
         condition: service_healthy
@@ -250,7 +252,6 @@ services:
         condition: service_started
     volumes:
       - ${USERPROFILE}/.kube:/root/.kube:ro
-      - ${USERPROFILE}/.minikube:/root/.minikube:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
   deep-observer-frontend:

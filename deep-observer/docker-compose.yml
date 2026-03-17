@@ -61,7 +61,6 @@ services:
       - signoz-net
     volumes:
       - ${USERPROFILE}/.kube:/root/.kube:ro
-      - ${USERPROFILE}/.minikube:/root/.minikube:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -93,6 +92,7 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama_cloud}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-https://api.ollama.com}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-local-demo-key}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-3}
