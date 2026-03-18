@@ -678,6 +678,15 @@ function SideNav({ isPinned }: { isPinned: boolean }): JSX.Element {
 		: ROUTES.SETTINGS;
 
 	const handleMenuItemClick = (event: MouseEvent, item: SidebarItem): void => {
+		if (item?.isExternal && item.url) {
+			openInNewTab(item.url);
+			logEvent('Sidebar V2: Menu clicked', {
+				menuRoute: item?.key,
+				menuLabel: item?.label,
+			});
+			return;
+		}
+
 		if (item.key === ROUTES.SETTINGS) {
 			if (isCtrlMetaKey(event)) {
 				openInNewTab(settingsRoute);

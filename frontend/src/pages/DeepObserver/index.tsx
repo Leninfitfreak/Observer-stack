@@ -1,13 +1,12 @@
 import { Button, Typography } from 'antd';
+import { DEEP_OBSERVER_URL } from 'constants/app';
 import ROUTES from 'constants/routes';
 import { ExternalLink, Sparkles } from 'lucide-react';
 
 const { Paragraph, Text, Title } = Typography;
 
-const DEFAULT_EMBED_URL = 'http://localhost:3000';
-
 function DeepObserver(): JSX.Element {
-	const observerUrl = DEFAULT_EMBED_URL;
+	const observerUrl = DEEP_OBSERVER_URL;
 
 	return (
 		<div

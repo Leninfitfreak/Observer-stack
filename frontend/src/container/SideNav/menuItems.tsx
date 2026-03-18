@@ -1,4 +1,5 @@
 import { RocketOutlined } from '@ant-design/icons';
+import { DEEP_OBSERVER_URL } from 'constants/app';
 import ROUTES from 'constants/routes';
 import {
 	ArrowUpRight,
@@ -107,8 +108,10 @@ const menuItems: SidebarItem[] = [
 	},
 	{
 		key: ROUTES.DEEP_OBSERVER,
-		label: 'AI Observer',
+		label: 'Deep Observer',
 		icon: <Sparkles size={16} />,
+		isExternal: true,
+		url: DEEP_OBSERVER_URL,
 		itemKey: 'ai-observer',
 	},
 	{
@@ -226,8 +229,10 @@ export const defaultMoreMenuItems: SidebarItem[] = [
 	},
 	{
 		key: ROUTES.DEEP_OBSERVER,
-		label: 'AI Observer',
+		label: 'Deep Observer',
 		icon: <Sparkles size={16} />,
+		isExternal: true,
+		url: DEEP_OBSERVER_URL,
 		isPinned: true,
 		isEnabled: true,
 		itemKey: 'ai-observer',

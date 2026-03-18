@@ -2,6 +2,9 @@ import ROUTES from './routes';
 
 export const DOCS_BASE_URL = process.env.DOCS_BASE_URL || 'https://signoz.io';
 
+export const DEEP_OBSERVER_URL =
+	process.env.DEEP_OBSERVER_URL || 'http://localhost:3000';
+
 export const WITHOUT_SESSION_PATH = ['/redirect'];
 
 export const AUTH0_REDIRECT_PATH = '/redirect';
