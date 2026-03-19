@@ -109,36 +109,20 @@ export default function DashboardPage() {
   useEffect(() => {
     let cancelled = false;
 
-    const load = () =>
-      Promise.all([
-        fetchIncidents(query),
-        fetchTopology(query),
-        fetchServiceHealth(query),
-        fetchClusterReport(query),
-        fetchChanges(query),
-        fetchSLOStatus(query),
-        fetchRunbooks({}),
-        fetchObservabilityReport(query),
-      ]).then(([incidentData, topologyData, healthData, reportData, changesData, sloData, runbookData, observabilityData]) => {
-          if (cancelled) return;
+    const load = async () => {
+      setTopology({ nodes: [], edges: [] });
+      setServiceHealth([]);
+      setClusterReport(null);
+      setChanges([]);
+      setSloStatus([]);
+      setObservabilityReport(null);
+
+      try {
+        const incidentData = await fetchIncidents(query);
+        if (!cancelled) {
           const safeIncidents = Array.isArray(incidentData) ? incidentData : [];
-          const safeTopology =
-            topologyData && typeof topologyData === "object"
-              ? {
-                  ...topologyData,
-                  nodes: Array.isArray(topologyData.nodes) ? topologyData.nodes : [],
-                  edges: Array.isArray(topologyData.edges) ? topologyData.edges : [],
-                }
-              : { nodes: [], edges: [] };
           setIncidents(safeIncidents);
           setIncidentHint(safeIncidents.length ? "" : "No incidents match the current filters.");
-          setTopology(safeTopology);
-          setServiceHealth(Array.isArray(healthData) ? healthData : []);
-          setClusterReport(reportData && typeof reportData === "object" ? reportData : null);
-          setChanges(Array.isArray(changesData) ? changesData : []);
-          setSloStatus(Array.isArray(sloData) ? sloData : []);
-          setRunbooks(Array.isArray(runbookData) ? runbookData : []);
-          setObservabilityReport(observabilityData && typeof observabilityData === "object" ? observabilityData : null);
           setSelectedIncidentId((current) => {
             if (!safeIncidents.length) return "";
             return safeIncidents.some((item) => item.incident_id === current) ? current : safeIncidents[0].incident_id;
@@ -146,7 +130,43 @@ export default function DashboardPage() {
           console.info("[filters] query=", query);
           console.info("[filters] incidents_count=", safeIncidents.length);
           console.info("[filters] selected_incident=", safeIncidents[0]?.incident_id || "");
-        }).catch(console.error);
+        }
+      } catch (error) {
+        console.error(error);
+      }
+
+      const [topologyData, healthData, reportData, changesData, sloData, runbookData, observabilityData] = await Promise.allSettled([
+        fetchTopology(query),
+        fetchServiceHealth(query),
+        fetchClusterReport(query),
+        fetchChanges(query),
+        fetchSLOStatus(query),
+        fetchRunbooks({}),
+        fetchObservabilityReport(query),
+      ]);
+
+      if (cancelled) return;
+
+      const safeTopology =
+        topologyData.status === "fulfilled" && topologyData.value && typeof topologyData.value === "object"
+          ? {
+              ...topologyData.value,
+              nodes: Array.isArray(topologyData.value.nodes) ? topologyData.value.nodes : [],
+              edges: Array.isArray(topologyData.value.edges) ? topologyData.value.edges : [],
+            }
+          : { nodes: [], edges: [] };
+      setTopology(safeTopology);
+      setServiceHealth(healthData.status === "fulfilled" && Array.isArray(healthData.value) ? healthData.value : []);
+      setClusterReport(reportData.status === "fulfilled" && reportData.value && typeof reportData.value === "object" ? reportData.value : null);
+      setChanges(changesData.status === "fulfilled" && Array.isArray(changesData.value) ? changesData.value : []);
+      setSloStatus(sloData.status === "fulfilled" && Array.isArray(sloData.value) ? sloData.value : []);
+      setRunbooks(runbookData.status === "fulfilled" && Array.isArray(runbookData.value) ? runbookData.value : []);
+      setObservabilityReport(
+        observabilityData.status === "fulfilled" && observabilityData.value && typeof observabilityData.value === "object"
+          ? observabilityData.value
+          : null,
+      );
+    };
 
     load();
     if (!liveMode) {

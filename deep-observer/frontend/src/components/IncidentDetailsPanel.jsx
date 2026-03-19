@@ -1148,17 +1148,28 @@ function buildIncidentHistory(currentIncident, allIncidents) {
 
 function buildObservabilityGaps(incident, reasoning) {
   const missing = toList(reasoning?.missing_telemetry_signals);
-  const criticalMissing = missing.filter((signal) => /tracing|logs|kafka|database/i.test(signal));
+  const criticalMissing = missing.filter((signal) => /trac|span|logs?|metric|messag|queue|topic|db|database|dependency/i.test(signal));
   const impactText = criticalMissing.length
     ? "Missing critical telemetry reduces confidence in dependency-level causality."
     : "No critical observability gaps detected.";
   const recommendations = criticalMissing.map((signal) => {
     const value = signal.toLowerCase();
-    if (value.includes("tracing")) return `Enable distributed tracing for ${incident?.service || "service"}.`;
-    if (value.includes("logs")) return `Add structured logs for ${incident?.service || "service"} error paths.`;
-    if (value.includes("kafka")) return "Enable Kafka broker and consumer lag metrics.";
-    if (value.includes("database")) return "Capture database latency and error metrics.";
-    return `Improve telemetry for ${signal}.`;
+    if (value.includes("trac") || value.includes("span")) {
+      return `Enable distributed tracing for ${incident?.service || "service"}.`;
+    }
+    if (value.includes("log")) {
+      return `Add structured logs for ${incident?.service || "service"} error paths.`;
+    }
+    if (value.includes("messag") || value.includes("queue") || value.includes("topic")) {
+      return "Capture messaging throughput, latency, and failure telemetry for the affected flow.";
+    }
+    if (value.includes("db") || value.includes("database") || value.includes("depend")) {
+      return "Capture dependency latency, saturation, and error telemetry for the affected path.";
+    }
+    if (value.includes("metric")) {
+      return `Add service-level metrics for ${incident?.service || "service"} latency, errors, and traffic.`;
+    }
+    return `Improve telemetry coverage for ${signal}.`;
   });
   return {
     missing_critical_signals: criticalMissing,
