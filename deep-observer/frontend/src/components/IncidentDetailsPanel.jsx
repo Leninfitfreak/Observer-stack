@@ -550,11 +550,14 @@ function priorityColor(priority) {
 function buildDecisionPanel(incident, reasoning, prioritizedActions) {
   const confidenceScore = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0);
   const rootCause = reasoning?.root_cause_service || reasoning?.root_cause || incident?.root_cause_entity || "Pending";
+  const anomalyScore = Number(incident?.anomaly_score ?? 0);
   const impactSummary =
     reasoning?.impact_assessment ||
     reasoning?.customer_impact ||
-    (incident?.impacts?.length ? `Impacting ${incident.impacts.length} downstream services.` : "Impact assessment pending.");
-  const immediateAction = prioritizedActions[0]?.label || "No immediate action yet.";
+    (incident?.impacts?.length
+      ? `Impacting ${incident.impacts.length} downstream services.`
+      : `Observed ${incident?.incident_type || "incident"} on ${incident?.service || "service"} with anomaly score ${formatScore(anomalyScore)}.`);
+  const immediateAction = prioritizedActions[0]?.label || `Inspect ${incident?.service || "service"} latency and error metrics.`;
   const nextActions = prioritizedActions.slice(1, 4).map((item) => item.label);
   const investigationSteps = buildInvestigationSteps(incident, reasoning, prioritizedActions);
   return {
@@ -574,7 +577,8 @@ function buildPrioritizedActions(incident, reasoning) {
   ]
     .map((item) => toText(item))
     .filter(Boolean);
-  const unique = Array.from(new Set(rawActions));
+  const fallbackActions = buildFallbackActions(incident, reasoning);
+  const unique = Array.from(new Set(rawActions.length ? rawActions : fallbackActions));
   const baseConfidence = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.5);
   const items = unique.map((action) => classifyAction(action, baseConfidence, reasoning, incident));
   items.sort((a, b) => {
@@ -592,11 +596,16 @@ function classifyAction(action, baseConfidence, reasoning, incident) {
   let estimatedEffort = "medium";
   let riskLevel = "medium";
 
+  if (/(latency|error|availability|outage)/.test(normalized)) {
+    priority = "high";
+  }
   if (/(scale|restart|rollback|failover|throttle|partition|consumer|cache|evict)/.test(normalized)) {
     priority = "high";
   }
   if (/(inspect|verify|check|review|analyze|investigate|confirm|trace)/.test(normalized)) {
-    priority = "low";
+    if (priority !== "high") {
+      priority = "low";
+    }
   }
   if (/(upgrade|migrate|refactor|reindex)/.test(normalized)) {
     estimatedEffort = "high";
@@ -636,6 +645,22 @@ function buildInvestigationSteps(incident, reasoning, prioritizedActions) {
   });
   const lowPriority = prioritizedActions.filter((action) => action.priority === "low").map((action) => action.label);
   return Array.from(new Set([...steps, ...lowPriority])).slice(0, 5);
+}
+
+function buildFallbackActions(incident, reasoning) {
+  const service = incident?.service || "service";
+  const signals = toList(incident?.signals).join(", ");
+  const actions = [
+    `Inspect ${service} latency and error metrics.`,
+    `Review recent deployments or configuration changes for ${service}.`,
+  ];
+  if (signals) {
+    actions.push(`Validate anomaly signals: ${signals}.`);
+  }
+  if (Array.isArray(reasoning?.missing_telemetry_signals) && reasoning.missing_telemetry_signals.length) {
+    actions.push("Fill missing telemetry signals to improve confidence.");
+  }
+  return actions;
 }
 
 function buildSignalSummary(incident, reasoning) {
