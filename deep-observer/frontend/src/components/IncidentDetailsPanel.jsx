@@ -214,7 +214,10 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
           <InfoCard title="Customer Impact" value={reasoning?.customer_impact || reasoning?.impact_assessment || "Pending"} />
           <InfoCard title="Observability Score" value={`${reasoning?.observability_score ?? coverage.observability_score ?? 0}%`} />
           <InfoCard title="Service Health Score" value={`${formatScore(serviceHealth?.health_score ?? 0)} / 100`} />
-          <InfoCard title="Root Cause Confidence" value={formatScore(reasoning?.confidence_score ?? currentIncident.predictive_confidence ?? 0)} />
+          <InfoCard
+            title="Root Cause Confidence"
+            value={formatConfidenceLabel(reasoning?.confidence_score ?? currentIncident.predictive_confidence ?? 0, "Confidence pending")}
+          />
           <InfoCard title="Incident Type" value={currentIncident.incident_type || "observed"} />
         </div>
 
@@ -222,7 +225,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-300">Decision Panel</p>
-              <p className="mt-1 text-xs text-slate-500">Fast guidance for operators</p>
+            <p className="mt-1 text-xs text-slate-500">Operator guidance at a glance</p>
             </div>
             <span className="rounded-full bg-cyan-500/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-cyan-200">
               Confidence {formatScore(decisionPanel.confidence_score)}
@@ -309,7 +312,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
           <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Action Prioritization</h3>
-            <p className="mt-2 text-xs text-slate-500">Sorted by priority then confidence.</p>
+            <p className="mt-2 text-xs text-slate-500">Sorted by priority, then confidence.</p>
             <div className="mt-4 space-y-3">
               {prioritizedActions.length ? prioritizedActions.map((action, index) => (
                 <div
@@ -368,7 +371,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
                 <ul className="mt-2 space-y-1 text-sm text-slate-200">
                   {observabilityGaps.missing_critical_signals.length
                     ? observabilityGaps.missing_critical_signals.map((item) => <li key={item}>- {toText(item)}</li>)
-                    : <li className="text-slate-500">No critical gaps detected.</li>}
+                  : <li className="text-slate-500">No missing critical telemetry detected.</li>}
                 </ul>
               </div>
               <p className="text-sm text-slate-300">{observabilityGaps.impact_on_confidence}</p>
@@ -377,7 +380,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
                 <ul className="mt-2 space-y-1 text-sm text-slate-200">
                   {observabilityGaps.recommended_instrumentation_steps.length
                     ? observabilityGaps.recommended_instrumentation_steps.map((item) => <li key={item}>- {toText(item)}</li>)
-                    : <li className="text-slate-500">No immediate steps required.</li>}
+                  : <li className="text-slate-500">No immediate instrumentation steps.</li>}
                 </ul>
               </div>
               <p className="text-sm text-slate-300">{observabilityGaps.summary}</p>
@@ -399,7 +402,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
                 <ul className="mt-2 space-y-1 text-sm text-slate-200">
                   {incidentCluster.related_incident_ids.length
                     ? incidentCluster.related_incident_ids.map((item) => <li key={item}>- {item}</li>)
-                    : <li className="text-slate-500">No related incidents yet.</li>}
+                    : <li className="text-slate-500">No related incidents detected.</li>}
                 </ul>
               </div>
             </div>
@@ -433,7 +436,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
                 <p className="text-sm text-slate-300">{toText(logSummary.log_summary_text)}</p>
               </div>
             ) : (
-              <p className="mt-3 text-sm text-slate-500">No log summary available for this incident.</p>
+              <p className="mt-3 text-sm text-slate-500">No log anomalies summarized for this incident.</p>
             )}
           </div>
 
@@ -459,7 +462,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
                     : <li className="text-slate-500">No secondary services identified.</li>}
                 </ul>
               </div>
-              <div className="text-xs text-slate-400">Estimated User Impact: {toText(impactSummary.estimated_user_impact)}</div>
+              <div className="text-xs text-slate-400">Estimated user impact: {toText(impactSummary.estimated_user_impact)}</div>
             </div>
           </div>
         </div>
@@ -650,7 +653,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
               <p className="mt-2 text-xs text-slate-500">{new Date(event.timestamp).toLocaleString()}</p>
             </div>
           )) : (
-            <p className="text-sm text-slate-500">No timeline events available yet.</p>
+            <p className="text-sm text-slate-500">No timeline events available for this incident yet.</p>
           )}
         </div>
       </div>
@@ -708,6 +711,15 @@ function formatScore(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "0.00";
   return numeric.toFixed(2);
+}
+
+function formatConfidenceLabel(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+  const level = numeric >= 0.75 ? "High" : numeric >= 0.45 ? "Medium" : "Low";
+  return `${numeric.toFixed(2)} (${level})`;
 }
 
 function formatReasoningStatus(status, busy) {
