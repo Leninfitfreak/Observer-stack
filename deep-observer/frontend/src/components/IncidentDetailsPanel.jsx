@@ -10,7 +10,6 @@ import {
   fetchIncidents,
   updateIncidentWorkflow,
 } from "../api";
-import IncidentTable from "./IncidentTable";
 
 export default function IncidentDetailsPanel({
   incident,
@@ -34,7 +33,6 @@ export default function IncidentDetailsPanel({
   const [workflowUpdating, setWorkflowUpdating] = useState(false);
   const [incidentCluster, setIncidentCluster] = useState(null);
   const [incidentHistory, setIncidentHistory] = useState([]);
-  const [incidentList, setIncidentList] = useState([]);
 
   useEffect(() => {
     if (!incident) return;
@@ -80,7 +78,6 @@ export default function IncidentDetailsPanel({
         const items = Array.isArray(payload) ? payload : [];
         setIncidentCluster(buildIncidentCluster(incident, items));
         setIncidentHistory(buildIncidentHistory(incident, items));
-        setIncidentList(items);
       })
       .catch(console.error);
   }, [incident, filterQuery]);
@@ -154,18 +151,6 @@ export default function IncidentDetailsPanel({
     setTimeout(() => {
       pollForReasoning(attempt + 1).catch(() => {});
     }, 3000);
-  };
-
-  const handleOpenIncident = async (incidentId) => {
-    if (!incidentId) return;
-    try {
-      const updated = await fetchIncident(incidentId);
-      if (updated) {
-        setActiveIncident(updated);
-      }
-    } catch (err) {
-      console.error(err);
-    }
   };
 
   const updateWorkflow = async (status) => {
@@ -657,13 +642,6 @@ export default function IncidentDetailsPanel({
           </div>
         </div>
       </div>
-
-      <IncidentTable
-        incidents={incidentList}
-        selectedIncidentId={currentIncident.incident_id}
-        onOpenIncident={handleOpenIncident}
-        emptyHint="No incidents available for this time range."
-      />
 
       <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
         <h3 className="text-lg font-semibold text-white">Incident History</h3>
