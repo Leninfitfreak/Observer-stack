@@ -90,6 +90,10 @@ export default function DashboardPage() {
     setAppliedCustomRange({ start: customStart, end: customEnd });
   };
 
+  const handleClearCustom = () => {
+    setCustomRange({ start: "", end: "" });
+  };
+
   useEffect(() => {
     fetchFilters()
       .then((payload) =>
@@ -168,6 +172,10 @@ export default function DashboardPage() {
         onCustomRangeChange={(key, value) => setCustomRange((current) => ({ ...current, [key]: value }))}
         onApplyCustom={handleApplyCustom}
         customRangeValid={customValid}
+        onClearCustom={handleClearCustom}
+        scopeLabel={`${filters.cluster || "All clusters"} · ${filters.namespace || "All namespaces"} · ${filters.service || "All services"} · ${
+          range.label
+        }`}
       />
       <ServiceTopologyGraph topology={topology} selectedService={filters.service || selectedIncident?.service} />
       <section ref={detailsPanelRef}>

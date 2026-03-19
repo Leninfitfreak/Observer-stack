@@ -10,10 +10,12 @@ export default function FilterBar({
   onCustomRangeChange,
   onApplyCustom,
   customRangeValid,
+  scopeLabel,
+  onClearCustom,
 }) {
   return (
     <section className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
-      <div className="grid gap-3 rounded-3xl border border-white/10 bg-slate-900/60 p-4 md:grid-cols-3">
+      <div className="grid gap-3 rounded-3xl border border-white/10 bg-slate-900/60 p-5 md:grid-cols-3">
         <FilterSelect label="Cluster" value={filters.cluster} options={options.clusters} onChange={(value) => onFilterChange("cluster", value)} />
         <FilterSelect
           label="Namespace"
@@ -22,6 +24,16 @@ export default function FilterBar({
           onChange={(value) => onFilterChange("namespace", value)}
         />
         <FilterSelect label="Service" value={filters.service} options={options.services} onChange={(value) => onFilterChange("service", value)} />
+        <div className="md:col-span-3">
+          <p className="text-xs text-slate-400">
+            Filters scope incidents, topology, and evidence. AI reasoning is shown for the selected incident.
+          </p>
+          {scopeLabel ? (
+            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">
+              Current Scope: {scopeLabel}
+            </p>
+          ) : null}
+        </div>
       </div>
       <TimeRangePicker
         value={timeRange}
@@ -32,6 +44,7 @@ export default function FilterBar({
         onApplyCustom={onApplyCustom}
         canApplyCustom={customRangeValid}
         customHint={customRangeValid ? "Ready to apply custom range." : "Select a valid start and end time."}
+        onClearCustom={onClearCustom}
       />
     </section>
   );
