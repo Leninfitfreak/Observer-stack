@@ -8,6 +8,8 @@ export default function FilterBar({
   onFilterChange,
   onTimeRangeChange,
   onCustomRangeChange,
+  onApplyCustom,
+  customRangeValid,
 }) {
   return (
     <section className="grid gap-4 xl:grid-cols-[1.2fr_1fr]">
@@ -27,6 +29,9 @@ export default function FilterBar({
         customEnd={customRange.end}
         onPresetChange={onTimeRangeChange}
         onCustomChange={onCustomRangeChange}
+        onApplyCustom={onApplyCustom}
+        canApplyCustom={customRangeValid}
+        customHint={customRangeValid ? "Ready to apply custom range." : "Select a valid start and end time."}
       />
     </section>
   );

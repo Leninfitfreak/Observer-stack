@@ -12,7 +12,16 @@ import {
 } from "../api";
 import IncidentTable from "./IncidentTable";
 
-export default function IncidentDetailsPanel({ incident, serviceHealth, clusterReport, changes, sloStatus, runbooks, observabilityReport }) {
+export default function IncidentDetailsPanel({
+  incident,
+  filterQuery,
+  serviceHealth,
+  clusterReport,
+  changes,
+  sloStatus,
+  runbooks,
+  observabilityReport,
+}) {
   const [timeline, setTimeline] = useState([]);
   const [activeIncident, setActiveIncident] = useState(null);
   const [reasoningStatus, setReasoningStatus] = useState("");
@@ -29,9 +38,12 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
   useEffect(() => {
     if (!incident) return;
     fetchTimeline(incident.incident_id)
-      .then((payload) => setTimeline(payload.events || []))
+      .then((payload) => {
+        const events = Array.isArray(payload.events) ? payload.events : [];
+        setTimeline(filterTimelineEvents(events, filterQuery));
+      })
       .catch(console.error);
-  }, [incident]);
+  }, [incident, filterQuery]);
 
   useEffect(() => {
     if (!incident) {
@@ -62,7 +74,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
     fetchCorrelations(incident.incident_id)
       .then((payload) => setCorrelations(Array.isArray(payload) ? payload : []))
       .catch(console.error);
-    fetchIncidents()
+    fetchIncidents(filterQuery)
       .then((payload) => {
         const items = Array.isArray(payload) ? payload : [];
         setIncidentCluster(buildIncidentCluster(incident, items));
@@ -70,7 +82,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
         setIncidentList(items);
       })
       .catch(console.error);
-  }, [incident]);
+  }, [incident, filterQuery]);
 
   const chartPoints = useMemo(
     () =>
@@ -802,6 +814,18 @@ function toText(value) {
   } catch {
     return String(value);
   }
+}
+
+function filterTimelineEvents(events, filterQuery) {
+  if (!filterQuery || !filterQuery.start || !filterQuery.end) return events;
+  const start = new Date(filterQuery.start).getTime();
+  const end = new Date(filterQuery.end).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return events;
+  return events.filter((event) => {
+    const ts = new Date(event.timestamp).getTime();
+    if (!Number.isFinite(ts)) return false;
+    return ts >= start && ts <= end;
+  });
 }
 
 function priorityColor(priority) {

@@ -29,6 +29,8 @@ export default function DashboardPage() {
   const [selectedIncidentId, setSelectedIncidentId] = useState("");
   const [timeRange, setTimeRange] = useState("24h");
   const [customRange, setCustomRange] = useState({ start: "", end: "" });
+  const [appliedTimeRange, setAppliedTimeRange] = useState("24h");
+  const [appliedCustomRange, setAppliedCustomRange] = useState({ start: "", end: "" });
   const [liveMode, setLiveMode] = useState(false);
   const [incidentHint, setIncidentHint] = useState("");
   const [serviceHealth, setServiceHealth] = useState([]);
@@ -38,8 +40,14 @@ export default function DashboardPage() {
   const [runbooks, setRunbooks] = useState([]);
   const [observabilityReport, setObservabilityReport] = useState(null);
 
-  const range = useMemo(() => buildRange(timeRange, customRange.start, customRange.end), [timeRange, customRange]);
-  const query = useMemo(() => ({ ...filters, start: range.start, end: range.end, time_range: timeRange }), [filters, range, timeRange]);
+  const range = useMemo(
+    () => buildRange(appliedTimeRange, appliedCustomRange.start, appliedCustomRange.end),
+    [appliedTimeRange, appliedCustomRange],
+  );
+  const query = useMemo(
+    () => ({ ...filters, start: range.start, end: range.end, time_range: appliedTimeRange }),
+    [filters, range, appliedTimeRange],
+  );
   const selectedIncident =
     (Array.isArray(incidents) ? incidents : []).find((incident) => incident.incident_id === selectedIncidentId) ||
     (Array.isArray(incidents) ? incidents[0] : null) ||
@@ -56,6 +64,30 @@ export default function DashboardPage() {
       shouldScrollToDetailsRef.current = true;
     }
     setSelectedIncidentId(incidentId);
+  };
+
+  const handlePresetChange = (value) => {
+    setTimeRange(value);
+    if (value !== "custom") {
+      setAppliedTimeRange(value);
+      setAppliedCustomRange({ start: "", end: "" });
+    }
+  };
+
+  const customStart = customRange.start;
+  const customEnd = customRange.end;
+  const customValid =
+    timeRange === "custom" &&
+    customStart &&
+    customEnd &&
+    new Date(customStart).toString() !== "Invalid Date" &&
+    new Date(customEnd).toString() !== "Invalid Date" &&
+    new Date(customStart) <= new Date(customEnd);
+
+  const handleApplyCustom = () => {
+    if (!customValid) return;
+    setAppliedTimeRange("custom");
+    setAppliedCustomRange({ start: customStart, end: customEnd });
   };
 
   useEffect(() => {
@@ -95,7 +127,7 @@ export default function DashboardPage() {
                 }
               : { nodes: [], edges: [] };
           setIncidents(safeIncidents);
-          setIncidentHint("");
+          setIncidentHint(safeIncidents.length ? "" : "No incidents match the current filters.");
           setTopology(safeTopology);
           setServiceHealth(Array.isArray(healthData) ? healthData : []);
           setClusterReport(reportData && typeof reportData === "object" ? reportData : null);
@@ -132,13 +164,16 @@ export default function DashboardPage() {
         timeRange={timeRange}
         customRange={customRange}
         onFilterChange={(key, value) => setFilters((current) => ({ ...current, [key]: value }))}
-        onTimeRangeChange={setTimeRange}
+        onTimeRangeChange={handlePresetChange}
         onCustomRangeChange={(key, value) => setCustomRange((current) => ({ ...current, [key]: value }))}
+        onApplyCustom={handleApplyCustom}
+        customRangeValid={customValid}
       />
       <ServiceTopologyGraph topology={topology} selectedService={filters.service || selectedIncident?.service} />
       <section ref={detailsPanelRef}>
         <IncidentDetailsPanel
           incident={selectedIncident}
+          filterQuery={query}
           serviceHealth={serviceHealth.find((item) => item.service_name === (selectedIncident?.service || filters.service))}
           clusterReport={clusterReport}
           changes={changes}
