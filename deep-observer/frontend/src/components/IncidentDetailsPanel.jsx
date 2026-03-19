@@ -88,6 +88,9 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
   const canRunReasoning = ["not_generated", "failed", "completed"].includes(derivedStatus) && !reasoningBusy;
   const confidenceDetails = reasoning?.confidence_explanation || {};
   const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
+  const prioritizedActions = buildPrioritizedActions(currentIncident, reasoning);
+  const decisionPanel = buildDecisionPanel(currentIncident, reasoning, prioritizedActions);
+  const signalSummary = buildSignalSummary(currentIncident, reasoning);
 
   const refreshIncident = async () => {
     const updated = await fetchIncident(currentIncident.incident_id);
@@ -177,6 +180,79 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
           <InfoCard title="Service Health Score" value={`${formatScore(serviceHealth?.health_score ?? 0)} / 100`} />
           <InfoCard title="Root Cause Confidence" value={formatScore(reasoning?.confidence_score ?? currentIncident.predictive_confidence ?? 0)} />
           <InfoCard title="Incident Type" value={currentIncident.incident_type || "observed"} />
+        </div>
+
+        <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/85 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-300">Decision Panel</p>
+              <p className="mt-1 text-xs text-slate-500">Fast guidance for operators</p>
+            </div>
+            <span className="rounded-full bg-cyan-500/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-cyan-200">
+              Confidence {formatScore(decisionPanel.confidence_score)}
+            </span>
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <InfoCard title="What is broken?" value={decisionPanel.root_cause} />
+            <InfoCard title="Why does it matter?" value={decisionPanel.impact_summary} />
+          </div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <InfoCard title="Immediate Action" value={decisionPanel.immediate_action} />
+            <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Next Actions</p>
+              <ul className="mt-2 space-y-2 text-sm text-slate-200">
+                {decisionPanel.next_actions.length
+                  ? decisionPanel.next_actions.map((item) => <li key={item}>- {toText(item)}</li>)
+                  : <li className="text-slate-500">No next actions yet.</li>}
+              </ul>
+            </div>
+          </div>
+          <div className="mt-4 rounded-3xl border border-white/10 bg-slate-900/60 p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Investigation Steps</p>
+            <ul className="mt-2 space-y-2 text-sm text-slate-200">
+              {decisionPanel.investigation_steps.length
+                ? decisionPanel.investigation_steps.map((item) => <li key={item}>- {toText(item)}</li>)
+                : <li className="text-slate-500">No additional investigation steps.</li>}
+            </ul>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-6 xl:grid-cols-2">
+          <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Action Prioritization</h3>
+            <p className="mt-2 text-xs text-slate-500">Sorted by priority then confidence.</p>
+            <div className="mt-4 space-y-3">
+              {prioritizedActions.length ? prioritizedActions.map((action, index) => (
+                <div
+                  key={`${action.label}-${index}`}
+                  className={`rounded-2xl border border-white/10 px-4 py-3 ${
+                    index === 0 ? "bg-cyan-500/10" : "bg-slate-900/60"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-semibold text-white">{toText(action.label)}</span>
+                    <span className={`text-xs font-semibold uppercase tracking-[0.2em] ${priorityColor(action.priority)}`}>
+                      {action.priority}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-xs text-slate-400">
+                    Confidence {formatScore(action.confidence)} · Effort {action.estimated_effort} · Risk {action.risk_level}
+                  </div>
+                </div>
+              )) : (
+                <p className="text-slate-500">No prioritized actions available yet.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Signal Summary</h3>
+            <div className="mt-4 grid gap-4">
+              <SignalGroup title="Critical Signals" items={signalSummary.critical_signals} />
+              <SignalGroup title="Secondary Signals" items={signalSummary.secondary_signals} />
+              <SignalGroup title="Missing Signals" items={signalSummary.missing_signals} />
+            </div>
+          </div>
         </div>
 
         <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/80 p-4">
@@ -295,7 +371,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
           <RichSection title="Reasoning Summary" content={reasoning?.root_cause || "Reasoning pending"} />
           <RichList title="Signals Detected" items={currentIncident.signals || []} />
           <RichList title="Causal Propagation Chain" items={reasoning?.causal_chain || []} />
-          <RichList title="Suggested Actions" items={reasoning?.recommended_actions || currentIncident.remediation_suggestions || []} />
+          <RichList title="Suggested Actions" items={prioritizedActions.map((item) => item.label)} />
           <RichList title="Propagation Path" items={reasoning?.propagation_path || currentIncident.dependency_chain || []} />
           <RichList title="Impacted Services" items={impactedServices} />
           <RichList title="Missing Telemetry Signals" items={reasoning?.missing_telemetry_signals || []} />
@@ -405,6 +481,20 @@ function RichList({ title, items }) {
   );
 }
 
+function SignalGroup({ title, items }) {
+  const normalizedItems = toList(items);
+  return (
+    <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">{title}</p>
+      <ul className="mt-2 space-y-1 text-sm text-slate-200">
+        {normalizedItems.length
+          ? normalizedItems.map((item) => <li key={item}>- {toText(item)}</li>)
+          : <li className="text-slate-500">No data</li>}
+      </ul>
+    </div>
+  );
+}
+
 function formatScore(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "0.00";
@@ -443,6 +533,154 @@ function toText(value) {
   } catch {
     return String(value);
   }
+}
+
+function priorityColor(priority) {
+  switch (priority) {
+    case "high":
+      return "text-rose-300";
+    case "medium":
+      return "text-amber-300";
+    case "low":
+    default:
+      return "text-slate-400";
+  }
+}
+
+function buildDecisionPanel(incident, reasoning, prioritizedActions) {
+  const confidenceScore = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0);
+  const rootCause = reasoning?.root_cause_service || reasoning?.root_cause || incident?.root_cause_entity || "Pending";
+  const impactSummary =
+    reasoning?.impact_assessment ||
+    reasoning?.customer_impact ||
+    (incident?.impacts?.length ? `Impacting ${incident.impacts.length} downstream services.` : "Impact assessment pending.");
+  const immediateAction = prioritizedActions[0]?.label || "No immediate action yet.";
+  const nextActions = prioritizedActions.slice(1, 4).map((item) => item.label);
+  const investigationSteps = buildInvestigationSteps(incident, reasoning, prioritizedActions);
+  return {
+    root_cause: rootCause,
+    impact_summary: impactSummary,
+    confidence_score: confidenceScore,
+    immediate_action: immediateAction,
+    next_actions: nextActions,
+    investigation_steps: investigationSteps,
+  };
+}
+
+function buildPrioritizedActions(incident, reasoning) {
+  const rawActions = [
+    ...(Array.isArray(reasoning?.recommended_actions) ? reasoning.recommended_actions : []),
+    ...(Array.isArray(incident?.remediation_suggestions) ? incident.remediation_suggestions : []),
+  ]
+    .map((item) => toText(item))
+    .filter(Boolean);
+  const unique = Array.from(new Set(rawActions));
+  const baseConfidence = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.5);
+  const items = unique.map((action) => classifyAction(action, baseConfidence, reasoning, incident));
+  items.sort((a, b) => {
+    const priorityOrder = { high: 0, medium: 1, low: 2 };
+    const p = priorityOrder[a.priority] - priorityOrder[b.priority];
+    if (p !== 0) return p;
+    return b.confidence - a.confidence;
+  });
+  return items;
+}
+
+function classifyAction(action, baseConfidence, reasoning, incident) {
+  const normalized = action.toLowerCase();
+  let priority = "medium";
+  let estimatedEffort = "medium";
+  let riskLevel = "medium";
+
+  if (/(scale|restart|rollback|failover|throttle|partition|consumer|cache|evict)/.test(normalized)) {
+    priority = "high";
+  }
+  if (/(inspect|verify|check|review|analyze|investigate|confirm|trace)/.test(normalized)) {
+    priority = "low";
+  }
+  if (/(upgrade|migrate|refactor|reindex)/.test(normalized)) {
+    estimatedEffort = "high";
+    riskLevel = "high";
+  } else if (/(restart|rollback|failover|throttle)/.test(normalized)) {
+    estimatedEffort = "medium";
+    riskLevel = "high";
+  } else if (/(scale|increase|decrease|limit|tune)/.test(normalized)) {
+    estimatedEffort = "low";
+    riskLevel = "medium";
+  }
+
+  const confidence = Math.max(0, Math.min(1, baseConfidence + (priority === "high" ? 0.05 : priority === "low" ? -0.1 : 0)));
+  if (reasoning?.missing_telemetry_signals?.length && priority === "low") {
+    estimatedEffort = "low";
+    riskLevel = "low";
+  }
+  if (incident?.anomaly_score && incident.anomaly_score > 1.5 && priority === "medium") {
+    priority = "high";
+  }
+
+  return {
+    label: action,
+    priority,
+    confidence,
+    estimated_effort: estimatedEffort,
+    risk_level: riskLevel,
+  };
+}
+
+function buildInvestigationSteps(incident, reasoning, prioritizedActions) {
+  const steps = [];
+  const missingSignals = Array.isArray(reasoning?.missing_telemetry_signals) ? reasoning.missing_telemetry_signals : [];
+  missingSignals.forEach((signal) => {
+    const item = toText(signal);
+    if (item) steps.push(`Collect missing telemetry: ${item}`);
+  });
+  const lowPriority = prioritizedActions.filter((action) => action.priority === "low").map((action) => action.label);
+  return Array.from(new Set([...steps, ...lowPriority])).slice(0, 5);
+}
+
+function buildSignalSummary(incident, reasoning) {
+  const signals = toList(incident?.signals);
+  const correlated = toList(reasoning?.correlated_signals);
+  const missing = toList(reasoning?.missing_telemetry_signals);
+  const snapshot = incident?.telemetry_snapshot || {};
+  const critical = [];
+  const secondary = [];
+
+  const combined = Array.from(new Set([...signals, ...correlated]));
+  combined.forEach((signal) => {
+    const normalized = signal.toLowerCase();
+    if (/(latency|error|timeout|consumer lag|saturation|availability)/.test(normalized)) {
+      critical.push(signal);
+    } else {
+      secondary.push(signal);
+    }
+  });
+
+  if (Number(snapshot.p95_latency_ms || 0) > Number(snapshot.baseline_latency_ms || 0) * 1.5) {
+    critical.push("p95 latency above baseline");
+  }
+  if (Number(snapshot.error_rate || 0) > Number(snapshot.baseline_error_rate || 0) * 1.5) {
+    critical.push("error rate above baseline");
+  }
+  if (Number(snapshot.cpu_utilization || 0) > 0.8) {
+    secondary.push("cpu pressure");
+  }
+  if (Number(snapshot.memory_utilization || 0) > 0.8) {
+    secondary.push("memory pressure");
+  }
+
+  if ((Array.isArray(snapshot.trace_ids) ? snapshot.trace_ids.length : 0) === 0) {
+    missing.push("distributed tracing");
+  }
+  if (Number(snapshot.log_count || 0) === 0) {
+    missing.push("structured logs");
+  }
+
+  return {
+    critical_signals: Array.from(new Set(critical)).slice(0, 6),
+    secondary_signals: Array.from(new Set(secondary)).slice(0, 6),
+    missing_signals: Array.from(new Set(missing)).slice(0, 6),
+  };
 }
 
 function formatImpactedServices(value) {
