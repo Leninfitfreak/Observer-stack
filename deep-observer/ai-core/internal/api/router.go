@@ -123,14 +123,14 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 
 		if len(parts) == 2 && parts[1] == "workflow" && r.Method == http.MethodPatch {
 			var payload struct {
-				Status     string `json:"status"`
+				Status string `json:"status"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
 				return
 			}
 			update := incidents.WorkflowUpdate{
-				Status:     strings.ToLower(strings.TrimSpace(payload.Status)),
+				Status: strings.ToLower(strings.TrimSpace(payload.Status)),
 			}
 			now := time.Now().UTC()
 			switch update.Status {
@@ -213,34 +213,42 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 		serviceFilter := normalizeServiceName(firstNonEmpty(r.URL.Query().Get("service"), project.ServiceFilter))
 		logFilters("topology", clusterFilter, namespaceFilter, serviceFilter, r.URL.Query().Get("start"), r.URL.Query().Get("end"), r.URL.Query().Get("time_range"))
 		client, err := clickhouse.NewClient(ctx, chConfig)
-		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-			return
-		}
-		defer client.Close()
-
-		graph, err := client.BuildTopology(ctx, clickhouse.Filters{
-			Cluster:   clusterFilter,
-			Namespace: namespaceFilter,
-			Service:   "",
-			Start:     start,
-			End:       end,
-		})
 		cluster := clusterFilter
 		namespace := namespaceFilter
+		graph := emptyTopologyGraph()
 		if err != nil {
-			if incidentGraph, incErr := buildGraphFromIncidentChains(ctx, store, project.ProjectID, clusterFilter, namespaceFilter, serviceFilter); incErr == nil {
+			fmt.Printf("api topology client init failed: %v\n", err)
+			if incidentGraph, incErr := buildGraphFromIncidentChainsFallback(r.Context(), store, project.ProjectID, clusterFilter, namespaceFilter, serviceFilter); incErr == nil {
 				graph = dedupeGraph(sanitizeApplicationGraph(incidentGraph))
 			} else {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
+				fmt.Printf("api topology client-init fallback failed: %v\n", incErr)
 			}
 		} else {
-			graph = dedupeGraph(graph)
-			graph = sanitizeApplicationGraph(graph)
-			if len(graph.Edges) == 0 {
-				if incidentGraph, incErr := buildGraphFromIncidentChains(ctx, store, project.ProjectID, clusterFilter, namespaceFilter, serviceFilter); incErr == nil {
+			defer client.Close()
+			graph, err = client.BuildTopology(ctx, clickhouse.Filters{
+				Cluster:   clusterFilter,
+				Namespace: namespaceFilter,
+				Service:   "",
+				Start:     start,
+				End:       end,
+			})
+			if err != nil {
+				fmt.Printf("api topology primary graph failed: %v\n", err)
+				if incidentGraph, incErr := buildGraphFromIncidentChainsFallback(r.Context(), store, project.ProjectID, clusterFilter, namespaceFilter, serviceFilter); incErr == nil {
 					graph = dedupeGraph(sanitizeApplicationGraph(incidentGraph))
+				} else {
+					fmt.Printf("api topology incident-chain fallback failed: %v\n", incErr)
+					graph = emptyTopologyGraph()
+				}
+			} else {
+				graph = dedupeGraph(graph)
+				graph = sanitizeApplicationGraph(graph)
+				if len(graph.Edges) == 0 {
+					if incidentGraph, incErr := buildGraphFromIncidentChainsFallback(r.Context(), store, project.ProjectID, clusterFilter, namespaceFilter, serviceFilter); incErr == nil {
+						graph = dedupeGraph(sanitizeApplicationGraph(incidentGraph))
+					} else {
+						fmt.Printf("api topology empty graph fallback failed: %v\n", incErr)
+					}
 				}
 			}
 		}
@@ -835,6 +843,20 @@ func buildGraphFromIncidentChains(ctx context.Context, store *incidents.Store, p
 		graph.Nodes = append(graph.Nodes, node)
 	}
 	return graph, nil
+}
+
+func buildGraphFromIncidentChainsFallback(parent context.Context, store *incidents.Store, projectID, cluster, namespace, service string) (clickhouse.TopologyGraph, error) {
+	fallbackCtx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	return buildGraphFromIncidentChains(fallbackCtx, store, projectID, cluster, namespace, service)
+}
+
+func emptyTopologyGraph() clickhouse.TopologyGraph {
+	return clickhouse.TopologyGraph{
+		GeneratedAt: time.Now().UTC(),
+		Nodes:       []clickhouse.TopologyNode{},
+		Edges:       []clickhouse.TopologyEdge{},
+	}
 }
 
 func splitChainParts(value string) []string {

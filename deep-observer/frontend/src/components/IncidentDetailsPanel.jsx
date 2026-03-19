@@ -11,6 +11,8 @@ import {
   updateIncidentWorkflow,
 } from "../api";
 
+const MAX_REASONING_POLL_ATTEMPTS = 45;
+
 export default function IncidentDetailsPanel({
   incident,
   filterQuery,
@@ -144,7 +146,7 @@ export default function IncidentDetailsPanel({
   };
 
   const pollForReasoning = async (attempt = 0) => {
-    if (attempt > 10) return;
+    if (attempt > MAX_REASONING_POLL_ATTEMPTS) return;
     const updated = await refreshIncident();
     const status = updated?.reasoning_status || derivedStatus;
     if (status === "completed" || status === "failed") return;

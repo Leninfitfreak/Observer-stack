@@ -251,6 +251,42 @@ def update_reasoning_request_status(conn: psycopg.Connection, incident_id: str, 
         )
 
 
+def fail_stale_reasoning_requests(conn: psycopg.Connection, timeout_seconds: int, error: str) -> list[str]:
+    if timeout_seconds <= 0:
+        return []
+    with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        cur.execute(
+            """
+            UPDATE reasoning_requests
+            SET status = 'failed',
+                last_error = %s,
+                completed_at = NOW(),
+                updated_at = NOW()
+            WHERE status = 'running'
+              AND COALESCE(started_at, updated_at, requested_at) <= NOW() - (%s || ' seconds')::interval
+            RETURNING incident_id
+            """,
+            (error, timeout_seconds),
+        )
+        rows = cur.fetchall()
+    incident_ids = [str(row["incident_id"]) for row in rows]
+    if not incident_ids:
+        return []
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE reasoning_runs
+            SET status = 'failed',
+                error_message = %s,
+                completed_at = NOW()
+            WHERE status = 'running'
+              AND incident_id = ANY(%s)
+            """,
+            (error, incident_ids),
+        )
+    return incident_ids
+
+
 def predictive_incident_exists(conn: psycopg.Connection, cluster: str, namespace: str, service: str, within_minutes: int = 20) -> bool:
     with conn.cursor() as cur:
         cur.execute(

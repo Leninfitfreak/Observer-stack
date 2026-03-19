@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from .config import Settings
 TRACES_TABLE = "signoz_traces.distributed_signoz_index_v3"
 LOGS_TABLE = "signoz_logs.distributed_logs_v2"
 METRICS_TABLE = "signoz_metrics.distributed_time_series_v4"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -53,7 +55,18 @@ class TelemetryReader:
         return self.client
 
     def fetch_context(self, incident: dict) -> TelemetryContext:
-        client = self._client()
+        try:
+            client = self._client()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "telemetry client initialization failed for incident=%s service=%s namespace=%s cluster=%s: %s",
+                incident.get("incident_id", ""),
+                incident.get("service", ""),
+                incident.get("namespace", ""),
+                incident.get("cluster", ""),
+                exc,
+            )
+            return self._empty_context(incident, ["telemetry client unavailable", "topology unavailable"])
         incident_time = incident["timestamp"]
         if incident_time.tzinfo is None:
             incident_time = incident_time.replace(tzinfo=timezone.utc)
@@ -63,74 +76,112 @@ class TelemetryReader:
         service = self._canonicalize_name(incident["service"]).replace("'", "''")
         namespace = incident["namespace"].replace("'", "''")
         cluster = incident["cluster"].replace("'", "''")
+        warnings: list[str] = []
 
-        trace_summary = client.query(
-            f"""
-            SELECT
-                count() AS request_count,
-                avg(durationNano) / 1000000 AS avg_latency_ms,
-                quantile(0.95)(durationNano) / 1000000 AS p95_latency_ms,
-                avg(toFloat64(hasError)) AS error_rate
-            FROM {TRACES_TABLE}
-            WHERE timestamp >= toDateTime64({int(start.timestamp() * 1000)} / 1000.0, 3)
-              AND timestamp < toDateTime64({int(end.timestamp() * 1000)} / 1000.0, 3)
-              AND {self._trace_service_expr()} = '{service}'
-              AND {self._trace_noise_filter()}
-              AND {self._eq_or_any("resources_string['k8s.namespace.name']", namespace)}
-              AND {self._eq_or_any("resources_string['k8s.cluster.name']", cluster)}
-            """
-        ).first_row
+        trace_summary = self._safe_context_fetch(
+            "trace summary",
+            incident,
+            lambda: client.query(
+                f"""
+                SELECT
+                    count() AS request_count,
+                    avg(durationNano) / 1000000 AS avg_latency_ms,
+                    quantile(0.95)(durationNano) / 1000000 AS p95_latency_ms,
+                    avg(toFloat64(hasError)) AS error_rate
+                FROM {TRACES_TABLE}
+                WHERE timestamp >= toDateTime64({int(start.timestamp() * 1000)} / 1000.0, 3)
+                  AND timestamp < toDateTime64({int(end.timestamp() * 1000)} / 1000.0, 3)
+                  AND {self._trace_service_expr()} = '{service}'
+                  AND {self._trace_noise_filter()}
+                  AND {self._eq_or_any("resources_string['k8s.namespace.name']", namespace)}
+                  AND {self._eq_or_any("resources_string['k8s.cluster.name']", cluster)}
+                """
+            ).first_row,
+            (),
+            warnings,
+        )
 
-        logs_summary = client.query(
-            f"""
-            SELECT
-                count() AS log_count,
-                countIf(trace_id != '' AND span_id != '') AS context_log_count,
-                groupArray(8)(substring(toString(body), 1, 240)) AS examples
-            FROM {LOGS_TABLE}
-            WHERE timestamp >= {int(start.timestamp() * 1_000_000_000)}
-              AND timestamp < {int(end.timestamp() * 1_000_000_000)}
-              AND {self._log_service_expr()} = '{service}'
-              AND {self._eq_or_any("resources_string['k8s.namespace.name']", namespace)}
-              AND {self._eq_or_any("resources_string['k8s.cluster.name']", cluster)}
-              AND (
-                lowerUTF8(severity_text) IN ('error', 'fatal', 'warn', 'warning') OR
-                severity_number >= 13 OR
-                positionCaseInsensitive(body, 'error') > 0 OR
-                positionCaseInsensitive(body, 'exception') > 0 OR
-                positionCaseInsensitive(body, 'backoff') > 0 OR
-                positionCaseInsensitive(body, 'failed') > 0
-              )
-            """
-        ).first_row
+        logs_summary = self._safe_context_fetch(
+            "logs summary",
+            incident,
+            lambda: client.query(
+                f"""
+                SELECT
+                    count() AS log_count,
+                    countIf(trace_id != '' AND span_id != '') AS context_log_count,
+                    groupArray(8)(substring(toString(body), 1, 240)) AS examples
+                FROM {LOGS_TABLE}
+                WHERE timestamp >= {int(start.timestamp() * 1_000_000_000)}
+                  AND timestamp < {int(end.timestamp() * 1_000_000_000)}
+                  AND {self._log_service_expr()} = '{service}'
+                  AND {self._eq_or_any("resources_string['k8s.namespace.name']", namespace)}
+                  AND {self._eq_or_any("resources_string['k8s.cluster.name']", cluster)}
+                  AND (
+                    lowerUTF8(severity_text) IN ('error', 'fatal', 'warn', 'warning') OR
+                    severity_number >= 13 OR
+                    positionCaseInsensitive(body, 'error') > 0 OR
+                    positionCaseInsensitive(body, 'exception') > 0 OR
+                    positionCaseInsensitive(body, 'backoff') > 0 OR
+                    positionCaseInsensitive(body, 'failed') > 0
+                  )
+                """
+            ).first_row,
+            (),
+            warnings,
+        )
 
-        metrics_rows = client.query(
-            f"""
-            SELECT metric_name, count()
-            FROM {METRICS_TABLE}
-            WHERE unix_milli >= {int(start.timestamp() * 1000)}
-              AND unix_milli < {int(end.timestamp() * 1000)}
-              AND {self._metric_service_expr()} = '{service}'
-              AND (
-                positionCaseInsensitive(metric_name, 'cpu') > 0 OR
-                positionCaseInsensitive(metric_name, 'memory') > 0 OR
-                positionCaseInsensitive(metric_name, 'latency') > 0 OR
-                positionCaseInsensitive(metric_name, 'error') > 0
-              )
-            GROUP BY metric_name
-            LIMIT 30
-            """
-        ).result_rows
+        metrics_rows = self._safe_context_fetch(
+            "metrics summary",
+            incident,
+            lambda: client.query(
+                f"""
+                SELECT metric_name, count()
+                FROM {METRICS_TABLE}
+                WHERE unix_milli >= {int(start.timestamp() * 1000)}
+                  AND unix_milli < {int(end.timestamp() * 1000)}
+                  AND {self._metric_service_expr()} = '{service}'
+                  AND (
+                    positionCaseInsensitive(metric_name, 'cpu') > 0 OR
+                    positionCaseInsensitive(metric_name, 'memory') > 0 OR
+                    positionCaseInsensitive(metric_name, 'latency') > 0 OR
+                    positionCaseInsensitive(metric_name, 'error') > 0
+                  )
+                GROUP BY metric_name
+                LIMIT 30
+                """
+            ).result_rows,
+            [],
+            warnings,
+        )
 
-        topology = self._fetch_topology(client, service, namespace, cluster, start, end)
-        timeline = self._fetch_timeline(client, service, namespace, cluster, incident_time)
-        deployment_correlation = self._fetch_deployments(client, namespace, cluster, incident_time)
+        topology = self._safe_context_fetch(
+            "topology",
+            incident,
+            lambda: self._fetch_topology(client, service, namespace, cluster, start, end),
+            {"nodes": [], "edges": []},
+            warnings,
+        )
+        timeline = self._safe_context_fetch(
+            "timeline",
+            incident,
+            lambda: self._fetch_timeline(client, service, namespace, cluster, incident_time),
+            [],
+            warnings,
+        )
+        deployment_correlation = self._safe_context_fetch(
+            "deployments",
+            incident,
+            lambda: self._fetch_deployments(client, namespace, cluster, incident_time),
+            {"events": []},
+            warnings,
+        )
         telemetry_coverage = self._build_coverage(
             service,
             metrics_rows,
             trace_summary,
             logs_summary,
             topology,
+            warnings,
         )
 
         return TelemetryContext(
@@ -163,8 +214,61 @@ class TelemetryReader:
             deployment_correlation=deployment_correlation,
         )
 
+    def _empty_context(self, incident: dict, warnings: list[str]) -> TelemetryContext:
+        service = incident.get("service", "")
+        coverage = self._build_coverage(service, [], (), (), {"nodes": [], "edges": []}, warnings)
+        return TelemetryContext(
+            metrics_summary={
+                "highlights": {},
+                "detector_snapshot": incident.get("telemetry_snapshot", {}),
+            },
+            logs_summary={
+                "log_count": 0,
+                "context_log_count": 0,
+                "examples": [],
+            },
+            trace_summary={
+                "request_count": 0,
+                "avg_latency_ms": 0,
+                "p95_latency_ms": 0,
+                "error_rate": 0,
+            },
+            service_context={
+                "service": service,
+                "detector_signals": incident.get("detector_signals", []),
+                "incident_severity": incident.get("severity", ""),
+                "anomaly_score": incident.get("anomaly_score", 0),
+            },
+            namespace_context={"namespace": incident.get("namespace", "")},
+            cluster_context={"cluster": incident.get("cluster", "")},
+            topology={"nodes": [], "edges": []},
+            timeline=[],
+            telemetry_coverage=coverage,
+            deployment_correlation={"events": []},
+        )
+
+    def _safe_context_fetch(self, section: str, incident: dict, operation, default, warnings: list[str]):
+        try:
+            return operation()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "telemetry %s fetch failed for incident=%s service=%s namespace=%s cluster=%s: %s",
+                section,
+                incident.get("incident_id", ""),
+                incident.get("service", ""),
+                incident.get("namespace", ""),
+                incident.get("cluster", ""),
+                exc,
+            )
+            warnings.append(f"{section} unavailable")
+            return default
+
     def detect_predictive_anomalies(self) -> list[dict]:
-        client = self._client()
+        try:
+            client = self._client()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("predictive anomaly detection unavailable: %s", exc)
+            return []
         rows = client.query(
             f"""
             SELECT
@@ -511,7 +615,7 @@ class TelemetryReader:
         events.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
         return {"events": events[:10]}
 
-    def _build_coverage(self, service: str, metrics_rows, trace_summary, logs_summary, topology: dict) -> dict:
+    def _build_coverage(self, service: str, metrics_rows, trace_summary, logs_summary, topology: dict, warnings: list[str]) -> dict:
         missing_signals: list[str] = []
         metrics_count = len(metrics_rows)
         tracing_count = int(trace_summary[0] or 0) if trace_summary else 0
@@ -525,6 +629,12 @@ class TelemetryReader:
             missing_signals.append(f"Missing CPU metrics for {service}")
         if not logs_structured:
             missing_signals.append(f"Logs missing structured fields for {service}")
+        if "topology unavailable" in warnings:
+            missing_signals.append(f"Dependency topology unavailable for {service}")
+        for warning in warnings:
+            if warning == "topology unavailable":
+                continue
+            missing_signals.append(warning)
 
         metrics_score = 100 if metrics_count > 0 else 30
         tracing_score = 100 if tracing_count > 0 else 20
