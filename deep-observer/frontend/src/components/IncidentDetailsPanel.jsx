@@ -21,7 +21,6 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
   const [selectedRun, setSelectedRun] = useState(null);
   const [correlations, setCorrelations] = useState([]);
   const [workflowUpdating, setWorkflowUpdating] = useState(false);
-  const [assignedTo, setAssignedTo] = useState("");
   const [incidentCluster, setIncidentCluster] = useState(null);
 
   useEffect(() => {
@@ -46,7 +45,6 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
     setReasoningStatus(incident.reasoning_status || "");
     setReasoningError(incident.reasoning_error || "");
     setReasoningBusy(false);
-    setAssignedTo(incident.assigned_to || "");
   }, [incident]);
 
   useEffect(() => {
@@ -146,7 +144,6 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
     try {
       const updated = await updateIncidentWorkflow(currentIncident.incident_id, {
         status,
-        assigned_to: assignedTo,
       });
       if (updated) {
         setActiveIncident(updated);
@@ -259,53 +256,44 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
         <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/70 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Incident Workflow</h3>
-              <p className="mt-1 text-xs text-slate-500">Track operator status and ownership.</p>
+              <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Incident Lifecycle</h3>
+              <p className="mt-1 text-xs text-slate-500">Track the current lifecycle state.</p>
             </div>
             <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200">
-              {workflowStatus}
+              {formatWorkflowStatus(workflowStatus)}
             </span>
           </div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-[1.5fr_1fr]">
-            <div>
-              <label className="text-xs uppercase tracking-[0.3em] text-slate-500">Assigned To</label>
-              <input
-                value={assignedTo}
-                onChange={(event) => setAssignedTo(event.target.value)}
-                placeholder="owner@email or on-call"
-                className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-slate-200"
-              />
-            </div>
-            <div className="grid gap-2">
-              <button
-                type="button"
-                onClick={() => updateWorkflow("acknowledged")}
-                disabled={workflowUpdating}
-                className="rounded-full bg-cyan-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200 hover:bg-cyan-500/30"
-              >
-                Acknowledge
-              </button>
-              <button
-                type="button"
-                onClick={() => updateWorkflow("investigating")}
-                disabled={workflowUpdating}
-                className="rounded-full bg-amber-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 hover:bg-amber-500/30"
-              >
-                Start Investigating
-              </button>
-              <button
-                type="button"
-                onClick={() => updateWorkflow("resolved")}
-                disabled={workflowUpdating}
-                className="rounded-full bg-emerald-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200 hover:bg-emerald-500/30"
-              >
-                Mark Resolved
-              </button>
-            </div>
+          <div className="mt-4 grid gap-2 lg:grid-cols-3">
+            <button
+              type="button"
+              onClick={() => updateWorkflow("acknowledged")}
+              disabled={workflowUpdating}
+              className="rounded-full bg-cyan-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200 hover:bg-cyan-500/30"
+            >
+              Mark Acknowledged
+            </button>
+            <button
+              type="button"
+              onClick={() => updateWorkflow("investigating")}
+              disabled={workflowUpdating}
+              className="rounded-full bg-amber-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 hover:bg-amber-500/30"
+            >
+              Mark Investigating
+            </button>
+            <button
+              type="button"
+              onClick={() => updateWorkflow("resolved")}
+              disabled={workflowUpdating}
+              className="rounded-full bg-emerald-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200 hover:bg-emerald-500/30"
+            >
+              Mark Resolved
+            </button>
           </div>
           <div className="mt-3 text-xs text-slate-500">
-            Acknowledged: {currentIncident.acknowledged_at ? new Date(currentIncident.acknowledged_at).toLocaleString() : "—"} ·
-            Resolved: {currentIncident.resolved_at ? new Date(currentIncident.resolved_at).toLocaleString() : "—"}
+            Acknowledged: {formatTimestamp(currentIncident.acknowledged_at)} ·
+            Investigating: {formatTimestamp(currentIncident.investigating_at)} ·
+            Resolved: {formatTimestamp(currentIncident.resolved_at)} ·
+            Last updated: {formatTimestamp(currentIncident.workflow_updated_at)}
           </div>
         </div>
 
@@ -720,6 +708,23 @@ function formatConfidenceLabel(value, fallback) {
   }
   const level = numeric >= 0.75 ? "High" : numeric >= 0.45 ? "Medium" : "Low";
   return `${numeric.toFixed(2)} (${level})`;
+}
+
+function formatWorkflowStatus(value) {
+  if (!value) return "Open";
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatTimestamp(value) {
+  if (!value) return "—";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return "—";
+  }
 }
 
 function formatReasoningStatus(status, busy) {

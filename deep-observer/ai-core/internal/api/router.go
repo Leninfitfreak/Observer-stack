@@ -123,7 +123,6 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 		if len(parts) == 2 && parts[1] == "workflow" && r.Method == http.MethodPatch {
 			var payload struct {
 				Status     string `json:"status"`
-				AssignedTo string `json:"assigned_to"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
@@ -131,7 +130,6 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 			}
 			update := incidents.WorkflowUpdate{
 				Status:     strings.ToLower(strings.TrimSpace(payload.Status)),
-				AssignedTo: strings.TrimSpace(payload.AssignedTo),
 			}
 			now := time.Now().UTC()
 			switch update.Status {
@@ -139,9 +137,11 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 				update.AcknowledgedAt = &now
 			case "investigating":
 				update.AcknowledgedAt = &now
+				update.InvestigatingAt = &now
 			case "resolved":
 				update.ResolvedAt = &now
 			}
+			update.WorkflowUpdatedAt = &now
 			item, err := store.UpdateWorkflow(ctx, incidentID, update)
 			if err != nil {
 				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -487,9 +487,14 @@ func sortedKeys(values map[string]struct{}) []string {
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		origin := r.Header.Get("Origin")
+		if origin == "http://localhost:3000" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

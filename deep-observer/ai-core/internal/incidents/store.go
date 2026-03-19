@@ -55,7 +55,9 @@ type Incident struct {
 	WorkflowStatus         string                     `json:"workflow_status"`
 	AssignedTo             string                     `json:"assigned_to"`
 	AcknowledgedAt         *time.Time                 `json:"acknowledged_at,omitempty"`
+	InvestigatingAt        *time.Time                 `json:"investigating_at,omitempty"`
 	ResolvedAt             *time.Time                 `json:"resolved_at,omitempty"`
+	WorkflowUpdatedAt      *time.Time                 `json:"workflow_updated_at,omitempty"`
 }
 
 type IncidentImpact struct {
@@ -171,7 +173,9 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			workflow_status TEXT NOT NULL DEFAULT 'open',
 			assigned_to TEXT NOT NULL DEFAULT '',
 			acknowledged_at TIMESTAMPTZ,
+			investigating_at TIMESTAMPTZ,
 			resolved_at TIMESTAMPTZ,
+			workflow_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
 		`ALTER TABLE incidents ADD COLUMN IF NOT EXISTS problem_id TEXT NOT NULL DEFAULT ''`,
@@ -185,7 +189,9 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		`ALTER TABLE incidents ADD COLUMN IF NOT EXISTS workflow_status TEXT NOT NULL DEFAULT 'open'`,
 		`ALTER TABLE incidents ADD COLUMN IF NOT EXISTS assigned_to TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE incidents ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ`,
+		`ALTER TABLE incidents ADD COLUMN IF NOT EXISTS investigating_at TIMESTAMPTZ`,
 		`ALTER TABLE incidents ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`,
+		`ALTER TABLE incidents ADD COLUMN IF NOT EXISTS workflow_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
 		`CREATE INDEX IF NOT EXISTS incidents_service_timestamp_idx ON incidents(service, timestamp DESC)`,
 		`CREATE INDEX IF NOT EXISTS incidents_project_timestamp_idx ON incidents(project_id, timestamp DESC)`,
 		`CREATE INDEX IF NOT EXISTS incidents_problem_timestamp_idx ON incidents(problem_id, timestamp DESC)`,
@@ -599,7 +605,7 @@ func (s *Store) ListIncidents(ctx context.Context, filters QueryFilters) ([]Inci
 			i.incident_id, i.project_id, i.problem_id, i.incident_type, i.predictive_confidence, i.cluster, i.namespace, i.service, i.timestamp, i.severity, i.anomaly_score,
 			i.telemetry_snapshot, i.detector_signals, i.root_cause_entity, i.dependency_chain,
 			i.remediation_suggestions, i.timeline_summary,
-			i.workflow_status, i.assigned_to, i.acknowledged_at, i.resolved_at,
+			i.workflow_status, i.assigned_to, i.acknowledged_at, i.investigating_at, i.resolved_at, i.workflow_updated_at,
 			r.incident_id, r.root_cause, r.root_cause_service, r.root_cause_signal, r.confidence_score, r.confidence_explanation,
 			r.causal_chain, r.correlated_signals, r.propagation_path, r.impact_assessment,
 			r.customer_impact, r.recommended_actions, r.missing_telemetry_signals,
@@ -653,7 +659,7 @@ func (s *Store) GetIncident(ctx context.Context, incidentID string) (*Incident, 
 			i.incident_id, i.project_id, i.problem_id, i.incident_type, i.predictive_confidence, i.cluster, i.namespace, i.service, i.timestamp, i.severity, i.anomaly_score,
 			i.telemetry_snapshot, i.detector_signals, i.root_cause_entity, i.dependency_chain,
 			i.remediation_suggestions, i.timeline_summary,
-			i.workflow_status, i.assigned_to, i.acknowledged_at, i.resolved_at,
+			i.workflow_status, i.assigned_to, i.acknowledged_at, i.investigating_at, i.resolved_at, i.workflow_updated_at,
 			r.incident_id, r.root_cause, r.root_cause_service, r.root_cause_signal, r.confidence_score, r.confidence_explanation,
 			r.causal_chain, r.correlated_signals, r.propagation_path, r.impact_assessment,
 			r.customer_impact, r.recommended_actions, r.missing_telemetry_signals,
@@ -746,12 +752,12 @@ func scanIncident(scanner rowScanner) (Incident, error) {
 	var reasoningStatus, reasoningError *string
 	var reasoningRequestedAt, reasoningUpdatedAt *time.Time
 	var workflowStatus, assignedTo *string
-	var acknowledgedAt, resolvedAt *time.Time
+	var acknowledgedAt, investigatingAt, resolvedAt, workflowUpdatedAt *time.Time
 
 	err := scanner.Scan(
 		&item.ID, &item.ProjectID, &item.ProblemID, &item.IncidentType, &item.PredictiveConfidence, &item.Cluster, &item.Namespace, &item.Service, &item.Timestamp, &item.Severity, &item.AnomalyScore,
 		&snapshotJSON, &signalsJSON, &item.RootCauseEntity, &dependencyJSON, &remediationJSON, &timelineJSON,
-		&workflowStatus, &assignedTo, &acknowledgedAt, &resolvedAt,
+		&workflowStatus, &assignedTo, &acknowledgedAt, &investigatingAt, &resolvedAt, &workflowUpdatedAt,
 		&reasoningID, &rootCause, &rootCauseService, &rootCauseSignal, &confidence, &confidenceExplanationJSON,
 		&causalJSON, &correlatedJSON, &propagationJSON, &impact,
 		&customerImpact, &actionsJSON, &missingSignalsJSON,
@@ -810,7 +816,9 @@ func scanIncident(scanner rowScanner) (Incident, error) {
 		item.AssignedTo = *assignedTo
 	}
 	item.AcknowledgedAt = acknowledgedAt
+	item.InvestigatingAt = investigatingAt
 	item.ResolvedAt = resolvedAt
+	item.WorkflowUpdatedAt = workflowUpdatedAt
 	if item.WorkflowStatus == "" {
 		item.WorkflowStatus = "open"
 	}
@@ -861,7 +869,9 @@ type WorkflowUpdate struct {
 	Status         string     `json:"status"`
 	AssignedTo     string     `json:"assigned_to"`
 	AcknowledgedAt *time.Time `json:"acknowledged_at,omitempty"`
+	InvestigatingAt *time.Time `json:"investigating_at,omitempty"`
 	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
+	WorkflowUpdatedAt *time.Time `json:"workflow_updated_at,omitempty"`
 }
 
 func (s *Store) UpdateWorkflow(ctx context.Context, incidentID string, update WorkflowUpdate) (*Incident, error) {
@@ -871,9 +881,11 @@ func (s *Store) UpdateWorkflow(ctx context.Context, incidentID string, update Wo
 			workflow_status = COALESCE(NULLIF($2, ''), workflow_status),
 			assigned_to = COALESCE($3, assigned_to),
 			acknowledged_at = COALESCE($4, acknowledged_at),
-			resolved_at = COALESCE($5, resolved_at)
+			investigating_at = COALESCE($5, investigating_at),
+			resolved_at = COALESCE($6, resolved_at),
+			workflow_updated_at = COALESCE($7, workflow_updated_at)
 		WHERE incident_id = $1
-	`, incidentID, update.Status, update.AssignedTo, update.AcknowledgedAt, update.ResolvedAt)
+	`, incidentID, update.Status, update.AssignedTo, update.AcknowledgedAt, update.InvestigatingAt, update.ResolvedAt, update.WorkflowUpdatedAt)
 	if err != nil {
 		return nil, err
 	}
