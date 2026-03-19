@@ -84,6 +84,9 @@ func (e *Engine) runOnce(ctx context.Context) {
 	topoCache := map[string]clickhouse.TopologyGraph{}
 	problemByService := map[string]string{}
 	for _, svc := range services {
+		if clickhouse.IsIgnoredService(svc.Service) {
+			continue
+		}
 		filters := clickhouse.Filters{
 			Cluster:   svc.Cluster,
 			Namespace: svc.Namespace,
@@ -233,8 +236,8 @@ func propagateIncidentImpacts(root string, graph clickhouse.TopologyGraph) []inc
 		return nil
 	}
 	impacts := []incidents.IncidentImpact{{
-		Service:    root,
-		ImpactType: "root",
+		Service:     root,
+		ImpactType:  "root",
 		ImpactScore: 1.0,
 	}}
 
@@ -269,8 +272,8 @@ func propagateIncidentImpacts(root string, graph clickhouse.TopologyGraph) []inc
 				depth := current.depth + 1
 				score := 1.0 / (1.0 + float64(depth)*depthPenalty)
 				impacts = append(impacts, incidents.IncidentImpact{
-					Service:    next,
-					ImpactType: impactType,
+					Service:     next,
+					ImpactType:  impactType,
 					ImpactScore: score,
 				})
 				queue = append(queue, node{service: next, depth: depth})

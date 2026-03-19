@@ -424,7 +424,25 @@ def store_reasoning(conn: psycopg.Connection, incident: dict, reasoning: dict) -
             ) VALUES (
                 %s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s,%s::jsonb,%s
             )
-            ON CONFLICT (incident_id) DO NOTHING
+            ON CONFLICT (incident_id) DO UPDATE SET
+                root_cause = EXCLUDED.root_cause,
+                root_cause_service = EXCLUDED.root_cause_service,
+                root_cause_signal = EXCLUDED.root_cause_signal,
+                confidence_score = EXCLUDED.confidence_score,
+                confidence_explanation = EXCLUDED.confidence_explanation,
+                causal_chain = EXCLUDED.causal_chain,
+                correlated_signals = EXCLUDED.correlated_signals,
+                propagation_path = EXCLUDED.propagation_path,
+                impact_assessment = EXCLUDED.impact_assessment,
+                customer_impact = EXCLUDED.customer_impact,
+                recommended_actions = EXCLUDED.recommended_actions,
+                missing_telemetry_signals = EXCLUDED.missing_telemetry_signals,
+                observability_score = EXCLUDED.observability_score,
+                observability_summary = EXCLUDED.observability_summary,
+                deployment_correlation = EXCLUDED.deployment_correlation,
+                historical_matches = EXCLUDED.historical_matches,
+                severity = EXCLUDED.severity,
+                created_at = NOW()
             """,
             (
                 incident["incident_id"],

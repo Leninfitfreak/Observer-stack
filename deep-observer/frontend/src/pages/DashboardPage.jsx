@@ -40,6 +40,17 @@ export default function DashboardPage() {
   const [runbooks, setRunbooks] = useState([]);
   const [observabilityReport, setObservabilityReport] = useState(null);
 
+  const selectedServiceName = selectedIncident?.service || filters.service || "";
+  const selectedClusterReport =
+    selectedIncident && clusterReport && typeof clusterReport === "object"
+      ? {
+          ...clusterReport,
+          impacted_services: Array.isArray(clusterReport.impacted_services)
+            ? clusterReport.impacted_services.filter((item) => !selectedServiceName || item?.service_name === selectedServiceName)
+            : [],
+        }
+      : clusterReport;
+
   const range = useMemo(
     () => buildRange(appliedTimeRange, appliedCustomRange.start, appliedCustomRange.end),
     [appliedTimeRange, appliedCustomRange],
@@ -206,10 +217,10 @@ export default function DashboardPage() {
           incident={selectedIncident}
           filterQuery={query}
           emptyHint={incidentHint || "No incidents found for the selected filters."}
-          serviceHealth={serviceHealth.find((item) => item.service_name === (selectedIncident?.service || filters.service))}
-          clusterReport={clusterReport}
-          changes={changes}
-          sloStatus={sloStatus.filter((item) => item.service_name === (selectedIncident?.service || filters.service))}
+          serviceHealth={serviceHealth.find((item) => item.service_name === selectedServiceName)}
+          clusterReport={selectedClusterReport}
+          changes={Array.isArray(changes) ? changes.filter((item) => !selectedServiceName || `${item?.resource_name || ""}`.includes(selectedServiceName)) : []}
+          sloStatus={sloStatus.filter((item) => item.service_name === selectedServiceName)}
           runbooks={runbooks}
           observabilityReport={observabilityReport}
         />

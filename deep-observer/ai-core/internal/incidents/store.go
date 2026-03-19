@@ -3,6 +3,7 @@ package incidents
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ import (
 type Store struct {
 	pool *pgxpool.Pool
 }
+
+var structuredIncidentEntityPattern = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9-]{0,63}|db:[a-z0-9][a-z0-9._/-]{0,95}|messaging:[a-z0-9][a-z0-9._/-]{0,95})$`)
 
 type QueryFilters struct {
 	ProjectID string
@@ -1144,6 +1147,9 @@ func normalizeIncidentEntity(value string) string {
 	normalized := clickhouse.CanonicalTopologyNodeID(value)
 	if strings.TrimSpace(normalized) == "" {
 		return strings.TrimSpace(value)
+	}
+	if strings.ContainsAny(normalized, " \t\r\n") || len(normalized) > 128 || !structuredIncidentEntityPattern.MatchString(normalized) {
+		return ""
 	}
 	return normalized
 }

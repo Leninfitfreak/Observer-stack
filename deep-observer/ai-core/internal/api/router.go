@@ -20,6 +20,7 @@ import (
 )
 
 var serviceNodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
+var structuredTopologyNodePattern = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9-]{0,39}|db:[a-z0-9][a-z0-9._/-]{0,95}|messaging:[a-z0-9][a-z0-9._/-]{0,95})$`)
 
 func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project config.ProjectConfig) http.Handler {
 	sloEngine := enterprise.NewSLOEngine(store)
@@ -204,7 +205,7 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 	})
 
 	mux.HandleFunc("/api/topology", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 		defer cancel()
 
 		start, end := parseTimeRangeWithDefaults(r.URL.Query().Get("start"), r.URL.Query().Get("end"), 24*time.Hour)
@@ -308,7 +309,14 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 		}
 		values["clusters"] = sortedKeys(clusterSet)
 		values["namespaces"] = sortedKeys(namespaceSet)
-		values["services"] = sortedKeys(serviceSet)
+		filteredServices := map[string]struct{}{}
+		for service := range serviceSet {
+			if clickhouse.IsIgnoredService(service) {
+				continue
+			}
+			filteredServices[service] = struct{}{}
+		}
+		values["services"] = sortedKeys(filteredServices)
 		writeJSON(w, http.StatusOK, values)
 	})
 
@@ -698,9 +706,6 @@ func normalizeServiceName(value string) string {
 			break
 		}
 	}
-	if strings.HasPrefix(service, "leninkart-") {
-		service = strings.TrimPrefix(service, "leninkart-")
-	}
 	for _, suffix := range []string{"-dev", "-prod", "-staging", "-stage", "-qa", "-test"} {
 		if strings.HasSuffix(service, suffix) {
 			service = strings.TrimSuffix(service, suffix)
@@ -875,6 +880,9 @@ func splitChainParts(value string) []string {
 func canonicalNodeID(value string) string {
 	nodeID := clickhouse.CanonicalTopologyNodeID(value)
 	if nodeID == "" {
+		return ""
+	}
+	if strings.ContainsAny(nodeID, " \t\r\n") || len(nodeID) > 128 || !structuredTopologyNodePattern.MatchString(nodeID) {
 		return ""
 	}
 	if clickhouse.InferTopologyNodeType(nodeID) == "service" {

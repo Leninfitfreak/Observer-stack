@@ -23,7 +23,7 @@ def validate_reasoning(incident: dict, context, reasoning: dict, known_services:
         statements.append(f"root_cause_service={root_cause_service}")
         if root_cause_service in known_services:
             supports.append(f"service_exists:{root_cause_service}")
-        else:
+        elif not root_cause_service.startswith(("db:", "messaging:")):
             unsupported.append(f"service_not_found:{root_cause_service}")
 
     root_signal = str(reasoning.get("root_cause_signal", "")).lower()
@@ -34,11 +34,6 @@ def validate_reasoning(incident: dict, context, reasoning: dict, known_services:
 
     if root_signal:
         statements.append(f"root_cause_signal={root_signal}")
-        if "kafka" in root_signal:
-            if any("kafka" in signal for signal in detector_signals) or any("kafka" in name for name in metric_names):
-                supports.append("kafka_signal_evidence")
-            else:
-                unsupported.append("kafka_signal_without_evidence")
         if "cpu" in root_signal:
             cpu = float(snapshot.get("cpu_utilization", 0) or 0)
             if cpu >= 0.8 or cpu >= 80:
@@ -63,6 +58,14 @@ def validate_reasoning(incident: dict, context, reasoning: dict, known_services:
                 supports.append("database_dependency_evidence")
             else:
                 unsupported.append("database_claim_without_dependency")
+        if "messag" in root_signal or "queue" in root_signal or "topic" in root_signal or "consumer" in root_signal:
+            if any(str(edge.get("target", "")).startswith("messaging:") for edge in topology_edges) or any(
+                any(token in name for token in ("messag", "queue", "topic", "consumer"))
+                for name in metric_names
+            ):
+                supports.append("messaging_dependency_evidence")
+            else:
+                unsupported.append("messaging_claim_without_evidence")
 
     if reasoning.get("causal_chain"):
         statements.append("causal_chain_present")
@@ -83,7 +86,10 @@ def validate_reasoning(incident: dict, context, reasoning: dict, known_services:
     else:
         result = "supported"
 
-    confidence = max(0.1, min(0.99, ratio if total > 0 else 0.6))
+    if not detector_signals and not metric_names and not topology_edges:
+        confidence = 0.15
+    else:
+        confidence = max(0.1, min(0.99, ratio if total > 0 else 0.4))
     return ValidationReport(
         incident_id=incident.get("incident_id", ""),
         reasoning_statements=statements,

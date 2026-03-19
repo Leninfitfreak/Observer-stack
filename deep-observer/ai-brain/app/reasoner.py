@@ -192,6 +192,8 @@ def build_prompt(incident: dict, context: TelemetryContext, historical_matches: 
         "Use the provided metrics, logs, traces, topology, telemetry coverage, deployment evidence, and historical incidents "
         "to determine the most probable root cause service and signal. "
         "Set root_cause_service to an actual service name from incident.service or topology.nodes, never to a span/operation name. "
+        "Do not claim a specific infrastructure bottleneck or root cause unless the provided telemetry explicitly supports it. "
+        "If telemetry is sparse or missing, say that root cause is insufficiently supported and keep confidence low. "
         "Apply causal scoring using dependency weight, temporal ordering, and signal strength. "
         "Correlate related anomalies into a single problem narrative with blast radius. "
         "Correlate anomalies into a single problem, describe the propagation path, customer impact, missing telemetry, "
@@ -263,18 +265,9 @@ def _normalize_root_cause_service(candidate: str, incident: dict, context: Telem
     fallback = str(incident.get("service", "")).strip()
     if not value:
         return fallback
-    lowered = value.lower()
-    if lowered.startswith("kafka:"):
-        lowered = "kafka"
-        value = "kafka"
-    if lowered.startswith("db:"):
-        if "postgres" in lowered:
-            lowered = "postgres"
-            value = "postgres"
-        else:
-            lowered = "database"
-            value = "database"
-    if lowered in {"leninkart", "unknown", "n/a", "none"}:
+    canonical = value.strip()
+    lowered = canonical.lower()
+    if lowered in {"unknown", "n/a", "none"}:
         return fallback
     services = {item.lower(): item for item in _known_services(incident, context)}
     if lowered in services:
@@ -299,7 +292,6 @@ def _infer_root_from_topology(incident: dict, context: TelemetryContext) -> str:
         if not source or not target:
             continue
         upstream.setdefault(target, []).append(edge)
-    # Prefer the earliest upstream service; messaging/database origins get higher priority.
     queue: list[tuple[str, int, float]] = [(service, 0, 1.0)]
     visited: dict[str, float] = {service: 1.0}
     best = (service, 0.0, 0)  # service, score, depth
@@ -308,13 +300,11 @@ def _infer_root_from_topology(incident: dict, context: TelemetryContext) -> str:
         for edge in upstream.get(current, []):
             source = str(edge.get("source", "")).strip()
             dep = str(edge.get("dependency_type", "")).strip().lower()
-            weight = 1.0
-            if dep == "messaging_kafka":
-                weight = 1.2
-            elif dep == "database":
-                weight = 1.1
-            elif dep == "trace_http":
-                weight = 0.95
+            if not source:
+                continue
+            if not _is_service_candidate(source, incident, context):
+                continue
+            weight = 1.0 if dep == "trace_http" else 0.98
             next_score = score * weight * (1 + min(depth + 1, 4) * 0.08)
             if source in visited and visited[source] >= next_score:
                 continue
@@ -322,15 +312,7 @@ def _infer_root_from_topology(incident: dict, context: TelemetryContext) -> str:
             queue.append((source, depth + 1, next_score))
             if depth + 1 > best[2] or (depth + 1 == best[2] and next_score > best[1]):
                 best = (source, next_score, depth + 1)
-    selected = best[0] if best[0] else service
-    selected_lower = selected.lower()
-    if selected_lower.startswith("kafka:"):
-        return "kafka"
-    if selected_lower.startswith("db:"):
-        if "postgres" in selected_lower:
-            return "postgres"
-        return "database"
-    return selected
+    return best[0] if best[0] else service
 
 
 def _topology_has_prefix(context: TelemetryContext, prefix: str) -> bool:
@@ -350,52 +332,204 @@ def _topology_has_prefix(context: TelemetryContext, prefix: str) -> bool:
 
 
 def _align_service_with_signal(root_service: str, root_signal: str, context: TelemetryContext) -> str:
-    service = str(root_service or "").strip()
-    signal = str(root_signal or "").lower()
-    if "kafka" in signal and (_topology_has_prefix(context, "kafka:") or _topology_has_prefix(context, "kafka")):
-        return "kafka"
-    if ("db." in signal or "postgres" in signal or "database" in signal) and _topology_has_prefix(context, "db:"):
-        if _topology_has_prefix(context, "db:postgres"):
-            return "postgres"
-        return "database"
-    return service
+    _ = context
+    _ = root_signal
+    return str(root_service or "").strip()
+
+
+def _observed_metric_names(context: TelemetryContext) -> list[str]:
+    highlights = context.metrics_summary.get("highlights", {}) or {}
+    return [str(name).lower() for name in highlights.keys()]
+
+
+def _telemetry_presence(incident: dict, context: TelemetryContext) -> dict:
+    snapshot = incident.get("telemetry_snapshot", {}) or {}
+    request_count = float(snapshot.get("request_count", 0) or 0)
+    error_rate = float(snapshot.get("error_rate", 0) or 0)
+    p95_latency = float(snapshot.get("p95_latency_ms", 0) or 0)
+    avg_latency = float(snapshot.get("avg_latency_ms", 0) or 0)
+    cpu = float(snapshot.get("cpu_utilization", 0) or 0)
+    memory = float(snapshot.get("memory_utilization", 0) or 0)
+    log_count = int(context.logs_summary.get("log_count", 0) or snapshot.get("log_count", 0) or 0)
+    context_log_count = int(context.logs_summary.get("context_log_count", 0) or 0)
+    trace_count = int(context.trace_summary.get("request_count", 0) or 0)
+    metric_names = _observed_metric_names(context)
+    topology_edges = len(context.topology.get("edges", []) or [])
+    timeline_events = len(context.timeline or [])
+    detector_signals = len(_as_string_list(incident.get("detector_signals", [])))
+    strong_signals = 0
+    if error_rate > 0:
+        strong_signals += 1
+    if p95_latency > 0 or avg_latency > 0:
+        strong_signals += 1
+    if cpu > 0:
+        strong_signals += 1
+    if memory > 0:
+        strong_signals += 1
+    if log_count > 0:
+        strong_signals += 1
+    if trace_count > 0:
+        strong_signals += 1
+    if metric_names:
+        strong_signals += 1
+    if topology_edges > 0:
+        strong_signals += 1
+    if timeline_events > 0:
+        strong_signals += 1
+    return {
+        "request_count": request_count,
+        "error_rate": error_rate,
+        "p95_latency_ms": p95_latency,
+        "avg_latency_ms": avg_latency,
+        "cpu_utilization": cpu,
+        "memory_utilization": memory,
+        "log_count": log_count,
+        "context_log_count": context_log_count,
+        "trace_count": trace_count,
+        "metric_names": metric_names,
+        "topology_edges": topology_edges,
+        "timeline_events": timeline_events,
+        "detector_signals": detector_signals,
+        "strong_signals": strong_signals,
+    }
+
+
+def _is_service_candidate(candidate: str, incident: dict, context: TelemetryContext) -> bool:
+    known = _known_services(incident, context)
+    return str(candidate or "").strip() in known
+
+
+def _insufficient_telemetry(incident: dict, context: TelemetryContext) -> bool:
+    presence = _telemetry_presence(incident, context)
+    snapshot = incident.get("telemetry_snapshot", {}) or {}
+    snapshot_empty = (
+        float(snapshot.get("request_count", 0) or 0) == 0
+        and float(snapshot.get("error_rate", 0) or 0) == 0
+        and float(snapshot.get("p95_latency_ms", 0) or 0) == 0
+        and float(snapshot.get("cpu_utilization", 0) or 0) == 0
+        and float(snapshot.get("memory_utilization", 0) or 0) == 0
+        and int(snapshot.get("log_count", 0) or 0) == 0
+        and not (snapshot.get("trace_ids") or [])
+        and not (snapshot.get("metric_highlights") or {})
+    )
+    predictive = str(incident.get("incident_type", "")).lower() == "predictive"
+    if snapshot_empty and predictive:
+        return True
+    return presence["strong_signals"] <= 1 and presence["detector_signals"] <= 1
+
+
+def _missing_telemetry(context: TelemetryContext, incident: dict) -> list[str]:
+    missing = _as_string_list(context.telemetry_coverage.get("missing_signals", []))
+    presence = _telemetry_presence(incident, context)
+    if presence["trace_count"] == 0:
+        missing.append("No distributed tracing captured for this incident window")
+    if presence["log_count"] == 0:
+        missing.append("No incident-scoped logs captured for this incident window")
+    if not presence["metric_names"] and presence["cpu_utilization"] == 0 and presence["memory_utilization"] == 0:
+        missing.append("No service-level metrics captured for this incident window")
+    if presence["request_count"] == 0 and presence["trace_count"] == 0:
+        missing.append("No request activity was observed for this incident scope")
+    return dedupe_list([item for item in missing if item])
+
+
+def _evidence_score(incident: dict, context: TelemetryContext) -> float:
+    presence = _telemetry_presence(incident, context)
+    if _insufficient_telemetry(incident, context):
+        return 0.18
+    score = 0.0
+    if presence["trace_count"] > 0:
+        score += 0.2
+    if presence["log_count"] > 0:
+        score += 0.15
+    if presence["metric_names"] or presence["cpu_utilization"] > 0 or presence["memory_utilization"] > 0:
+        score += 0.15
+    if presence["request_count"] > 0:
+        score += 0.15
+    if presence["topology_edges"] > 0:
+        score += 0.1
+    if presence["timeline_events"] > 0:
+        score += 0.1
+    if presence["detector_signals"] > 0:
+        score += min(0.15, presence["detector_signals"] * 0.05)
+    if presence["context_log_count"] > 0:
+        score += 0.05
+    return max(0.0, min(1.0, score))
+
+
+def _generic_signal_label(incident: dict, context: TelemetryContext) -> str:
+    detector_signals = _as_string_list(incident.get("detector_signals", []))
+    if detector_signals:
+        return detector_signals[0]
+    presence = _telemetry_presence(incident, context)
+    if presence["p95_latency_ms"] > 0:
+        return "latency_anomaly"
+    if presence["error_rate"] > 0:
+        return "error_rate_anomaly"
+    if presence["cpu_utilization"] > 0:
+        return "cpu_pressure"
+    if presence["memory_utilization"] > 0:
+        return "memory_pressure"
+    if presence["log_count"] > 0:
+        return "log_anomaly"
+    return "insufficient_telemetry"
 
 
 def fallback_reasoning(incident: dict, context: TelemetryContext, historical_matches: list[dict]) -> dict:
     service = incident["service"]
-    inferred_service = _infer_root_from_topology(incident, context)
-    signal = incident["detector_signals"][0] if incident["detector_signals"] else "unknown"
     incident_type = incident.get("incident_type", "observed")
-    root_cause = f"Primary anomaly source is {inferred_service} driven by {signal.replace('_', ' ')}."
-    if incident_type == "predictive":
-        root_cause = f"Predicted near-term anomaly source is {inferred_service} based on rising telemetry trend ({signal.replace('_', ' ')})."
-    if signal == "log_anomaly":
-        root_cause = f"Primary anomaly source is {inferred_service} driven by elevated warning or error log activity."
-    propagation_path = [edge.get("source") for edge in context.topology.get("edges", [])[:1] if edge.get("source")]
-    if context.topology.get("edges"):
-        propagation_path.append(service)
-    remediation = build_remediation_steps(
+    insufficient = _insufficient_telemetry(incident, context)
+    signal = _generic_signal_label(incident, context)
+    inferred_service = service if insufficient else _infer_root_from_topology(incident, context)
+    missing = _missing_telemetry(context, incident)
+    confidence = 0.18 if insufficient else max(0.22, min(0.72, _evidence_score(incident, context)))
+    topology_edges = context.topology.get("edges", []) or []
+    propagation_path = []
+    if not insufficient:
+        propagation_path = [
+            " -> ".join(
+                [str(edge.get("source", "")).strip(), str(edge.get("target", "")).strip()]
+            ).strip(" ->")
+            for edge in topology_edges[:3]
+            if edge.get("source") and edge.get("target")
+        ]
+    remediation = [] if insufficient else build_remediation_steps(
         service,
         incident.get("namespace", ""),
         _as_string_list(incident.get("detector_signals", [])),
         incident_type,
     )
+    root_cause = (
+        "Insufficient telemetry to determine root cause. "
+        "Available incident evidence does not contain enough logs, traces, metrics, or dependency data to support a specific RCA."
+        if insufficient
+        else f"Observed evidence points to {inferred_service} as the most likely source of the incident."
+    )
+    impact_assessment = (
+        "Root cause could not be determined confidently because incident-scoped telemetry is sparse."
+        if insufficient
+        else f"Incident is currently centered on {service} within namespace {incident['namespace']} based on observed telemetry."
+    )
+    customer_impact = (
+        "Customer impact cannot be estimated confidently until more telemetry is available."
+        if insufficient
+        else f"Customer-facing impact is possible if {service} participates in active request paths."
+    )
     return {
         "root_cause": root_cause,
         "root_cause_service": inferred_service,
         "root_cause_signal": signal,
-        "confidence_score": _as_float(incident.get("predictive_confidence"), 0.62),
-        "causal_chain": [root_cause],
-        "correlated_signals": _as_string_list(incident.get("detector_signals", [])),
+        "confidence_score": confidence,
+        "causal_chain": [] if insufficient else [root_cause],
+        "correlated_signals": _as_string_list(incident.get("detector_signals", [])) if not insufficient else [],
         "propagation_path": propagation_path,
-        "impact_assessment": f"Incident is currently centered on {service} in namespace {incident['namespace']}.",
-        "customer_impact": f"Customer-facing impact is possible if {service} participates in active request paths.",
-        "recommended_actions": remediation
-        + [
-            f"Inspect recent logs and runtime events for {service}.",
-            f"Validate deployments and configuration changes affecting {service}.",
-        ],
-        "missing_telemetry_signals": _as_string_list(context.telemetry_coverage.get("missing_signals", [])),
+        "impact_assessment": impact_assessment,
+        "customer_impact": customer_impact,
+        "recommended_actions": (
+            [f"Collect additional telemetry for {service}.", "Re-run reasoning after traces, metrics, or logs are available."]
+            if insufficient
+            else remediation
+        ),
+        "missing_telemetry_signals": missing,
         "observability_score": _as_float(context.telemetry_coverage.get("observability_score", 0)),
         "observability_summary": normalize_summary(context.telemetry_coverage),
         "deployment_correlation": summarize_deployments(context.deployment_correlation.get("events", [])),
@@ -405,18 +539,22 @@ def fallback_reasoning(incident: dict, context: TelemetryContext, historical_mat
             incident,
             context,
             {
-                "confidence_score": _as_float(incident.get("predictive_confidence"), 0.62),
+                "confidence_score": confidence,
                 "root_cause_service": inferred_service,
                 "root_cause_signal": signal,
-                "missing_telemetry_signals": _as_string_list(context.telemetry_coverage.get("missing_signals", [])),
+                "missing_telemetry_signals": missing,
+                "observability_score": _as_float(context.telemetry_coverage.get("observability_score", 0)),
             },
         ),
     }
 
 
 def generate_reasoning(llm: LLMProvider, incident: dict, context: TelemetryContext, historical_matches: list[dict]) -> dict:
-    raw = llm.generate_reasoning(build_prompt(incident, context, historical_matches))
     fallback = fallback_reasoning(incident, context, historical_matches)
+    if _insufficient_telemetry(incident, context):
+        return fallback
+
+    raw = llm.generate_reasoning(build_prompt(incident, context, historical_matches))
     try:
         parsed = json.loads(extract_json(raw))
         if not isinstance(parsed, dict):
@@ -460,6 +598,10 @@ def generate_reasoning(llm: LLMProvider, incident: dict, context: TelemetryConte
         result["root_cause_signal"],
         context,
     )
+    result["confidence_score"] = max(0.1, min(result["confidence_score"], max(fallback["confidence_score"], _evidence_score(incident, context))))
+    result["missing_telemetry_signals"] = dedupe_list(
+        _as_string_list(result.get("missing_telemetry_signals"), []) + _missing_telemetry(context, incident)
+    )
     result["confidence_explanation"] = build_confidence_explanation(incident, context, result)
     return result
 
@@ -480,6 +622,11 @@ def build_confidence_explanation(incident: dict, context: TelemetryContext, reas
         supporting_factors.append("Dependency chain confirms propagation context")
     if context.timeline:
         supporting_factors.append("Timeline evidence contains recent anomaly events")
+    presence = _telemetry_presence(incident, context)
+    if presence["trace_count"] > 0:
+        supporting_factors.append(f"Trace evidence present ({presence['trace_count']} requests)")
+    if presence["log_count"] > 0:
+        supporting_factors.append(f"Incident-scoped logs present ({presence['log_count']} events)")
 
     weakening_factors = []
     missing = _as_string_list(reasoning.get("missing_telemetry_signals", []))
@@ -488,16 +635,23 @@ def build_confidence_explanation(incident: dict, context: TelemetryContext, reas
     observability_score = _as_float(reasoning.get("observability_score"), 0.0)
     if observability_score < 50:
         weakening_factors.append("Observability coverage is below 50%")
-    if not context.trace_summary:
+    if presence["trace_count"] == 0:
         weakening_factors.append("Trace coverage is limited for this incident")
+    if _insufficient_telemetry(incident, context):
+        weakening_factors.append("Telemetry volume is too sparse to support a specific root cause")
 
-    evidence_count = len(detector_signals) + len(context.timeline or [])
+    evidence_count = len(detector_signals) + len(context.timeline or []) + int(presence["trace_count"] > 0) + int(presence["log_count"] > 0)
     missing_signal_count = len(missing)
-    explanation_text = (
-        f"Confidence is {level} because root cause evidence points to "
-        f"{reasoning.get('root_cause_service', incident.get('service', 'the service'))}, "
-        "but gaps in telemetry reduce certainty."
-    )
+    if _insufficient_telemetry(incident, context):
+        explanation_text = (
+            "Confidence is low because the available incident telemetry is too sparse to support a specific root cause."
+        )
+    else:
+        explanation_text = (
+            f"Confidence is {level} because incident evidence points to "
+            f"{reasoning.get('root_cause_service', incident.get('service', 'the service'))}, "
+            "but missing telemetry still reduces certainty."
+        )
 
     return {
         "score": score,

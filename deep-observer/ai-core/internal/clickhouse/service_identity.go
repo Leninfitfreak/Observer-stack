@@ -23,9 +23,6 @@ func canonicalizeServiceName(value string) string {
 			break
 		}
 	}
-	if strings.HasPrefix(service, "leninkart-") {
-		service = strings.TrimPrefix(service, "leninkart-")
-	}
 	service = strings.TrimSuffix(service, ".svc.cluster.local")
 	service = strings.TrimSuffix(service, ".svc")
 	service = strings.TrimSuffix(service, ".cluster.local")
@@ -137,8 +134,6 @@ func CanonicalTopologyNodeID(value string) string {
 		return CanonicalMessagingNodeID("broker", strings.TrimPrefix(raw, "topic:"))
 	case strings.HasPrefix(raw, "queue:"):
 		return CanonicalMessagingNodeID("broker", strings.TrimPrefix(raw, "queue:"))
-	case raw == "kafka":
-		return CanonicalMessagingNodeID("broker", "")
 	case strings.HasPrefix(raw, "db:"):
 		parts := strings.SplitN(strings.TrimPrefix(raw, "db:"), "/", 2)
 		system := ""
@@ -150,7 +145,7 @@ func CanonicalTopologyNodeID(value string) string {
 			name = parts[1]
 		}
 		return CanonicalDatabaseNodeID(system, name)
-	case raw == "postgres" || raw == "database":
+	case raw == "database":
 		return CanonicalDatabaseNodeID(raw, "")
 	default:
 		return canonicalizeServiceName(raw)

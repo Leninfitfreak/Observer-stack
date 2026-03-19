@@ -123,6 +123,7 @@ export default function IncidentDetailsPanel({
   const incidentTimeline = buildIncidentTimeline(currentIncident, reasoning);
   const observabilityGaps = buildObservabilityGaps(currentIncident, reasoning);
   const trustScore = buildTrustScore(currentIncident, reasoning, signalSummary, observabilityGaps);
+  const telemetryAudit = assessTelemetryData(currentIncident, timeline, reasoning);
   const workflowStatus = (currentIncident.workflow_status || "open").toLowerCase();
 
   const refreshIncident = async () => {
@@ -629,19 +630,30 @@ export default function IncidentDetailsPanel({
         <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/70 p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Telemetry Charts</h3>
-            <span className="text-xs text-slate-500">Timeline-derived values</span>
+            <span className="text-xs text-slate-500">Derived from incident-scoped telemetry only</span>
           </div>
-          <div className="grid grid-cols-8 items-end gap-3">
-            {chartPoints.map((point, index) => (
-              <div key={`${point.kind}-${index}`} className="flex flex-col items-center gap-2">
-                <div
-                  className="w-full rounded-t-2xl bg-gradient-to-t from-cyan-500 to-orange-400"
-                  style={{ height: `${Math.max(16, Math.min(160, point.value * 2))}px` }}
-                />
-                <span className="text-[10px] text-slate-500">{point.ts}</span>
-              </div>
-            ))}
-          </div>
+          {chartPoints.length ? (
+            <div className="grid grid-cols-8 items-end gap-3">
+              {chartPoints.map((point, index) => (
+                <div key={`${point.kind}-${index}`} className="flex flex-col items-center gap-2">
+                  <div
+                    className="w-full rounded-t-2xl bg-gradient-to-t from-cyan-500 to-orange-400"
+                    style={{ height: `${Math.max(16, Math.min(160, point.value * 2))}px` }}
+                  />
+                  <span className="text-[10px] text-slate-500">{point.ts}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">
+              No chartable telemetry values are available for this incident scope.
+            </p>
+          )}
+          {telemetryAudit.isSparse ? (
+            <p className="mt-3 text-xs text-amber-300">
+              Reasoning is operating with sparse telemetry. Confidence and recommendations are limited to the available evidence.
+            </p>
+          ) : null}
         </div>
       </div>
 
@@ -822,16 +834,21 @@ function priorityColor(priority) {
 }
 
 function buildDecisionPanel(incident, reasoning, prioritizedActions) {
+  const telemetryAudit = assessTelemetryData(incident, incident?.timeline_summary, reasoning);
   const confidenceScore = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0);
   const rootCause = reasoning?.root_cause_service || reasoning?.root_cause || incident?.root_cause_entity || "Pending";
   const anomalyScore = Number(incident?.anomaly_score ?? 0);
   const impactSummary =
     reasoning?.impact_assessment ||
     reasoning?.customer_impact ||
-    (incident?.impacts?.length
+    (telemetryAudit.isSparse
+      ? "Telemetry is too sparse to support a strong incident impact narrative yet."
+      : incident?.impacts?.length
       ? `Impacting ${incident.impacts.length} downstream services.`
       : `Observed ${incident?.incident_type || "incident"} on ${incident?.service || "service"} with anomaly score ${formatScore(anomalyScore)}.`);
-  const immediateAction = prioritizedActions[0]?.label || `Inspect ${incident?.service || "service"} latency and error metrics.`;
+  const immediateAction = prioritizedActions[0]?.label || (telemetryAudit.isSparse
+    ? `Collect additional traces, logs, or metrics for ${incident?.service || "service"}.`
+    : `Inspect ${incident?.service || "service"} latency and error metrics.`);
   const nextActions = prioritizedActions.slice(1, 4).map((item) => item.label);
   const investigationSteps = buildInvestigationSteps(incident, reasoning, prioritizedActions);
   return {
@@ -845,15 +862,16 @@ function buildDecisionPanel(incident, reasoning, prioritizedActions) {
 }
 
 function buildPrioritizedActions(incident, reasoning) {
+  const telemetryAudit = assessTelemetryData(incident, incident?.timeline_summary, reasoning);
   const rawActions = [
     ...(Array.isArray(reasoning?.recommended_actions) ? reasoning.recommended_actions : []),
     ...(Array.isArray(incident?.remediation_suggestions) ? incident.remediation_suggestions : []),
   ]
     .map((item) => toText(item))
     .filter(Boolean);
-  const fallbackActions = buildFallbackActions(incident, reasoning);
+  const fallbackActions = buildFallbackActions(incident, reasoning, telemetryAudit);
   const unique = Array.from(new Set(rawActions.length ? rawActions : fallbackActions));
-  const baseConfidence = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.5);
+  const baseConfidence = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.2);
   const items = unique.map((action) => classifyAction(action, baseConfidence, reasoning, incident));
   items.sort((a, b) => {
     const priorityOrder = { high: 0, medium: 1, low: 2 };
@@ -921,13 +939,18 @@ function buildInvestigationSteps(incident, reasoning, prioritizedActions) {
   return Array.from(new Set([...steps, ...lowPriority])).slice(0, 5);
 }
 
-function buildFallbackActions(incident, reasoning) {
+function buildFallbackActions(incident, reasoning, telemetryAudit = assessTelemetryData(incident, incident?.timeline_summary, reasoning)) {
   const service = incident?.service || "service";
   const signals = toList(incident?.signals).join(", ");
-  const actions = [
-    `Inspect ${service} latency and error metrics.`,
-    `Review recent deployments or configuration changes for ${service}.`,
-  ];
+  const actions = telemetryAudit.isSparse
+    ? [
+        `Collect additional telemetry for ${service} before attempting remediation.`,
+        `Review whether traces, logs, and service metrics are being emitted for ${service}.`,
+      ]
+    : [
+        `Inspect ${service} latency and error metrics.`,
+        `Review recent deployments or configuration changes for ${service}.`,
+      ];
   if (signals) {
     actions.push(`Validate anomaly signals: ${signals}.`);
   }
@@ -1017,16 +1040,21 @@ function extractKeyError(line) {
 }
 
 function buildImpactSummary(incident, reasoning) {
+  const telemetryAudit = assessTelemetryData(incident, incident?.timeline_summary, reasoning);
   const impacts = Array.isArray(incident?.impacts) ? incident.impacts : [];
   const primaryService = reasoning?.root_cause_service || incident?.root_cause_entity || incident?.service || "service";
   const secondaryServices = impacts
     .map((impact) => (impact && typeof impact === "object" ? toText(impact.service) : ""))
     .filter((svc) => svc && svc !== primaryService);
   const severity = incident?.severity || (incident?.anomaly_score > 10 ? "high" : "medium");
-  const summaryText = impacts.length
+  const summaryText = telemetryAudit.isSparse
+    ? `Impact is unclear because telemetry for ${primaryService} is sparse.`
+    : impacts.length
     ? `${primaryService} impact is propagating to ${secondaryServices.slice(0, 3).join(", ") || "downstream services"}.`
     : `Issue localized to ${primaryService} with potential downstream effects.`;
-  const userImpact = reasoning?.customer_impact || (incident?.incident_type === "predictive" ? "Potential user slowdown" : "User impact possible");
+  const userImpact = reasoning?.customer_impact || (telemetryAudit.isSparse
+    ? "User impact cannot be estimated confidently from the available telemetry."
+    : incident?.incident_type === "predictive" ? "Potential user slowdown" : "User impact possible");
   return {
     primary_service: primaryService,
     secondary_services: Array.from(new Set(secondaryServices)).slice(0, 6),
@@ -1184,7 +1212,8 @@ function buildObservabilityGaps(incident, reasoning) {
 }
 
 function buildTrustScore(incident, reasoning, signalSummary, observabilityGaps) {
-  const base = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.5);
+  const telemetryAudit = assessTelemetryData(incident, incident?.timeline_summary, reasoning);
+  const base = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.2);
   const criticalSignals = Array.isArray(signalSummary?.critical_signals) ? signalSummary.critical_signals.length : 0;
   const missingCritical = Array.isArray(observabilityGaps?.missing_critical_signals)
     ? observabilityGaps.missing_critical_signals.length
@@ -1192,10 +1221,35 @@ function buildTrustScore(incident, reasoning, signalSummary, observabilityGaps) 
   let score = base + Math.min(0.1, criticalSignals * 0.03) - Math.min(0.2, missingCritical * 0.05);
   score = Math.max(0, Math.min(1, score));
   const level = score >= 0.75 ? "high" : score >= 0.45 ? "medium" : "low";
-  const summary = missingCritical
+  const summary = telemetryAudit.isSparse
+    ? "Trust is low because telemetry is sparse and the diagnosis is evidence-limited."
+    : missingCritical
     ? `Trust is ${level} because critical telemetry gaps remain.`
     : `Trust is ${level} based on confidence and signal coverage.`;
   return { score, level, summary };
+}
+
+function assessTelemetryData(incident, timeline = [], reasoning) {
+  const snapshot = incident?.telemetry_snapshot || {};
+  const chartableTimeline = Array.isArray(timeline) ? timeline.filter((event) => Number.isFinite(Number(event?.value))) : [];
+  const traceCount = Array.isArray(snapshot.trace_ids) ? snapshot.trace_ids.length : 0;
+  const requestCount = Number(snapshot.request_count || 0);
+  const logCount = Number(snapshot.log_count || 0);
+  const cpu = Number(snapshot.cpu_utilization || 0);
+  const memory = Number(snapshot.memory_utilization || 0);
+  const highlights = snapshot.metric_highlights && typeof snapshot.metric_highlights === "object" ? Object.keys(snapshot.metric_highlights) : [];
+  const missingSignals = Array.isArray(reasoning?.missing_telemetry_signals) ? reasoning.missing_telemetry_signals.length : 0;
+  const evidenceSignals =
+    Number(requestCount > 0) +
+    Number(traceCount > 0) +
+    Number(logCount > 0) +
+    Number(cpu > 0 || memory > 0 || highlights.length > 0) +
+    Number(chartableTimeline.length > 0);
+  return {
+    hasChartData: chartableTimeline.length > 0,
+    isSparse: evidenceSignals <= 1 || missingSignals >= 3,
+    evidenceSignals,
+  };
 }
 
 function formatImpactedServices(value) {

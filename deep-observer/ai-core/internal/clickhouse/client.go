@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -64,10 +63,6 @@ type Snapshot struct {
 	TraceIDs             []string           `json:"trace_ids"`
 	MetricHighlights     map[string]float64 `json:"metric_highlights"`
 }
-
-var (
-	statefulReplicaPattern = regexp.MustCompile(`^(kafka|postgres)(-[a-z0-9]+)?-[0-9]+$`)
-)
 
 func NewClient(ctx context.Context, cfg config.ClickHouseConfig) (*Client, error) {
 	conn, err := ch.Open(&ch.Options{
@@ -524,7 +519,7 @@ func ignoredService(service string) bool {
 	if InferTopologyNodeType(CanonicalTopologyNodeID(value)) != "service" {
 		return true
 	}
-	if statefulReplicaPattern.MatchString(value) {
+	if isBareInfrastructureService(value) {
 		return true
 	}
 	if value == "root" || strings.HasPrefix(value, "loadtest") {
@@ -574,6 +569,21 @@ func ignoredService(service string) bool {
 		}
 	}
 	return false
+}
+
+func isBareInfrastructureService(value string) bool {
+	bareInfra := map[string]struct{}{
+		"kafka":      {},
+		"zookeeper":  {},
+		"postgres":   {},
+		"postgresql": {},
+		"mysql":      {},
+		"redis":      {},
+		"rabbitmq":   {},
+		"mongodb":    {},
+	}
+	_, found := bareInfra[value]
+	return found
 }
 
 func IsIgnoredService(service string) bool {
