@@ -91,6 +91,9 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
   const prioritizedActions = buildPrioritizedActions(currentIncident, reasoning);
   const decisionPanel = buildDecisionPanel(currentIncident, reasoning, prioritizedActions);
   const signalSummary = buildSignalSummary(currentIncident, reasoning);
+  const logSummary = buildLogSummary(currentIncident);
+  const impactSummary = buildImpactSummary(currentIncident, reasoning);
+  const incidentTimeline = buildIncidentTimeline(currentIncident, reasoning);
 
   const refreshIncident = async () => {
     const updated = await fetchIncident(currentIncident.incident_id);
@@ -251,6 +254,62 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
               <SignalGroup title="Critical Signals" items={signalSummary.critical_signals} />
               <SignalGroup title="Secondary Signals" items={signalSummary.secondary_signals} />
               <SignalGroup title="Missing Signals" items={signalSummary.missing_signals} />
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-6 xl:grid-cols-2">
+          <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Log Summary</h3>
+            {logSummary ? (
+              <div className="mt-3 space-y-3 text-sm text-slate-200">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-slate-400">Key Error</span>
+                  <span className="text-sm text-white">{toText(logSummary.key_error)}</span>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-slate-400">Occurrences</span>
+                  <span className="text-sm text-white">{logSummary.occurrence_count}</span>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-slate-400">Affected Service</span>
+                  <span className="text-sm text-white">{toText(logSummary.affected_service)}</span>
+                </div>
+                {logSummary.sample_log_line ? (
+                  <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-3 text-xs text-slate-300">
+                    {toText(logSummary.sample_log_line)}
+                  </div>
+                ) : null}
+                <p className="text-sm text-slate-300">{toText(logSummary.log_summary_text)}</p>
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-slate-500">No log summary available for this incident.</p>
+            )}
+          </div>
+
+          <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Impact Summary</h3>
+            <div className="mt-3 space-y-3 text-sm text-slate-200">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-slate-400">Primary Service</span>
+                <span className="text-sm text-white">{toText(impactSummary.primary_service)}</span>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-slate-400">Severity</span>
+                <span className="text-sm text-white">{toText(impactSummary.severity_label)}</span>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-slate-900/60 p-3 text-sm text-slate-200">
+                {toText(impactSummary.summary_text)}
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Secondary Services</p>
+                <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                  {impactSummary.secondary_services.length
+                    ? impactSummary.secondary_services.map((item) => <li key={item}>- {toText(item)}</li>)
+                    : <li className="text-slate-500">No secondary services identified.</li>}
+                </ul>
+              </div>
+              <div className="text-xs text-slate-400">Estimated User Impact: {toText(impactSummary.estimated_user_impact)}</div>
             </div>
           </div>
         </div>
@@ -431,18 +490,18 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
       <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
         <h3 className="text-lg font-semibold text-white">Incident Timeline</h3>
         <div className="mt-4 space-y-3">
-          {timeline.map((event, index) => (
-            <div key={`${event.kind}-${event.timestamp}-${index}`} className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
+          {incidentTimeline.length ? incidentTimeline.map((event, index) => (
+            <div key={`${event.event_type}-${event.timestamp}-${index}`} className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
               <div className="flex items-center justify-between gap-4">
-                <span className="text-sm font-medium text-white">{toText(event.title)}</span>
-                <span className="text-xs uppercase tracking-[0.3em] text-slate-500">{toText(event.kind)}</span>
+                <span className="text-sm font-medium text-white">{toText(event.label)}</span>
+                <span className="text-xs uppercase tracking-[0.3em] text-slate-500">{toText(event.event_type)}</span>
               </div>
-              <p className="mt-2 text-sm text-slate-300">{toText(event.details)}</p>
-              <p className="mt-2 text-xs text-slate-500">
-                {new Date(event.timestamp).toLocaleString()} - {toText(event.entity)}
-              </p>
+              {event.service ? <p className="mt-2 text-xs text-slate-400">Service: {toText(event.service)}</p> : null}
+              <p className="mt-2 text-xs text-slate-500">{new Date(event.timestamp).toLocaleString()}</p>
             </div>
-          ))}
+          )) : (
+            <p className="text-sm text-slate-500">No timeline events available yet.</p>
+          )}
         </div>
       </div>
     </section>
@@ -706,6 +765,126 @@ function buildSignalSummary(incident, reasoning) {
     secondary_signals: Array.from(new Set(secondary)).slice(0, 6),
     missing_signals: Array.from(new Set(missing)).slice(0, 6),
   };
+}
+
+function buildLogSummary(incident) {
+  const snapshot = incident?.telemetry_snapshot || {};
+  const logs = Array.isArray(snapshot.error_logs) ? snapshot.error_logs.filter(Boolean) : [];
+  const logCount = Number(snapshot.log_count || logs.length || 0);
+  if (!logs.length && !logCount) return null;
+
+  const topLog = logs[0] ? toText(logs[0]) : "";
+  const keyError = extractKeyError(topLog) || "Log anomaly detected";
+  const sample = topLog ? truncateText(topLog, 160) : "";
+  const service = incident?.service || incident?.root_cause_entity || "service";
+  const summaryKey = keyError.toLowerCase().includes("detected") ? keyError : `${keyError} detected`;
+  return {
+    key_error: keyError,
+    occurrence_count: logCount || logs.length,
+    affected_service: service,
+    sample_log_line: sample,
+    log_summary_text: `Repeated ${summaryKey} in ${service} logs.`,
+  };
+}
+
+function extractKeyError(line) {
+  if (!line) return "";
+  const patterns = [
+    /exception[:\\s]+([^\\n]+)/i,
+    /error[:\\s]+([^\\n]+)/i,
+    /failed[:\\s]+([^\\n]+)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = line.match(pattern);
+    if (match && match[1]) return match[1].trim();
+  }
+  return line.split(" ").slice(0, 6).join(" ");
+}
+
+function buildImpactSummary(incident, reasoning) {
+  const impacts = Array.isArray(incident?.impacts) ? incident.impacts : [];
+  const primaryService = reasoning?.root_cause_service || incident?.root_cause_entity || incident?.service || "service";
+  const secondaryServices = impacts
+    .map((impact) => (impact && typeof impact === "object" ? toText(impact.service) : ""))
+    .filter((svc) => svc && svc !== primaryService);
+  const severity = incident?.severity || (incident?.anomaly_score > 10 ? "high" : "medium");
+  const summaryText = impacts.length
+    ? `${primaryService} impact is propagating to ${secondaryServices.slice(0, 3).join(", ") || "downstream services"}.`
+    : `Issue localized to ${primaryService} with potential downstream effects.`;
+  const userImpact = reasoning?.customer_impact || (incident?.incident_type === "predictive" ? "Potential user slowdown" : "User impact possible");
+  return {
+    primary_service: primaryService,
+    secondary_services: Array.from(new Set(secondaryServices)).slice(0, 6),
+    summary_text: summaryText,
+    estimated_user_impact: userImpact,
+    severity_label: String(severity).toUpperCase(),
+  };
+}
+
+function buildIncidentTimeline(incident, reasoning) {
+  const events = [];
+  if (incident?.timestamp) {
+    events.push({
+      timestamp: incident.timestamp,
+      event_type: "incident_created",
+      label: "Incident created",
+      service: incident.service,
+    });
+  }
+  if (incident?.anomaly_score) {
+    events.push({
+      timestamp: incident.timestamp,
+      event_type: "anomaly_detected",
+      label: "Anomaly detected",
+      service: incident.service,
+    });
+  }
+  if (Array.isArray(incident?.signals)) {
+    incident.signals.forEach((signal) => {
+      events.push({
+        timestamp: incident.timestamp,
+        event_type: "signal_detected",
+        label: `Signal: ${signal}`,
+        service: incident.service,
+      });
+    });
+  }
+  if (incident?.reasoning_requested_at) {
+    events.push({
+      timestamp: incident.reasoning_requested_at,
+      event_type: "reasoning_triggered",
+      label: "Reasoning triggered",
+      service: incident.service,
+    });
+  }
+  if (incident?.reasoning_updated_at && incident?.reasoning_status === "completed") {
+    events.push({
+      timestamp: incident.reasoning_updated_at,
+      event_type: "reasoning_completed",
+      label: "Reasoning completed",
+      service: incident.service,
+    });
+  }
+
+  const timelineEvents = Array.isArray(incident?.timeline_summary) ? incident.timeline_summary : [];
+  timelineEvents.forEach((event) => {
+    events.push({
+      timestamp: event.timestamp || incident.timestamp,
+      event_type: event.kind || "telemetry_event",
+      label: event.title || "Telemetry event",
+      service: event.entity || incident.service,
+    });
+  });
+
+  return events
+    .filter((event) => event.timestamp)
+    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+}
+
+function truncateText(value, limit) {
+  const text = toText(value);
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}...`;
 }
 
 function formatImpactedServices(value) {
