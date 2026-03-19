@@ -7,6 +7,8 @@ import {
   fetchReasoningHistory,
   fetchReasoningRun,
   fetchCorrelations,
+  fetchIncidents,
+  updateIncidentWorkflow,
 } from "../api";
 
 export default function IncidentDetailsPanel({ incident, serviceHealth, clusterReport, changes, sloStatus, runbooks, observabilityReport }) {
@@ -18,6 +20,9 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
   const [reasoningHistory, setReasoningHistory] = useState([]);
   const [selectedRun, setSelectedRun] = useState(null);
   const [correlations, setCorrelations] = useState([]);
+  const [workflowUpdating, setWorkflowUpdating] = useState(false);
+  const [assignedTo, setAssignedTo] = useState("");
+  const [incidentCluster, setIncidentCluster] = useState(null);
 
   useEffect(() => {
     if (!incident) return;
@@ -41,6 +46,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
     setReasoningStatus(incident.reasoning_status || "");
     setReasoningError(incident.reasoning_error || "");
     setReasoningBusy(false);
+    setAssignedTo(incident.assigned_to || "");
   }, [incident]);
 
   useEffect(() => {
@@ -54,6 +60,12 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
       .catch(console.error);
     fetchCorrelations(incident.incident_id)
       .then((payload) => setCorrelations(Array.isArray(payload) ? payload : []))
+      .catch(console.error);
+    fetchIncidents()
+      .then((payload) => {
+        const items = Array.isArray(payload) ? payload : [];
+        setIncidentCluster(buildIncidentCluster(incident, items));
+      })
       .catch(console.error);
   }, [incident]);
 
@@ -94,6 +106,9 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
   const logSummary = buildLogSummary(currentIncident);
   const impactSummary = buildImpactSummary(currentIncident, reasoning);
   const incidentTimeline = buildIncidentTimeline(currentIncident, reasoning);
+  const observabilityGaps = buildObservabilityGaps(currentIncident, reasoning);
+  const trustScore = buildTrustScore(currentIncident, reasoning, signalSummary, observabilityGaps);
+  const workflowStatus = (currentIncident.workflow_status || "open").toLowerCase();
 
   const refreshIncident = async () => {
     const updated = await fetchIncident(currentIncident.incident_id);
@@ -123,6 +138,24 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
     setTimeout(() => {
       pollForReasoning(attempt + 1).catch(() => {});
     }, 3000);
+  };
+
+  const updateWorkflow = async (status) => {
+    if (!currentIncident || workflowUpdating) return;
+    setWorkflowUpdating(true);
+    try {
+      const updated = await updateIncidentWorkflow(currentIncident.incident_id, {
+        status,
+        assigned_to: assignedTo,
+      });
+      if (updated) {
+        setActiveIncident(updated);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setWorkflowUpdating(false);
+    }
   };
 
   const handleRunReasoning = async () => {
@@ -220,6 +253,59 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
           </div>
         </div>
 
+        <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Incident Workflow</h3>
+              <p className="mt-1 text-xs text-slate-500">Track operator status and ownership.</p>
+            </div>
+            <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-200">
+              {workflowStatus}
+            </span>
+          </div>
+          <div className="mt-4 grid gap-3 lg:grid-cols-[1.5fr_1fr]">
+            <div>
+              <label className="text-xs uppercase tracking-[0.3em] text-slate-500">Assigned To</label>
+              <input
+                value={assignedTo}
+                onChange={(event) => setAssignedTo(event.target.value)}
+                placeholder="owner@email or on-call"
+                className="mt-2 w-full rounded-2xl border border-white/10 bg-slate-900/60 px-3 py-2 text-sm text-slate-200"
+              />
+            </div>
+            <div className="grid gap-2">
+              <button
+                type="button"
+                onClick={() => updateWorkflow("acknowledged")}
+                disabled={workflowUpdating}
+                className="rounded-full bg-cyan-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200 hover:bg-cyan-500/30"
+              >
+                Acknowledge
+              </button>
+              <button
+                type="button"
+                onClick={() => updateWorkflow("investigating")}
+                disabled={workflowUpdating}
+                className="rounded-full bg-amber-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 hover:bg-amber-500/30"
+              >
+                Start Investigating
+              </button>
+              <button
+                type="button"
+                onClick={() => updateWorkflow("resolved")}
+                disabled={workflowUpdating}
+                className="rounded-full bg-emerald-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200 hover:bg-emerald-500/30"
+              >
+                Mark Resolved
+              </button>
+            </div>
+          </div>
+          <div className="mt-3 text-xs text-slate-500">
+            Acknowledged: {currentIncident.acknowledged_at ? new Date(currentIncident.acknowledged_at).toLocaleString() : "—"} ·
+            Resolved: {currentIncident.resolved_at ? new Date(currentIncident.resolved_at).toLocaleString() : "—"}
+          </div>
+        </div>
+
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
           <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Action Prioritization</h3>
@@ -256,6 +342,70 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
               <SignalGroup title="Missing Signals" items={signalSummary.missing_signals} />
             </div>
           </div>
+        </div>
+
+        <div className="mt-6 grid gap-6 xl:grid-cols-2">
+          <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Trust Score</h3>
+            <div className="mt-3 space-y-2 text-sm text-slate-200">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">Score</span>
+                <span className="text-sm text-white">{formatScore(trustScore.score)}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-slate-500">Level</span>
+                <span className="text-sm text-white">{trustScore.level}</span>
+              </div>
+              <p className="text-sm text-slate-300">{trustScore.summary}</p>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Observability Gaps</h3>
+            <div className="mt-3 space-y-3 text-sm text-slate-200">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Missing Critical Signals</p>
+                <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                  {observabilityGaps.missing_critical_signals.length
+                    ? observabilityGaps.missing_critical_signals.map((item) => <li key={item}>- {toText(item)}</li>)
+                    : <li className="text-slate-500">No critical gaps detected.</li>}
+                </ul>
+              </div>
+              <p className="text-sm text-slate-300">{observabilityGaps.impact_on_confidence}</p>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Recommended Instrumentation</p>
+                <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                  {observabilityGaps.recommended_instrumentation_steps.length
+                    ? observabilityGaps.recommended_instrumentation_steps.map((item) => <li key={item}>- {toText(item)}</li>)
+                    : <li className="text-slate-500">No immediate steps required.</li>}
+                </ul>
+              </div>
+              <p className="text-sm text-slate-300">{observabilityGaps.summary}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Incident Cluster</h3>
+          {incidentCluster ? (
+            <div className="mt-3 space-y-2 text-sm text-slate-200">
+              <p className="text-sm text-white">{incidentCluster.cluster_label}</p>
+              <p className="text-xs text-slate-400">{incidentCluster.cluster_reason}</p>
+              <p className="text-xs text-slate-500">
+                Recurring Pattern: {incidentCluster.recurring_pattern ? "Yes" : "No"}
+              </p>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Related Incidents</p>
+                <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                  {incidentCluster.related_incident_ids.length
+                    ? incidentCluster.related_incident_ids.map((item) => <li key={item}>- {item}</li>)
+                    : <li className="text-slate-500">No related incidents yet.</li>}
+                </ul>
+              </div>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-slate-500">No cluster match found for this incident.</p>
+          )}
         </div>
 
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
@@ -885,6 +1035,73 @@ function truncateText(value, limit) {
   const text = toText(value);
   if (text.length <= limit) return text;
   return `${text.slice(0, limit)}...`;
+}
+
+function buildIncidentCluster(currentIncident, allIncidents) {
+  if (!currentIncident || !Array.isArray(allIncidents)) return null;
+  const rootService = currentIncident.reasoning?.root_cause_service || currentIncident.root_cause_entity || currentIncident.service;
+  const rootSignal = currentIncident.reasoning?.root_cause_signal || (currentIncident.signals ? currentIncident.signals[0] : "");
+  const severity = currentIncident.severity || "medium";
+  const windowMs = 6 * 60 * 60 * 1000;
+  const currentTime = new Date(currentIncident.timestamp).getTime();
+  const related = allIncidents.filter((item) => {
+    if (!item || item.incident_id === currentIncident.incident_id) return false;
+    const itemTime = new Date(item.timestamp).getTime();
+    const withinWindow = Math.abs(itemTime - currentTime) <= windowMs;
+    const serviceMatch = (item.root_cause_entity || item.service) === rootService;
+    const signalMatch = Array.isArray(item.signals) && item.signals.includes(rootSignal);
+    const severityMatch = item.severity === severity;
+    return withinWindow && (serviceMatch || signalMatch || severityMatch);
+  });
+  if (!related.length) return null;
+  const clusterId = `${rootService || "service"}:${rootSignal || "signal"}:${severity}`;
+  const clusterReason = `Grouped by ${rootService || "service"} and ${rootSignal || "signal"} within 6 hours.`;
+  return {
+    cluster_id: clusterId,
+    cluster_label: `${rootService || "Service"} - ${rootSignal || "Signal"} cluster`,
+    cluster_reason: clusterReason,
+    related_incident_ids: related.slice(0, 4).map((item) => item.incident_id),
+    recurring_pattern: related.length >= 3,
+  };
+}
+
+function buildObservabilityGaps(incident, reasoning) {
+  const missing = toList(reasoning?.missing_telemetry_signals);
+  const criticalMissing = missing.filter((signal) => /tracing|logs|kafka|database/i.test(signal));
+  const impactText = criticalMissing.length
+    ? "Missing critical telemetry reduces confidence in dependency-level causality."
+    : "No critical observability gaps detected.";
+  const recommendations = criticalMissing.map((signal) => {
+    const value = signal.toLowerCase();
+    if (value.includes("tracing")) return `Enable distributed tracing for ${incident?.service || "service"}.`;
+    if (value.includes("logs")) return `Add structured logs for ${incident?.service || "service"} error paths.`;
+    if (value.includes("kafka")) return "Enable Kafka broker and consumer lag metrics.";
+    if (value.includes("database")) return "Capture database latency and error metrics.";
+    return `Improve telemetry for ${signal}.`;
+  });
+  return {
+    missing_critical_signals: criticalMissing,
+    impact_on_confidence: impactText,
+    recommended_instrumentation_steps: recommendations.slice(0, 4),
+    summary: criticalMissing.length
+      ? "Focus on missing critical telemetry to improve diagnosis trust."
+      : "Current telemetry coverage is sufficient for this incident.",
+  };
+}
+
+function buildTrustScore(incident, reasoning, signalSummary, observabilityGaps) {
+  const base = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.5);
+  const criticalSignals = Array.isArray(signalSummary?.critical_signals) ? signalSummary.critical_signals.length : 0;
+  const missingCritical = Array.isArray(observabilityGaps?.missing_critical_signals)
+    ? observabilityGaps.missing_critical_signals.length
+    : 0;
+  let score = base + Math.min(0.1, criticalSignals * 0.03) - Math.min(0.2, missingCritical * 0.05);
+  score = Math.max(0, Math.min(1, score));
+  const level = score >= 0.75 ? "high" : score >= 0.45 ? "medium" : "low";
+  const summary = missingCritical
+    ? `Trust is ${level} because critical telemetry gaps remain.`
+    : `Trust is ${level} based on confidence and signal coverage.`;
+  return { score, level, summary };
 }
 
 function formatImpactedServices(value) {

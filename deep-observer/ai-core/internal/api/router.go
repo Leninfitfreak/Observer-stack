@@ -120,6 +120,37 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 			}
 		}
 
+		if len(parts) == 2 && parts[1] == "workflow" && r.Method == http.MethodPatch {
+			var payload struct {
+				Status     string `json:"status"`
+				AssignedTo string `json:"assigned_to"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid payload"})
+				return
+			}
+			update := incidents.WorkflowUpdate{
+				Status:     strings.ToLower(strings.TrimSpace(payload.Status)),
+				AssignedTo: strings.TrimSpace(payload.AssignedTo),
+			}
+			now := time.Now().UTC()
+			switch update.Status {
+			case "acknowledged":
+				update.AcknowledgedAt = &now
+			case "investigating":
+				update.AcknowledgedAt = &now
+			case "resolved":
+				update.ResolvedAt = &now
+			}
+			item, err := store.UpdateWorkflow(ctx, incidentID, update)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, item)
+			return
+		}
+
 		if len(parts) == 2 && parts[1] == "correlations" && r.Method == http.MethodGet {
 			correlations, err := store.ListCorrelatedIncidents(ctx, incidentID, 24*time.Hour, 8)
 			if err != nil {

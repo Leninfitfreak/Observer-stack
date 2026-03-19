@@ -66,6 +66,10 @@ export function fetchCorrelations(incidentId) {
   return request(`/api/incidents/${incidentId}/correlations`);
 }
 
+export function updateIncidentWorkflow(incidentId, payload) {
+  return requestJson(`/api/incidents/${incidentId}/workflow`, { method: "PATCH", body: payload });
+}
+
 export function fetchTopology(filters) {
   return request("/api/topology", filters);
 }
