@@ -104,6 +104,14 @@ const config = {
 	module: {
 		rules: [
 			{
+				test: /\.mjs$/,
+				include: /node_modules/,
+				type: 'javascript/auto',
+				resolve: {
+					fullySpecified: false,
+				},
+			},
+			{
 				test: [/\.jsx?$/, /\.tsx?$/],
 				use: ['babel-loader'],
 				exclude: /node_modules/,
