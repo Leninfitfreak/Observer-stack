@@ -22,6 +22,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
   const [correlations, setCorrelations] = useState([]);
   const [workflowUpdating, setWorkflowUpdating] = useState(false);
   const [incidentCluster, setIncidentCluster] = useState(null);
+  const [incidentHistory, setIncidentHistory] = useState([]);
 
   useEffect(() => {
     if (!incident) return;
@@ -63,6 +64,7 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
       .then((payload) => {
         const items = Array.isArray(payload) ? payload : [];
         setIncidentCluster(buildIncidentCluster(incident, items));
+        setIncidentHistory(buildIncidentHistory(incident, items));
       })
       .catch(console.error);
   }, [incident]);
@@ -629,6 +631,25 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
       </div>
 
       <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
+        <h3 className="text-lg font-semibold text-white">Incident History</h3>
+        <div className="mt-4 space-y-3">
+          {incidentHistory.length ? incidentHistory.map((item) => (
+            <div key={item.incident_id} className="rounded-2xl border border-white/10 bg-slate-950/70 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="text-sm font-medium text-white">{toText(item.service || "service")}</span>
+                <span className="text-xs uppercase tracking-[0.3em] text-slate-500">{toText(item.severity || "unknown")}</span>
+              </div>
+              <p className="mt-2 text-xs text-slate-400">{new Date(item.timestamp).toLocaleString()}</p>
+              <p className="mt-2 text-sm text-slate-300">{toText(item.root_cause_summary || "Previous incident detected.")}</p>
+              <p className="mt-2 text-xs text-slate-500">Anomaly score: {formatScore(item.anomaly_score)}</p>
+            </div>
+          )) : (
+            <p className="text-sm text-slate-500">No prior incidents for this service yet.</p>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
         <h3 className="text-lg font-semibold text-white">Incident Timeline</h3>
         <div className="mt-4 space-y-3">
           {incidentTimeline.length ? incidentTimeline.map((event, index) => (
@@ -1080,6 +1101,24 @@ function buildIncidentCluster(currentIncident, allIncidents) {
     related_incident_ids: related.slice(0, 4).map((item) => item.incident_id),
     recurring_pattern: related.length >= 3,
   };
+}
+
+function buildIncidentHistory(currentIncident, allIncidents) {
+  if (!currentIncident || !Array.isArray(allIncidents)) return [];
+  const service = currentIncident.service || currentIncident.root_cause_entity;
+  return allIncidents
+    .filter((item) => item && item.incident_id !== currentIncident.incident_id)
+    .filter((item) => (item.service || item.root_cause_entity) === service)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+    .slice(0, 6)
+    .map((item) => ({
+      incident_id: item.incident_id,
+      timestamp: item.timestamp,
+      service: item.service,
+      severity: item.severity,
+      anomaly_score: item.anomaly_score,
+      root_cause_summary: item.reasoning?.root_cause || item.root_cause_entity || item.service,
+    }));
 }
 
 function buildObservabilityGaps(incident, reasoning) {
