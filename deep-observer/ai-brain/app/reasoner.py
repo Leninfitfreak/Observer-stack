@@ -421,11 +421,14 @@ def _insufficient_telemetry(incident: dict, context: TelemetryContext) -> bool:
 def _missing_telemetry(context: TelemetryContext, incident: dict) -> list[str]:
     missing = _as_string_list(context.telemetry_coverage.get("missing_signals", []))
     presence = _telemetry_presence(incident, context)
+    quality = context.telemetry_coverage.get("quality_by_signal", {}) or {}
     if presence["trace_count"] == 0:
         missing.append("No distributed tracing captured for this incident window")
     if presence["log_count"] == 0:
         missing.append("No incident-scoped logs captured for this incident window")
-    if not presence["metric_names"] and presence["cpu_utilization"] == 0 and presence["memory_utilization"] == 0:
+    if quality.get("metrics") == "zero":
+        missing.append("Metrics are present, but their values are zero across the incident window")
+    elif not presence["metric_names"] and presence["cpu_utilization"] == 0 and presence["memory_utilization"] == 0:
         missing.append("No service-level metrics captured for this incident window")
     if presence["request_count"] == 0 and presence["trace_count"] == 0:
         missing.append("No request activity was observed for this incident scope")
@@ -453,6 +456,10 @@ def _evidence_score(incident: dict, context: TelemetryContext) -> float:
         score += min(0.15, presence["detector_signals"] * 0.05)
     if presence["context_log_count"] > 0:
         score += 0.05
+    quality = context.telemetry_coverage.get("quality_by_signal", {}) or {}
+    degraded_signals = sum(1 for value in quality.values() if value in {"missing", "sparse", "stale", "zero", "contradictory"})
+    if degraded_signals > 0:
+        score -= min(0.2, degraded_signals * 0.08)
     return max(0.0, min(1.0, score))
 
 
@@ -637,6 +644,8 @@ def build_confidence_explanation(incident: dict, context: TelemetryContext, reas
         weakening_factors.append("Observability coverage is below 50%")
     if presence["trace_count"] == 0:
         weakening_factors.append("Trace coverage is limited for this incident")
+    if (context.telemetry_coverage.get("quality_by_signal", {}) or {}).get("metrics") == "zero":
+        weakening_factors.append("Metrics exist but remain at zero values for this incident window")
     if _insufficient_telemetry(incident, context):
         weakening_factors.append("Telemetry volume is too sparse to support a specific root cause")
 

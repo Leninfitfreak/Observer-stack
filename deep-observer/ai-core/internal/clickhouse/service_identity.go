@@ -8,7 +8,6 @@ import (
 var (
 	podHashSuffixPattern    = regexp.MustCompile(`-[a-f0-9]{8,10}-[a-z0-9]{5}$`)
 	deployHashSuffixPattern = regexp.MustCompile(`-[a-f0-9]{8,10}$`)
-	envSuffixPattern        = regexp.MustCompile(`-(dev|prod|staging|stage|qa|test)$`)
 	infraTokenPattern       = regexp.MustCompile(`[^a-z0-9]+`)
 )
 
@@ -17,12 +16,6 @@ func canonicalizeServiceName(value string) string {
 	if service == "" {
 		return ""
 	}
-	for _, prefix := range []string{"dev-", "prod-", "staging-", "stage-", "qa-", "test-"} {
-		if strings.HasPrefix(service, prefix) {
-			service = strings.TrimPrefix(service, prefix)
-			break
-		}
-	}
 	service = strings.TrimSuffix(service, ".svc.cluster.local")
 	service = strings.TrimSuffix(service, ".svc")
 	service = strings.TrimSuffix(service, ".cluster.local")
@@ -30,7 +23,6 @@ func canonicalizeServiceName(value string) string {
 	service = strings.TrimSpace(service)
 	service = podHashSuffixPattern.ReplaceAllString(service, "")
 	service = deployHashSuffixPattern.ReplaceAllString(service, "")
-	service = envSuffixPattern.ReplaceAllString(service, "")
 	parts := strings.Split(service, "-")
 	if len(parts) > 1 && len(parts)%2 == 0 {
 		mid := len(parts) / 2
@@ -55,17 +47,11 @@ func firstNonEmpty(values ...string) string {
 
 func canonicalNamespace(value string) string {
 	namespace := strings.TrimSpace(value)
-	if namespace == "" {
-		return "default"
-	}
 	return strings.ToLower(namespace)
 }
 
 func canonicalCluster(value string) string {
 	cluster := strings.TrimSpace(value)
-	if cluster == "" {
-		return "default-cluster"
-	}
 	return strings.ToLower(cluster)
 }
 

@@ -277,7 +277,7 @@ func inferNodeType(nodeID string) string {
 
 func graphEdgeType(depType string) string {
 	switch depType {
-	case "messaging", "messaging_kafka":
+	case "messaging":
 		return "publishes_to"
 	case "database":
 		return "connects_to"

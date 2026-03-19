@@ -18,7 +18,7 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-var structuredIncidentEntityPattern = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9-]{0,63}|db:[a-z0-9][a-z0-9._/-]{0,95}|messaging:[a-z0-9][a-z0-9._/-]{0,95})$`)
+var structuredIncidentEntityPattern = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9._/-]{0,127}|db:[a-z0-9][a-z0-9._/-]{0,95}|messaging:[a-z0-9][a-z0-9._/-]{0,95})$`)
 
 type QueryFilters struct {
 	ProjectID string
@@ -469,14 +469,6 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS graph_edges_recent_idx ON graph_edges(project_id, cluster, namespace, last_seen DESC)`,
 		`CREATE INDEX IF NOT EXISTS incident_graph_edges_incident_idx ON incident_graph_edges(incident_id, created_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS service_dependencies_recent_idx ON service_dependencies(project_id, cluster, namespace, last_seen DESC)`,
-		`UPDATE incidents SET namespace = 'default' WHERE namespace = ''`,
-		`UPDATE incidents SET cluster = 'default-cluster' WHERE cluster = ''`,
-		`UPDATE service_states SET namespace = 'default' WHERE namespace = ''`,
-		`UPDATE service_states SET cluster = 'default-cluster' WHERE cluster = ''`,
-		`UPDATE problems SET namespace = 'default' WHERE namespace = ''`,
-		`UPDATE problems SET cluster = 'default-cluster' WHERE cluster = ''`,
-		`UPDATE services_registry SET namespace = 'default' WHERE namespace = ''`,
-		`UPDATE services_registry SET cluster = 'default-cluster' WHERE cluster = ''`,
 	}
 
 	for _, statement := range statements {
@@ -685,6 +677,7 @@ func (s *Store) GetIncident(ctx context.Context, incidentID string) (*Incident, 
 		return nil, err
 	}
 	item.Impacts = impacts
+	item.DependencyChain = sanitizeDependencyChain(item.Service, item.DependencyChain, impacts)
 	return &item, rows.Err()
 }
 
@@ -733,6 +726,43 @@ func (s *Store) DistinctFilters(ctx context.Context) (map[string][]string, error
 		"namespaces": mapKeys(namespaceSet),
 		"services":   mapKeys(serviceSet),
 	}, nil
+}
+
+func (s *Store) DistinctIncidentFilters(ctx context.Context) (map[string][]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT cluster, namespace, service
+		FROM incidents
+		WHERE timestamp >= NOW() - INTERVAL '48 hours'
+		ORDER BY cluster, namespace, service
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	clusterSet := map[string]struct{}{}
+	namespaceSet := map[string]struct{}{}
+	serviceSet := map[string]struct{}{}
+	for rows.Next() {
+		var cluster, namespace, service string
+		if err := rows.Scan(&cluster, &namespace, &service); err != nil {
+			return nil, err
+		}
+		if cluster != "" {
+			clusterSet[cluster] = struct{}{}
+		}
+		if namespace != "" {
+			namespaceSet[namespace] = struct{}{}
+		}
+		if service != "" {
+			serviceSet[service] = struct{}{}
+		}
+	}
+	return map[string][]string{
+		"clusters":   mapKeys(clusterSet),
+		"namespaces": mapKeys(namespaceSet),
+		"services":   mapKeys(serviceSet),
+	}, rows.Err()
 }
 
 type rowScanner interface {
@@ -1169,6 +1199,65 @@ func normalizeIncidentEntities(values []string) []string {
 	return out
 }
 
+func sanitizeDependencyChain(service string, chain []string, impacts []IncidentImpact) []string {
+	if len(chain) == 0 {
+		return chain
+	}
+	knownServices := map[string]struct{}{}
+	if normalized := normalizeIncidentEntity(service); normalized != "" && clickhouse.InferTopologyNodeType(normalized) == "service" {
+		knownServices[normalized] = struct{}{}
+	}
+	for _, impact := range impacts {
+		normalized := normalizeIncidentEntity(impact.Service)
+		if normalized != "" && clickhouse.InferTopologyNodeType(normalized) == "service" {
+			knownServices[normalized] = struct{}{}
+		}
+	}
+	serviceNames := make([]string, 0, len(knownServices))
+	for name := range knownServices {
+		serviceNames = append(serviceNames, name)
+	}
+	out := make([]string, 0, len(chain))
+	seen := map[string]struct{}{}
+	for _, value := range chain {
+		normalized := normalizeIncidentEntity(value)
+		if normalized == "" {
+			continue
+		}
+		trimmed := trimLegacyInfraServiceSuffix(normalized, serviceNames)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func trimLegacyInfraServiceSuffix(value string, services []string) string {
+	nodeType := clickhouse.InferTopologyNodeType(value)
+	if nodeType != "messaging" && nodeType != "database" {
+		return value
+	}
+	out := value
+	for _, service := range services {
+		normalized := normalizeIncidentEntity(service)
+		if normalized == "" {
+			continue
+		}
+		for _, separator := range []string{"-", "_", "/", "."} {
+			suffix := separator + normalized
+			if strings.HasSuffix(out, suffix) {
+				out = strings.TrimSuffix(out, suffix)
+			}
+		}
+	}
+	return normalizeIncidentEntity(out)
+}
+
 func defaultDependencyType(value string) string {
 	if value == "" {
 		return "trace_http"
@@ -1180,8 +1269,6 @@ func edgeType(dependencyType string) string {
 	switch dependencyType {
 	case "messaging":
 		return "messaging"
-	case "messaging_kafka":
-		return "messaging_kafka"
 	case "trace_http":
 		return "trace_http"
 	case "trace_rpc":
@@ -1202,8 +1289,6 @@ func dependencyConfidence(dependencyType string) float64 {
 	case "trace_http":
 		return 0.9
 	case "messaging":
-		return 0.9
-	case "messaging_kafka":
 		return 0.9
 	case "database":
 		return 0.85

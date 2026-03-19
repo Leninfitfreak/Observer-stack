@@ -187,7 +187,7 @@ func (e *IntelligenceEngine) refresh(ctx context.Context) error {
 			}
 			resources = append(resources, incidents.ClusterResource{
 				ClusterID:    firstNonEmpty(strings.TrimSpace(svc.Cluster), clusterID),
-				Namespace:    firstNonEmpty(strings.TrimSpace(svc.Namespace), "default"),
+				Namespace:    strings.TrimSpace(svc.Namespace),
 				ResourceType: "service",
 				ResourceName: svc.ServiceName,
 				Replicas:     0,
@@ -208,12 +208,9 @@ func (e *IntelligenceEngine) resolveClusterID(ctx context.Context) string {
 	cmd := kubectlCommand(ctx, "config", "current-context")
 	output, err := cmd.Output()
 	if err != nil {
-		return "default-cluster"
+		return ""
 	}
 	current := strings.TrimSpace(string(output))
-	if current == "" {
-		return "default-cluster"
-	}
 	return current
 }
 

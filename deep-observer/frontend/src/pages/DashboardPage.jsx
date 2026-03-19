@@ -40,6 +40,10 @@ export default function DashboardPage() {
   const [runbooks, setRunbooks] = useState([]);
   const [observabilityReport, setObservabilityReport] = useState(null);
 
+  const selectedIncident =
+    (Array.isArray(incidents) ? incidents : []).find((incident) => incident.incident_id === selectedIncidentId) ||
+    (Array.isArray(incidents) ? incidents[0] : null) ||
+    null;
   const selectedServiceName = selectedIncident?.service || filters.service || "";
   const selectedClusterReport =
     selectedIncident && clusterReport && typeof clusterReport === "object"
@@ -59,10 +63,6 @@ export default function DashboardPage() {
     () => ({ ...filters, start: range.start, end: range.end, time_range: appliedTimeRange }),
     [filters, range, appliedTimeRange],
   );
-  const selectedIncident =
-    (Array.isArray(incidents) ? incidents : []).find((incident) => incident.incident_id === selectedIncidentId) ||
-    (Array.isArray(incidents) ? incidents[0] : null) ||
-    null;
 
   useEffect(() => {
     if (!selectedIncidentId || !shouldScrollToDetailsRef.current || !detailsPanelRef.current) return;
@@ -219,7 +219,7 @@ export default function DashboardPage() {
           emptyHint={incidentHint || "No incidents found for the selected filters."}
           serviceHealth={serviceHealth.find((item) => item.service_name === selectedServiceName)}
           clusterReport={selectedClusterReport}
-          changes={Array.isArray(changes) ? changes.filter((item) => !selectedServiceName || `${item?.resource_name || ""}`.includes(selectedServiceName)) : []}
+          changes={filterChangesBySelectedService(changes, selectedServiceName)}
           sloStatus={sloStatus.filter((item) => item.service_name === selectedServiceName)}
           runbooks={runbooks}
           observabilityReport={observabilityReport}
@@ -234,4 +234,15 @@ export default function DashboardPage() {
       />
     </main>
   );
+}
+
+function filterChangesBySelectedService(changes, selectedServiceName) {
+  if (!Array.isArray(changes)) return [];
+  if (!selectedServiceName) return changes;
+  const selected = String(selectedServiceName).trim().toLowerCase();
+  return changes.filter((item) => {
+    const serviceName = String(item?.service_name || item?.service || "").trim().toLowerCase();
+    const resourceName = String(item?.resource_name || "").trim().toLowerCase();
+    return serviceName === selected || resourceName === selected;
+  });
 }

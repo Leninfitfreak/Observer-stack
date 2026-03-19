@@ -141,12 +141,9 @@ func (e *ChangeIntelligenceEngine) resolveClusterID(ctx context.Context) string 
 	}
 	output, err := runKubectl(ctx, "config", "current-context")
 	if err != nil {
-		return "default-cluster"
+		return ""
 	}
 	current := strings.TrimSpace(string(output))
-	if current == "" {
-		return "default-cluster"
-	}
 	return current
 }
 

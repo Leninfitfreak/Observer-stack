@@ -39,6 +39,7 @@ func (s *Store) attachIncidentImpacts(ctx context.Context, items []Incident) err
 			return err
 		}
 		items[idx].Impacts = impacts
+		items[idx].DependencyChain = sanitizeDependencyChain(items[idx].Service, items[idx].DependencyChain, impacts)
 	}
 	return nil
 }

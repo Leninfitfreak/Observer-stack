@@ -7,10 +7,11 @@ def generate_runbook(incident: dict, reasoning: dict, historical_matches: list[d
     incident_type = str(incident.get("incident_type", "observed"))
     root_signal = str(reasoning.get("root_cause_signal", "unknown"))
     service = str(incident.get("service", "unknown-service"))
-    namespace = str(incident.get("namespace", "default")) or "default"
+    namespace = str(incident.get("namespace", "")).strip()
+    ns_scope = f"namespace `{namespace}`" if namespace else "the current namespace scope"
 
     steps = [
-        f"Validate incident scope in service `{service}` namespace `{namespace}`.",
+        f"Validate incident scope in service `{service}` within {ns_scope}.",
         f"Review telemetry for signal `{root_signal}`.",
     ]
     steps.extend(signal_driven_steps(incident, reasoning))
@@ -19,7 +20,7 @@ def generate_runbook(incident: dict, reasoning: dict, historical_matches: list[d
         if text:
             steps.append(text)
     if any("latency" in str(signal).lower() for signal in reasoning.get("correlated_signals", [])):
-        steps.append(f"kubectl -n {namespace} top pod -l app={service}")
+        steps.append(f"Inspect workload latency and runtime saturation for resources serving `{service}` within {ns_scope}.")
     if historical_matches:
         steps.append("Review historical incidents with similar signature for proven fixes.")
 
@@ -50,7 +51,8 @@ def signal_driven_steps(incident: dict, reasoning: dict) -> list[str]:
     signals.extend(str(item).lower() for item in (reasoning.get("correlated_signals") or []))
     root_signal = str(reasoning.get("root_cause_signal", "")).lower()
     all_signals = " ".join(signals + [root_signal])
-    namespace = str(incident.get("namespace", "default")) or "default"
+    namespace = str(incident.get("namespace", "")).strip()
+    ns_scope = f"within namespace `{namespace}`" if namespace else "within the current namespace scope"
     service = str(incident.get("service", "unknown-service"))
 
     steps: list[str] = []
@@ -63,7 +65,7 @@ def signal_driven_steps(incident: dict, reasoning: dict) -> list[str]:
             [
                 "Inspect dependency/database latency and slow query metrics for spikes.",
                 "Inspect dependency connection pool saturation and max-connection limits.",
-                f"kubectl -n {namespace} logs deployment/{service} --tail=200 | grep -Ei \"timeout|connection|sql\"",
+                f"Inspect recent application logs for `{service}` {ns_scope} and look for connection, timeout, or query failures.",
             ]
         )
     if any(token in all_signals for token in ("consumer_lag", "lag", "queue", "topic", "messag")) or has_metric("messag") or has_metric("queue"):
@@ -77,15 +79,15 @@ def signal_driven_steps(incident: dict, reasoning: dict) -> list[str]:
     if any(token in all_signals for token in ("cpu", "saturation")) or float(snapshot.get("cpu_utilization", 0) or 0) >= 80:
         steps.extend(
             [
-                f"kubectl -n {namespace} top pod -l app={service}",
-                f"kubectl -n {namespace} describe deployment/{service}",
+                f"Inspect pod or workload CPU usage for `{service}` {ns_scope}.",
+                f"Inspect workload state, replica availability, and scheduling conditions for `{service}` {ns_scope}.",
             ]
         )
     if any(token in all_signals for token in ("memory", "oom", "pressure")) or float(snapshot.get("memory_utilization", 0) or 0) >= 80:
         steps.extend(
             [
                 "Check memory working-set trend and OOMKilled events.",
-                f"kubectl -n {namespace} get events --sort-by=.lastTimestamp | grep -Ei \"oom|killed|evict\"",
+                f"Inspect recent workload and node events for `{service}` {ns_scope}, especially OOM or eviction signals.",
             ]
         )
     if any(token in all_signals for token in ("latency", "timeout", "zscore")):

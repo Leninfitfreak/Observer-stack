@@ -16,6 +16,7 @@ from .config import Settings
 TRACES_TABLE = "signoz_traces.distributed_signoz_index_v3"
 LOGS_TABLE = "signoz_logs.distributed_logs_v2"
 METRICS_TABLE = "signoz_metrics.distributed_time_series_v4"
+SAMPLES_TABLE = "signoz_metrics.distributed_samples_v4"
 logger = logging.getLogger(__name__)
 
 
@@ -135,19 +136,32 @@ class TelemetryReader:
             incident,
             lambda: client.query(
                 f"""
-                SELECT metric_name, count()
-                FROM {METRICS_TABLE}
-                WHERE unix_milli >= {int(start.timestamp() * 1000)}
-                  AND unix_milli < {int(end.timestamp() * 1000)}
-                  AND {self._metric_service_expr()} = '{service}'
+                SELECT
+                    ts.metric_name,
+                    argMax(samples.value, samples.unix_milli) AS latest_value,
+                    max(samples.unix_milli) AS latest_unix_milli
+                FROM {SAMPLES_TABLE} AS samples
+                INNER JOIN {METRICS_TABLE} AS ts USING fingerprint
+                WHERE samples.unix_milli >= {int(start.timestamp() * 1000)}
+                  AND samples.unix_milli < {int(end.timestamp() * 1000)}
+                  AND {self._metric_service_expr('ts')} = '{service}'
+                  AND {self._eq_or_any("ts.resource_attrs['k8s.namespace.name']", namespace)}
+                  AND {self._eq_or_any("ts.resource_attrs['k8s.cluster.name']", cluster)}
                   AND (
-                    positionCaseInsensitive(metric_name, 'cpu') > 0 OR
-                    positionCaseInsensitive(metric_name, 'memory') > 0 OR
-                    positionCaseInsensitive(metric_name, 'latency') > 0 OR
-                    positionCaseInsensitive(metric_name, 'error') > 0
+                    positionCaseInsensitive(ts.metric_name, 'cpu') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'memory') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'latency') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'error') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'request') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'messag') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'queue') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'topic') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'db') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'database') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'jvm') > 0
                   )
-                GROUP BY metric_name
-                LIMIT 30
+                GROUP BY ts.metric_name
+                LIMIT 40
                 """
             ).result_rows,
             [],
@@ -186,7 +200,7 @@ class TelemetryReader:
 
         return TelemetryContext(
             metrics_summary={
-                "highlights": {name: value for name, value in metrics_rows},
+                "highlights": {name: value for name, value, _observed_at in metrics_rows},
                 "detector_snapshot": incident["telemetry_snapshot"],
             },
             logs_summary={
@@ -382,6 +396,7 @@ class TelemetryReader:
             WITH publish AS (
                 SELECT
                     {self._trace_service_expr()} AS source,
+                    lowerUTF8(attributes_string['messaging.system']) AS messaging_system,
                     coalesce(
                       nullIf(attributes_string['messaging.destination.name'], ''),
                       nullIf(attributes_string['messaging.destination'], ''),
@@ -397,11 +412,12 @@ class TelemetryReader:
                   AND attributes_string['messaging.system'] != ''
                   AND coalesce(nullIf(attributes_string['messaging.destination.name'], ''), nullIf(attributes_string['messaging.destination'], ''), nullIf(attributes_string['messaging.destination_name'], '')) != ''
                   AND lowerUTF8(coalesce(attributes_string['messaging.operation'], attributes_string['messaging.operation.type'], '')) IN ('publish', 'send')
-                GROUP BY source, destination
+                GROUP BY source, messaging_system, destination
             ),
             consume AS (
                 SELECT
                     {self._trace_service_expr()} AS target,
+                    lowerUTF8(attributes_string['messaging.system']) AS messaging_system,
                     coalesce(
                       nullIf(attributes_string['messaging.destination.name'], ''),
                       nullIf(attributes_string['messaging.destination'], ''),
@@ -417,11 +433,11 @@ class TelemetryReader:
                   AND attributes_string['messaging.system'] != ''
                   AND coalesce(nullIf(attributes_string['messaging.destination.name'], ''), nullIf(attributes_string['messaging.destination'], ''), nullIf(attributes_string['messaging.destination_name'], '')) != ''
                   AND lowerUTF8(coalesce(attributes_string['messaging.operation'], attributes_string['messaging.operation.type'], '')) IN ('process', 'receive')
-                GROUP BY target, destination
+                GROUP BY target, messaging_system, destination
             )
-            SELECT publish.source, concat('kafka:', publish.destination) AS target, consume.target, publish.destination, least(publish.publish_count, consume.process_count) AS calls
+            SELECT publish.source, publish.messaging_system, publish.destination, consume.target, least(publish.publish_count, consume.process_count) AS calls
             FROM publish
-            INNER JOIN consume ON publish.destination = consume.destination
+            INNER JOIN consume ON publish.destination = consume.destination AND publish.messaging_system = consume.messaging_system
             WHERE publish.source != ''
             ORDER BY calls DESC
             LIMIT 30
@@ -431,7 +447,8 @@ class TelemetryReader:
             f"""
             SELECT
                 {self._trace_service_expr()} AS source,
-                concat('db:', coalesce(attributes_string['db.system'], 'unknown'), ':', coalesce(attributes_string['db.name'], attributes_string['db.namespace'], 'default')) AS target,
+                lowerUTF8(coalesce(nullIf(attributes_string['db.system'], ''), 'database')) AS db_system,
+                lowerUTF8(coalesce(nullIf(attributes_string['db.name'], ''), nullIf(attributes_string['db.namespace'], ''), nullIf(attributes_string['server.address'], ''), 'database')) AS db_name,
                 count() AS calls
             FROM {TRACES_TABLE}
             WHERE timestamp >= toDateTime64({int(start.timestamp() * 1000)} / 1000.0, 3)
@@ -440,7 +457,7 @@ class TelemetryReader:
               AND {self._eq_or_any("resources_string['k8s.namespace.name']", namespace)}
               AND {self._eq_or_any("resources_string['k8s.cluster.name']", cluster)}
               AND attributes_string['db.system'] != ''
-            GROUP BY source, target
+            GROUP BY source, db_system, db_name
             ORDER BY calls DESC
             LIMIT 30
             """
@@ -450,11 +467,11 @@ class TelemetryReader:
                 service,
                 *(source for source, _, _ in rows),
                 *(target for _, target, _ in rows),
-                *(source for source, _, _, _, _ in messaging_rows),
-                *(target for _, target, _, _, _ in messaging_rows),
-                *(consumer for _, _, consumer, _, _ in messaging_rows),
-                *(source for source, _, _ in db_rows),
-                *(target for _, target, _ in db_rows),
+                *(source for source, _system, _destination, _consumer, _calls in messaging_rows),
+                *(self._canonical_messaging_node(system, destination) for _source, system, destination, _consumer, _calls in messaging_rows),
+                *(consumer for _source, _system, _destination, consumer, _calls in messaging_rows),
+                *(source for source, _system, _name, _calls in db_rows),
+                *(self._canonical_database_node(system, name) for _source, system, name, _calls in db_rows),
             }
         )
         return {
@@ -466,27 +483,32 @@ class TelemetryReader:
             + [
                 {
                     "source": source,
-                    "target": target,
+                    "target": self._canonical_messaging_node(system, destination),
                     "call_count": calls,
-                    "dependency_type": "messaging_kafka",
+                    "dependency_type": "messaging",
                     "destination": destination,
                 }
-                for source, target, _consumer, destination, calls in messaging_rows
+                for source, system, destination, _consumer, calls in messaging_rows
             ]
             + [
                 {
-                    "source": target,
+                    "source": self._canonical_messaging_node(system, destination),
                     "target": consumer,
                     "call_count": calls,
-                    "dependency_type": "messaging_kafka",
+                    "dependency_type": "messaging",
                     "destination": destination,
                 }
-                for _source, target, consumer, destination, calls in messaging_rows
+                for _source, system, destination, consumer, calls in messaging_rows
                 if consumer
             ]
             + [
-                {"source": source, "target": target, "call_count": calls, "dependency_type": "database"}
-                for source, target, calls in db_rows
+                {
+                    "source": source,
+                    "target": self._canonical_database_node(db_system, db_name),
+                    "call_count": calls,
+                    "dependency_type": "database",
+                }
+                for source, db_system, db_name, calls in db_rows
             ],
         }
 
@@ -548,11 +570,14 @@ class TelemetryReader:
 
         metric_rows = client.query(
             f"""
-            SELECT toDateTime(unix_milli / 1000) AS bucket, count() AS datapoints
-            FROM {METRICS_TABLE}
-            WHERE unix_milli >= {int(start.timestamp() * 1000)}
-              AND unix_milli < {int(end.timestamp() * 1000)}
-              AND {self._metric_service_expr()} = '{service}'
+            SELECT toDateTime(samples.unix_milli / 1000) AS bucket, count() AS datapoints
+            FROM {SAMPLES_TABLE} AS samples
+            INNER JOIN {METRICS_TABLE} AS ts USING fingerprint
+            WHERE samples.unix_milli >= {int(start.timestamp() * 1000)}
+              AND samples.unix_milli < {int(end.timestamp() * 1000)}
+              AND {self._metric_service_expr('ts')} = '{service}'
+              AND {self._eq_or_any("ts.resource_attrs['k8s.namespace.name']", namespace)}
+              AND {self._eq_or_any("ts.resource_attrs['k8s.cluster.name']", cluster)}
             GROUP BY bucket
             ORDER BY bucket
             LIMIT 20
@@ -622,11 +647,20 @@ class TelemetryReader:
         log_count = int(logs_summary[0] or 0) if logs_summary else 0
         context_log_count = int(logs_summary[1] or 0) if logs_summary else 0
         logs_structured = context_log_count > 0
+        metric_values = [float(value or 0) for _name, value, _observed_at in metrics_rows]
+        quality_by_signal = {
+            "traces": self._quality_state(tracing_count, tracing_count == 0, False),
+            "logs": self._quality_state(log_count, log_count == 0, False if not metric_values else False),
+            "metrics": self._quality_state(metrics_count, all(value == 0 for value in metric_values) if metric_values else False, False),
+            "topology": "present" if topology["edges"] else "missing",
+        }
 
         if tracing_count == 0:
             missing_signals.append(f"No distributed tracing for {service}")
         if metrics_count == 0:
-            missing_signals.append(f"Missing CPU metrics for {service}")
+            missing_signals.append(f"No service-level metrics available for {service}")
+        elif quality_by_signal["metrics"] == "zero":
+            missing_signals.append(f"Metrics are present for {service}, but current values are zero across the incident window")
         if not logs_structured:
             missing_signals.append(f"Logs missing structured fields for {service}")
         if "topology unavailable" in warnings:
@@ -649,6 +683,7 @@ class TelemetryReader:
             "logs_structure": "good" if logs_structured else "poor",
             "alert_correlation": "good" if topology["edges"] else "partial",
             "missing_signals": missing_signals,
+            "quality_by_signal": quality_by_signal,
         }
 
     @staticmethod
@@ -668,6 +703,37 @@ class TelemetryReader:
             return "1 = 1"
         safe = value.replace("'", "''")
         return f"{column} = '{safe}'"
+
+    @staticmethod
+    def _canonical_infra_token(value: str) -> str:
+        token = (value or "").strip().lower()
+        token = token.replace(".svc.cluster.local", "").replace(".svc", "").replace(".cluster.local", "").replace(".local", "")
+        token = re.sub(r"[^a-z0-9]+", "-", token)
+        return token.strip("-._/")
+
+    @classmethod
+    def _canonical_messaging_node(cls, system: str, destination: str) -> str:
+        normalized_system = cls._canonical_infra_token(system) or "broker"
+        normalized_destination = cls._canonical_infra_token(destination)
+        return f"messaging:{normalized_system}/{normalized_destination}" if normalized_destination else f"messaging:{normalized_system}"
+
+    @classmethod
+    def _canonical_database_node(cls, system: str, name: str) -> str:
+        normalized_system = cls._canonical_infra_token(system) or "database"
+        normalized_name = cls._canonical_infra_token(name)
+        return f"db:{normalized_system}/{normalized_name}" if normalized_name else f"db:{normalized_system}"
+
+    @staticmethod
+    def _quality_state(count: int, zero_values: bool, stale: bool) -> str:
+        if stale:
+            return "stale"
+        if count == 0:
+            return "missing"
+        if zero_values:
+            return "zero"
+        if count < 3:
+            return "sparse"
+        return "present"
 
     @staticmethod
     def _canonicalize_name(value: str) -> str:
@@ -707,14 +773,15 @@ class TelemetryReader:
         )
 
     @staticmethod
-    def _metric_service_expr() -> str:
+    def _metric_service_expr(alias: str = "") -> str:
+        prefix = f"{alias}." if alias else ""
         return (
             "replaceRegexpOne(replaceRegexpOne(lowerUTF8(coalesce("
-            "nullIf(resource_attrs['service.name'], ''),"
-            "nullIf(resource_attrs['k8s.service.name'], ''),"
-            "nullIf(resource_attrs['k8s.deployment.name'], ''),"
-            "nullIf(resource_attrs['k8s.container.name'], ''),"
-            "nullIf(resource_attrs['k8s.pod.name'], '')"
+            f"nullIf({prefix}resource_attrs['service.name'], ''),"
+            f"nullIf({prefix}resource_attrs['k8s.service.name'], ''),"
+            f"nullIf({prefix}resource_attrs['k8s.deployment.name'], ''),"
+            f"nullIf({prefix}resource_attrs['k8s.container.name'], ''),"
+            f"nullIf({prefix}resource_attrs['k8s.pod.name'], '')"
             ")), '-[a-f0-9]{8,10}-[a-z0-9]{5}$', ''), '-[a-f0-9]{8,10}$', '')"
         )
 

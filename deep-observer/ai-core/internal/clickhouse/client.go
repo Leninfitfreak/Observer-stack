@@ -16,6 +16,7 @@ import (
 
 const (
 	metricsTable = "signoz_metrics.distributed_time_series_v4"
+	samplesTable = "signoz_metrics.distributed_samples_v4"
 	logsTable    = "signoz_logs.distributed_logs_v2"
 	tracesTable  = "signoz_traces.distributed_signoz_index_v3"
 )
@@ -62,6 +63,7 @@ type Snapshot struct {
 	ErrorLogs            []string           `json:"error_logs"`
 	TraceIDs             []string           `json:"trace_ids"`
 	MetricHighlights     map[string]float64 `json:"metric_highlights"`
+	TelemetryQuality     map[string]string  `json:"telemetry_quality"`
 }
 
 func NewClient(ctx context.Context, cfg config.ClickHouseConfig) (*Client, error) {
@@ -146,47 +148,6 @@ func (c *Client) ListActiveServices(ctx context.Context, lookback time.Duration,
 		}
 	}
 
-	logRows, err := c.conn.Query(ctx, fmt.Sprintf(`
-		SELECT
-			coalesce(
-				nullIf(resources_string['service.name'], ''),
-				nullIf(resources_string['k8s.service.name'], ''),
-				nullIf(resources_string['k8s.deployment.name'], '')
-			) AS service,
-			ifNull(nullIf(resources_string['k8s.namespace.name'], ''), '') AS namespace,
-			ifNull(nullIf(resources_string['k8s.cluster.name'], ''), '') AS cluster
-		FROM %s
-		WHERE timestamp >= %d
-		  AND timestamp < %d
-		  AND coalesce(nullIf(resources_string['service.name'], ''), nullIf(resources_string['k8s.service.name'], ''), nullIf(resources_string['k8s.deployment.name'], '')) != ''
-		GROUP BY service, namespace, cluster
-		LIMIT 100
-	`, logsTable, time.Now().UTC().Add(-lookback).UnixNano(), time.Now().UTC().UnixNano()))
-	if err == nil {
-		defer logRows.Close()
-		for logRows.Next() {
-			var candidate ServiceCandidate
-			if scanErr := logRows.Scan(&candidate.Service, &candidate.Namespace, &candidate.Cluster); scanErr == nil {
-				candidate.Service = canonicalizeServiceName(candidate.Service)
-				candidate.Namespace = canonicalNamespace(candidate.Namespace)
-				candidate.Cluster = canonicalCluster(candidate.Cluster)
-				if clusterFilter != "" && clusterFilter != candidate.Cluster {
-					continue
-				}
-				if namespaceFilter != "" && namespaceFilter != candidate.Namespace {
-					continue
-				}
-				if serviceFilter != "" && serviceFilter != candidate.Service {
-					continue
-				}
-				if ignoredService(candidate.Service) {
-					continue
-				}
-				candidates[candidate.Cluster+"|"+candidate.Namespace+"|"+candidate.Service] = candidate
-			}
-		}
-	}
-
 	metricRows, err := c.conn.Query(ctx, fmt.Sprintf(`
 		SELECT
 			coalesce(
@@ -251,6 +212,7 @@ func (c *Client) ReadSnapshot(ctx context.Context, filters Filters, baselineWind
 		ErrorLogs:        []string{},
 		TraceIDs:         []string{},
 		MetricHighlights: map[string]float64{},
+		TelemetryQuality: map[string]string{},
 	}
 
 	where := traceWhere(filters)
@@ -343,73 +305,75 @@ func (c *Client) ReadSnapshot(ctx context.Context, filters Filters, baselineWind
 	}
 
 	metricQuery := fmt.Sprintf(`
-		SELECT metric_name, toFloat64(count())
-		FROM %s
-		WHERE unix_milli >= %d AND unix_milli < %d
+		SELECT
+			ts.metric_name,
+			argMax(samples.value, samples.unix_milli) AS latest_value,
+			max(samples.unix_milli) AS latest_unix_milli
+		FROM %s AS samples
+		INNER JOIN %s AS ts USING fingerprint
+		WHERE samples.unix_milli >= %d AND samples.unix_milli < %d
 		  AND (%s)
 		  AND (%s)
 		  AND (%s)
 		  AND (
-			positionCaseInsensitive(metric_name, 'cpu') > 0 OR
-			positionCaseInsensitive(metric_name, 'memory') > 0 OR
-			positionCaseInsensitive(metric_name, 'latency') > 0 OR
-			positionCaseInsensitive(metric_name, 'error') > 0 OR
-			positionCaseInsensitive(metric_name, 'duration') > 0 OR
-			positionCaseInsensitive(metric_name, 'request') > 0 OR
-			positionCaseInsensitive(metric_name, 'messag') > 0 OR
-			positionCaseInsensitive(metric_name, 'broker') > 0 OR
-			positionCaseInsensitive(metric_name, 'topic') > 0 OR
-			positionCaseInsensitive(metric_name, 'lag') > 0 OR
-			positionCaseInsensitive(metric_name, 'queue') > 0 OR
-			positionCaseInsensitive(metric_name, 'db') > 0 OR
-			positionCaseInsensitive(metric_name, 'database') > 0 OR
-			positionCaseInsensitive(metric_name, 'jvm') > 0 OR
-			positionCaseInsensitive(metric_name, 'process') > 0
+			positionCaseInsensitive(ts.metric_name, 'cpu') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'memory') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'latency') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'error') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'duration') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'request') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'messag') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'broker') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'topic') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'lag') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'queue') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'db') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'database') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'jvm') > 0 OR
+			positionCaseInsensitive(ts.metric_name, 'process') > 0
 		  )
-		GROUP BY metric_name
-		LIMIT 25
-	`, metricsTable, filters.Start.UnixMilli(), filters.End.UnixMilli(),
-		matchMapExprOptional("resource_attrs", "k8s.cluster.name", filters.Cluster),
-		matchMapExprOptional("resource_attrs", "k8s.namespace.name", filters.Namespace),
-		matchMetricServiceExpr(filters.Service),
+		  GROUP BY ts.metric_name
+		  LIMIT 40
+	`, samplesTable, metricsTable, filters.Start.UnixMilli(), filters.End.UnixMilli(),
+		matchMapExprOptional("ts.resource_attrs", "k8s.cluster.name", filters.Cluster),
+		matchMapExprOptional("ts.resource_attrs", "k8s.namespace.name", filters.Namespace),
+		matchMetricServiceExprWithAlias("ts", filters.Service),
 	)
 	rows, err := c.conn.Query(ctx, metricQuery)
+	var latestMetricAt int64
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var name string
 			var value float64
-			if scanErr := rows.Scan(&name, &value); scanErr == nil {
+			var observedAt int64
+			if scanErr := rows.Scan(&name, &value, &observedAt); scanErr == nil {
 				snapshot.MetricHighlights[name] = value
-				switch {
-				case strings.Contains(strings.ToLower(name), "cpu"):
-					if value > snapshot.CPUUtilization {
-						snapshot.CPUUtilization = value
-					}
-				case strings.Contains(strings.ToLower(name), "memory"):
-					if value > snapshot.MemoryUtilization {
-						snapshot.MemoryUtilization = value
-					}
+				if observedAt > latestMetricAt {
+					latestMetricAt = observedAt
 				}
 			}
 		}
 	}
+	applyRuntimeMetricSignals(&snapshot)
 	metricsCountQuery := fmt.Sprintf(`
 		SELECT toInt64(count())
-		FROM %s
-		WHERE unix_milli >= %d AND unix_milli < %d
+		FROM %s AS samples
+		INNER JOIN %s AS ts USING fingerprint
+		WHERE samples.unix_milli >= %d AND samples.unix_milli < %d
 		  AND (%s)
 		  AND (%s)
 		  AND (%s)
-	`, metricsTable, filters.Start.UnixMilli(), filters.End.UnixMilli(),
-		matchMapExprOptional("resource_attrs", "k8s.cluster.name", filters.Cluster),
-		matchMapExprOptional("resource_attrs", "k8s.namespace.name", filters.Namespace),
-		matchMetricServiceExpr(filters.Service),
+	`, samplesTable, metricsTable, filters.Start.UnixMilli(), filters.End.UnixMilli(),
+		matchMapExprOptional("ts.resource_attrs", "k8s.cluster.name", filters.Cluster),
+		matchMapExprOptional("ts.resource_attrs", "k8s.namespace.name", filters.Namespace),
+		matchMetricServiceExprWithAlias("ts", filters.Service),
 	)
 	var metricsDatapoints int64
 	if err := c.conn.QueryRow(ctx, metricsCountQuery).Scan(&metricsDatapoints); err == nil && metricsDatapoints > 0 {
 		snapshot.MetricHighlights["metrics.datapoints"] = float64(metricsDatapoints)
 	}
+	snapshot.TelemetryQuality = classifyTelemetryQuality(snapshot, latestTraceAt, latestLogAt, latestMetricAt)
 
 	return snapshot, nil
 }
@@ -457,10 +421,10 @@ func traceWhere(filters Filters) string {
 		parts = append(parts, fmt.Sprintf("replaceRegexpOne(replaceRegexpOne(lowerUTF8(coalesce(nullIf(serviceName, ''), nullIf(resources_string['service.name'], ''), nullIf(resources_string['k8s.service.name'], ''), nullIf(resources_string['k8s.deployment.name'], ''))), '-[a-f0-9]{8,10}-[a-z0-9]{5}$', ''), '-[a-f0-9]{8,10}$', '') = '%s'", escape(canonicalizeServiceName(filters.Service))))
 	}
 	if filters.Namespace != "" {
-		parts = append(parts, fmt.Sprintf("(resources_string['k8s.namespace.name'] = '' OR resources_string['k8s.namespace.name'] = 'default' OR resources_string['k8s.namespace.name'] = '%s')", escape(filters.Namespace)))
+		parts = append(parts, fmt.Sprintf("resources_string['k8s.namespace.name'] = '%s'", escape(filters.Namespace)))
 	}
 	if filters.Cluster != "" {
-		parts = append(parts, fmt.Sprintf("(resources_string['k8s.cluster.name'] = '' OR resources_string['k8s.cluster.name'] = '%s')", escape(filters.Cluster)))
+		parts = append(parts, fmt.Sprintf("resources_string['k8s.cluster.name'] = '%s'", escape(filters.Cluster)))
 	}
 	return strings.Join(parts, " AND ")
 }
@@ -474,10 +438,10 @@ func logWhere(filters Filters) string {
 		parts = append(parts, fmt.Sprintf("replaceRegexpOne(replaceRegexpOne(lowerUTF8(coalesce(nullIf(resources_string['service.name'], ''), nullIf(resources_string['k8s.service.name'], ''), nullIf(resources_string['k8s.deployment.name'], ''))), '-[a-f0-9]{8,10}-[a-z0-9]{5}$', ''), '-[a-f0-9]{8,10}$', '') = '%s'", escape(canonicalizeServiceName(filters.Service))))
 	}
 	if filters.Namespace != "" {
-		parts = append(parts, fmt.Sprintf("(resources_string['k8s.namespace.name'] = '' OR resources_string['k8s.namespace.name'] = 'default' OR resources_string['k8s.namespace.name'] = '%s')", escape(filters.Namespace)))
+		parts = append(parts, fmt.Sprintf("resources_string['k8s.namespace.name'] = '%s'", escape(filters.Namespace)))
 	}
 	if filters.Cluster != "" {
-		parts = append(parts, fmt.Sprintf("(resources_string['k8s.cluster.name'] = '' OR resources_string['k8s.cluster.name'] = '%s')", escape(filters.Cluster)))
+		parts = append(parts, fmt.Sprintf("resources_string['k8s.cluster.name'] = '%s'", escape(filters.Cluster)))
 	}
 	return strings.Join(parts, " AND ")
 }
@@ -493,16 +457,25 @@ func matchMapExprOptional(column, key, value string) string {
 	if value == "" {
 		return "1 = 1"
 	}
-	return fmt.Sprintf("(%s['%s'] = '' OR positionCaseInsensitive(%s['%s'], '%s') > 0)", column, escape(key), column, escape(key), escape(value))
+	return fmt.Sprintf("%s['%s'] = '%s'", column, escape(key), escape(value))
 }
 
 func matchMetricServiceExpr(service string) string {
+	return matchMetricServiceExprWithAlias("", service)
+}
+
+func matchMetricServiceExprWithAlias(alias, service string) string {
 	if strings.TrimSpace(service) == "" {
 		return "1 = 1"
 	}
 	canonical := escape(canonicalizeServiceName(service))
+	column := "resource_attrs"
+	if strings.TrimSpace(alias) != "" {
+		column = alias + ".resource_attrs"
+	}
 	return fmt.Sprintf(
-		"replaceRegexpOne(replaceRegexpOne(lowerUTF8(coalesce(nullIf(resource_attrs['service.name'], ''), nullIf(resource_attrs['k8s.service.name'], ''), nullIf(resource_attrs['k8s.deployment.name'], ''))), '-[a-f0-9]{8,10}-[a-z0-9]{5}$', ''), '-[a-f0-9]{8,10}$', '') = '%s'",
+		"replaceRegexpOne(replaceRegexpOne(lowerUTF8(coalesce(nullIf(%s['service.name'], ''), nullIf(%s['k8s.service.name'], ''), nullIf(%s['k8s.deployment.name'], ''))), '-[a-f0-9]{8,10}-[a-z0-9]{5}$', ''), '-[a-f0-9]{8,10}$', '') = '%s'",
+		column, column, column,
 		canonical,
 	)
 }
@@ -516,76 +489,104 @@ func ignoredService(service string) bool {
 	if value == "" {
 		return true
 	}
-	if InferTopologyNodeType(CanonicalTopologyNodeID(value)) != "service" {
-		return true
-	}
-	if isBareInfrastructureService(value) {
-		return true
-	}
-	if value == "root" || strings.HasPrefix(value, "loadtest") {
-		return true
-	}
-	blockedSubstrings := []string{
-		"otel",
-		"observer",
-		"vault",
-		"promtail",
-		"collector",
-		"signoz",
-		"kube-",
-		"argocd",
-		"ingress",
-		"coredns",
-		"minio",
-		"loki",
-		"zookeeper",
-		"storage-provisioner",
-		"config",
-		"creds",
-		"secret",
-		"tcp-services",
-		"udp-services",
-		"minikube",
-		"prometheus",
-		"grafana",
-		"jaeger",
-		"etcd",
-		"controller",
-		"webhook",
-		"cert-",
-		"dex",
-		"external-secrets",
-		"keda",
-		"metrics-server",
-		"node-exporter",
-		"alertmanager",
-		"blackbox",
-		"traffic-generator",
-		"nginx",
-	}
-	for _, blocked := range blockedSubstrings {
-		if strings.Contains(value, blocked) {
-			return true
-		}
-	}
-	return false
-}
-
-func isBareInfrastructureService(value string) bool {
-	bareInfra := map[string]struct{}{
-		"kafka":      {},
-		"zookeeper":  {},
-		"postgres":   {},
-		"postgresql": {},
-		"mysql":      {},
-		"redis":      {},
-		"rabbitmq":   {},
-		"mongodb":    {},
-	}
-	_, found := bareInfra[value]
-	return found
+	return InferTopologyNodeType(CanonicalTopologyNodeID(value)) != "service"
 }
 
 func IsIgnoredService(service string) bool {
 	return ignoredService(service)
+}
+
+func applyRuntimeMetricSignals(snapshot *Snapshot) {
+	memoryUsed := 0.0
+	memoryLimit := 0.0
+	for name, value := range snapshot.MetricHighlights {
+		lower := strings.ToLower(name)
+		switch {
+		case strings.Contains(lower, "cpu") && strings.Contains(lower, "utilization"):
+			snapshot.CPUUtilization = maxFloat(snapshot.CPUUtilization, value)
+		case strings.Contains(lower, "memory") && strings.Contains(lower, "utilization"):
+			snapshot.MemoryUtilization = maxFloat(snapshot.MemoryUtilization, value)
+		case lower == "jvm.memory.used":
+			memoryUsed = maxFloat(memoryUsed, value)
+		case lower == "jvm.memory.limit":
+			memoryLimit = maxFloat(memoryLimit, value)
+		}
+	}
+	if snapshot.MemoryUtilization == 0 && memoryUsed > 0 && memoryLimit > 0 {
+		snapshot.MemoryUtilization = (memoryUsed / memoryLimit) * 100
+	}
+}
+
+func classifyTelemetryQuality(snapshot Snapshot, latestTraceAt time.Time, latestLogAt int64, latestMetricAt int64) map[string]string {
+	quality := map[string]string{
+		"traces":  "missing",
+		"logs":    "missing",
+		"metrics": "missing",
+	}
+	if snapshot.RequestCount > 0 || len(snapshot.TraceIDs) > 0 {
+		quality["traces"] = "present"
+		if snapshot.RequestCount > 0 && snapshot.RequestCount < 20 {
+			quality["traces"] = "sparse"
+		}
+		if !latestTraceAt.IsZero() && snapshot.End().Sub(latestTraceAt.UTC()) > 15*time.Minute {
+			quality["traces"] = "stale"
+		}
+	}
+	if snapshot.LogCount > 0 {
+		quality["logs"] = "present"
+		if snapshot.LogCount < 3 {
+			quality["logs"] = "sparse"
+		}
+		if latestLogAt > 0 {
+			logTime := time.Unix(0, latestLogAt).UTC()
+			if snapshot.End().Sub(logTime) > 15*time.Minute {
+				quality["logs"] = "stale"
+			}
+		}
+	}
+	meaningfulMetrics := 0
+	allZero := true
+	for name, value := range snapshot.MetricHighlights {
+		if name == "metrics.datapoints" {
+			continue
+		}
+		meaningfulMetrics++
+		if math.Abs(value) > 0 {
+			allZero = false
+		}
+	}
+	switch {
+	case meaningfulMetrics == 0:
+		quality["metrics"] = "missing"
+	case allZero:
+		quality["metrics"] = "zero"
+	case meaningfulMetrics < 3:
+		quality["metrics"] = "sparse"
+	default:
+		quality["metrics"] = "present"
+	}
+	if latestMetricAt > 0 {
+		metricTime := time.UnixMilli(latestMetricAt).UTC()
+		if snapshot.End().Sub(metricTime) > 15*time.Minute {
+			quality["metrics"] = "stale"
+		}
+	}
+	if snapshot.RequestCount == 0 && quality["traces"] == "present" {
+		quality["traces"] = "contradictory"
+	}
+	return quality
+}
+
+func (s Snapshot) End() time.Time {
+	if !s.Filters.End.IsZero() {
+		return s.Filters.End
+	}
+	return s.ObservedAt
+}
+
+func maxFloat(left, right float64) float64 {
+	if right > left {
+		return right
+	}
+	return left
 }

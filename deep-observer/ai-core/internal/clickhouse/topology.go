@@ -59,8 +59,8 @@ func (c *Client) BuildTopology(ctx context.Context, filters Filters) (TopologyGr
 				nullIf(resources_string['k8s.service.name'], ''),
 				nullIf(resources_string['k8s.deployment.name'], '')
 			) AS service,
-			coalesce(nullIf(resources_string['k8s.namespace.name'], ''), 'default') AS namespace,
-			coalesce(nullIf(resources_string['k8s.cluster.name'], ''), 'default-cluster') AS cluster,
+			ifNull(nullIf(resources_string['k8s.namespace.name'], ''), '') AS namespace,
+			ifNull(nullIf(resources_string['k8s.cluster.name'], ''), '') AS cluster,
 			toInt64(count()) AS request_count,
 			avg(toFloat64(hasError)) AS error_rate
 		FROM %s

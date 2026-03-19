@@ -19,8 +19,8 @@ import (
 	"deep-observer/ai-core/internal/incidents"
 )
 
-var serviceNodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
-var structuredTopologyNodePattern = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9-]{0,39}|db:[a-z0-9][a-z0-9._/-]{0,95}|messaging:[a-z0-9][a-z0-9._/-]{0,95})$`)
+var serviceNodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,127}$`)
+var structuredTopologyNodePattern = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9._/-]{0,127}|db:[a-z0-9][a-z0-9._/-]{0,95}|messaging:[a-z0-9][a-z0-9._/-]{0,95})$`)
 
 func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project config.ProjectConfig) http.Handler {
 	sloEngine := enterprise.NewSLOEngine(store)
@@ -244,6 +244,51 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 			} else {
 				graph = dedupeGraph(graph)
 				graph = sanitizeApplicationGraph(graph)
+				if len(graph.Edges) == 0 && namespaceFilter != "" && serviceFilter == "" {
+					scopedServiceSet := map[string]struct{}{}
+					if scopedServices, svcErr := client.ListActiveServices(ctx, 6*time.Hour, clickhouse.ServiceSelection{
+						Cluster:   clusterFilter,
+						Namespace: namespaceFilter,
+					}); svcErr == nil {
+						for _, candidate := range scopedServices {
+							if strings.TrimSpace(candidate.Service) == "" {
+								continue
+							}
+							scopedServiceSet[candidate.Service] = struct{}{}
+						}
+					}
+					if len(scopedServiceSet) == 0 {
+						if scopedIncidents, incErr := store.ListIncidents(ctx, incidents.QueryFilters{
+							ProjectID: project.ProjectID,
+							Cluster:   clusterFilter,
+							Namespace: namespaceFilter,
+							Limit:     80,
+						}); incErr == nil {
+							for _, incident := range scopedIncidents {
+								if strings.TrimSpace(incident.Service) == "" {
+									continue
+								}
+								scopedServiceSet[incident.Service] = struct{}{}
+							}
+						}
+					}
+					if len(scopedServiceSet) > 0 {
+						relaxedGraph, relaxedErr := client.BuildTopology(ctx, clickhouse.Filters{
+							Cluster:   clusterFilter,
+							Namespace: "",
+							Service:   "",
+							Start:     start,
+							End:       end,
+						})
+						if relaxedErr == nil {
+							serviceIDs := make([]string, 0, len(scopedServiceSet))
+							for serviceID := range scopedServiceSet {
+								serviceIDs = append(serviceIDs, serviceID)
+							}
+							graph = filterGraphByServiceSet(dedupeGraph(sanitizeApplicationGraph(relaxedGraph)), serviceIDs)
+						}
+					}
+				}
 				if len(graph.Edges) == 0 {
 					if incidentGraph, incErr := buildGraphFromIncidentChainsFallback(r.Context(), store, project.ProjectID, clusterFilter, namespaceFilter, serviceFilter); incErr == nil {
 						graph = dedupeGraph(sanitizeApplicationGraph(incidentGraph))
@@ -295,28 +340,43 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 				}
 			}
 		}
-
-		if namespaces, err := kubernetesNamespaces(ctx); err == nil {
-			namespaceSet = map[string]struct{}{}
-			for _, ns := range namespaces {
-				namespaceSet[ns] = struct{}{}
+		if incidentFilters, err := store.DistinctIncidentFilters(ctx); err == nil {
+			if len(clusterSet) == 0 {
+				for _, cluster := range incidentFilters["clusters"] {
+					clusterSet[cluster] = struct{}{}
+				}
+			}
+			if len(namespaceSet) == 0 {
+				for _, namespace := range incidentFilters["namespaces"] {
+					if strings.TrimSpace(namespace) != "" {
+						namespaceSet[namespace] = struct{}{}
+					}
+				}
+			}
+			if len(incidentFilters["services"]) > 0 {
+				incidentServices := map[string]struct{}{}
+				for _, service := range incidentFilters["services"] {
+					if strings.TrimSpace(service) == "" {
+						continue
+					}
+					incidentServices[service] = struct{}{}
+				}
+				serviceSet = incidentServices
 			}
 		}
-		if len(clusterSet) == 0 {
-			if cluster := resolveClusterFromKubeContext(ctx); cluster != "" {
-				clusterSet[cluster] = struct{}{}
-			}
-		}
-		values["clusters"] = sortedKeys(clusterSet)
-		values["namespaces"] = sortedKeys(namespaceSet)
+		values["clusters"] = sortedNonEmptyKeys(clusterSet)
+		values["namespaces"] = sortedNonEmptyKeys(namespaceSet)
 		filteredServices := map[string]struct{}{}
 		for service := range serviceSet {
+			if strings.TrimSpace(service) == "" {
+				continue
+			}
 			if clickhouse.IsIgnoredService(service) {
 				continue
 			}
 			filteredServices[service] = struct{}{}
 		}
-		values["services"] = sortedKeys(filteredServices)
+		values["services"] = sortedNonEmptyKeys(filteredServices)
 		writeJSON(w, http.StatusOK, values)
 	})
 
@@ -488,19 +548,21 @@ func resolveClusterID(ctx context.Context, store *incidents.Store, preferred str
 	return ""
 }
 
-func isSystemNamespace(namespace string) bool {
-	value := strings.ToLower(strings.TrimSpace(namespace))
-	switch value {
-	case "kube-system", "kube-public", "kube-node-lease", "argocd", "ingress-nginx", "external-secrets-system", "observability", "monitoring":
-		return true
-	default:
-		return false
-	}
-}
-
 func sortedKeys(values map[string]struct{}) []string {
 	items := make([]string, 0, len(values))
 	for value := range values {
+		items = append(items, value)
+	}
+	sort.Strings(items)
+	return items
+}
+
+func sortedNonEmptyKeys(values map[string]struct{}) []string {
+	items := make([]string, 0, len(values))
+	for value := range values {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
 		items = append(items, value)
 	}
 	sort.Strings(items)
@@ -596,8 +658,6 @@ func normalizeDependencyType(value string) string {
 	switch value {
 	case "trace_parent_child", "http":
 		return "trace_http"
-	case "messaging_kafka":
-		return "messaging"
 	case "kubernetes":
 		return "kubernetes_dns"
 	default:
@@ -646,7 +706,7 @@ func sanitizeApplicationGraph(graph clickhouse.TopologyGraph) clickhouse.Topolog
 		node.NodeType = nodeType
 		if nodeType == "service" {
 			normalizedID := normalizeServiceName(id)
-			if normalizedID == "" || !serviceNodePattern.MatchString(normalizedID) || clickhouse.IsIgnoredService(normalizedID) || isSystemNamespace(node.Namespace) {
+			if normalizedID == "" || !serviceNodePattern.MatchString(normalizedID) || clickhouse.IsIgnoredService(normalizedID) {
 				continue
 			}
 			node.ID = normalizedID
@@ -700,25 +760,8 @@ func normalizeServiceName(value string) string {
 	if service == "" {
 		return ""
 	}
-	for _, prefix := range []string{"dev-", "prod-", "staging-", "stage-", "qa-", "test-"} {
-		if strings.HasPrefix(service, prefix) {
-			service = strings.TrimPrefix(service, prefix)
-			break
-		}
-	}
-	for _, suffix := range []string{"-dev", "-prod", "-staging", "-stage", "-qa", "-test"} {
-		if strings.HasSuffix(service, suffix) {
-			service = strings.TrimSuffix(service, suffix)
-			break
-		}
-	}
-	parts := strings.Split(service, "-")
-	if len(parts)%2 == 0 && len(parts) >= 4 {
-		left := strings.Join(parts[:len(parts)/2], "-")
-		right := strings.Join(parts[len(parts)/2:], "-")
-		if left == right {
-			service = left
-		}
+	for _, suffix := range []string{".svc.cluster.local", ".svc", ".cluster.local", ".local"} {
+		service = strings.TrimSuffix(service, suffix)
 	}
 	return strings.Trim(service, "-._")
 }
@@ -736,13 +779,27 @@ func filterGraphByServiceChain(graph clickhouse.TopologyGraph, service string) c
 	if target == "" {
 		return graph
 	}
+	return filterGraphByServiceSet(graph, []string{target})
+}
+
+func filterGraphByServiceSet(graph clickhouse.TopologyGraph, services []string) clickhouse.TopologyGraph {
+	targets := make([]string, 0, len(services))
+	for _, service := range services {
+		target := normalizeServiceName(service)
+		if target != "" {
+			targets = append(targets, target)
+		}
+	}
+	if len(targets) == 0 {
+		return graph
+	}
 	adj := map[string][]string{}
 	for _, edge := range graph.Edges {
 		adj[edge.Source] = append(adj[edge.Source], edge.Target)
 		adj[edge.Target] = append(adj[edge.Target], edge.Source)
 	}
 	seen := map[string]struct{}{}
-	queue := []string{target}
+	queue := append([]string{}, targets...)
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]

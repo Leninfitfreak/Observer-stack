@@ -147,7 +147,19 @@ def main() -> None:
                             )
                             context = telemetry.fetch_context(incident)
                             historical_matches = fetch_historical_matches(conn, incident)
-                            reasoning = generate_reasoning(llm, incident, context, historical_matches)
+                            try:
+                                reasoning = generate_reasoning(llm, incident, context, historical_matches)
+                            except Exception as exc:  # noqa: BLE001
+                                logging.warning(
+                                    "llm reasoning generation unavailable for incident %s, using deterministic fallback: %s",
+                                    incident["incident_id"],
+                                    exc,
+                                )
+                                reasoning = fallback_reasoning(incident, context, historical_matches)
+                                reasoning["impact_assessment"] = (
+                                    f"{reasoning.get('impact_assessment', '')} "
+                                    "LLM generation was unavailable, so this summary is based on deterministic telemetry evidence."
+                                ).strip()
                             validation = validate_reasoning(incident, context, reasoning, fetch_known_services(conn))
                             store_reasoning_validation(conn, validation)
                             if validation.validation_result == "unsupported":

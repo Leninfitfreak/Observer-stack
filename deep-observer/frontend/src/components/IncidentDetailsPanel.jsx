@@ -965,6 +965,7 @@ function buildSignalSummary(incident, reasoning) {
   const correlated = toList(reasoning?.correlated_signals);
   const missing = toList(reasoning?.missing_telemetry_signals);
   const snapshot = incident?.telemetry_snapshot || {};
+  const telemetryQuality = snapshot.telemetry_quality && typeof snapshot.telemetry_quality === "object" ? snapshot.telemetry_quality : {};
   const critical = [];
   const secondary = [];
 
@@ -991,11 +992,14 @@ function buildSignalSummary(incident, reasoning) {
     secondary.push("memory pressure");
   }
 
-  if ((Array.isArray(snapshot.trace_ids) ? snapshot.trace_ids.length : 0) === 0) {
+  if (telemetryQuality.traces === "missing") {
     missing.push("distributed tracing");
   }
-  if (Number(snapshot.log_count || 0) === 0) {
+  if (telemetryQuality.logs === "missing") {
     missing.push("structured logs");
+  }
+  if (telemetryQuality.metrics === "missing") {
+    missing.push("service-level metrics");
   }
 
   return {
@@ -1231,6 +1235,7 @@ function buildTrustScore(incident, reasoning, signalSummary, observabilityGaps) 
 
 function assessTelemetryData(incident, timeline = [], reasoning) {
   const snapshot = incident?.telemetry_snapshot || {};
+  const telemetryQuality = snapshot.telemetry_quality && typeof snapshot.telemetry_quality === "object" ? snapshot.telemetry_quality : {};
   const chartableTimeline = Array.isArray(timeline) ? timeline.filter((event) => Number.isFinite(Number(event?.value))) : [];
   const traceCount = Array.isArray(snapshot.trace_ids) ? snapshot.trace_ids.length : 0;
   const requestCount = Number(snapshot.request_count || 0);
@@ -1245,10 +1250,13 @@ function assessTelemetryData(incident, timeline = [], reasoning) {
     Number(logCount > 0) +
     Number(cpu > 0 || memory > 0 || highlights.length > 0) +
     Number(chartableTimeline.length > 0);
+  const qualityStates = Object.values(telemetryQuality);
+  const explicitSparse = qualityStates.includes("sparse") || qualityStates.includes("stale") || qualityStates.includes("contradictory");
   return {
     hasChartData: chartableTimeline.length > 0,
-    isSparse: evidenceSignals <= 1 || missingSignals >= 3,
+    isSparse: explicitSparse || evidenceSignals <= 1 || missingSignals >= 3,
     evidenceSignals,
+    telemetryQuality,
   };
 }
 
@@ -1272,6 +1280,7 @@ function formatImpactedServices(value) {
 
 function buildTelemetryEvidence(incident) {
   const snapshot = incident?.telemetry_snapshot || {};
+  const telemetryQuality = snapshot.telemetry_quality && typeof snapshot.telemetry_quality === "object" ? snapshot.telemetry_quality : {};
   const lines = [];
   const requestCount = Number(snapshot.request_count || 0);
   const errorRate = Number(snapshot.error_rate || 0);
@@ -1287,6 +1296,9 @@ function buildTelemetryEvidence(incident) {
   if (Number.isFinite(memory)) lines.push(`Memory utilization: ${memory.toFixed(2)}`);
   if (Number.isFinite(logCount)) lines.push(`Log events: ${logCount}`);
   lines.push(`Trace IDs sampled: ${traceCount}`);
+  Object.entries(telemetryQuality).forEach(([signal, status]) => {
+    lines.push(`${signal} telemetry: ${status}`);
+  });
   const highlights = snapshot.metric_highlights && typeof snapshot.metric_highlights === "object" ? snapshot.metric_highlights : {};
   const metricHighlights = Object.entries(highlights)
     .slice(0, 5)
