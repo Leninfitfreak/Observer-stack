@@ -73,6 +73,63 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 		defer cancel()
 
 		incidentID := parts[0]
+		if len(parts) >= 2 && parts[1] == "reasoning" {
+			if len(parts) == 3 && parts[2] == "run" {
+				if r.Method != http.MethodPost {
+					writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+					return
+				}
+				request, err := store.CreateReasoningRequest(ctx, incidentID, "manual")
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusAccepted, request)
+				return
+			}
+			if len(parts) == 3 && parts[2] == "retry" {
+				if r.Method != http.MethodPost {
+					writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+					return
+				}
+				request, err := store.CreateReasoningRequest(ctx, incidentID, "retry")
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusAccepted, request)
+				return
+			}
+			if len(parts) == 3 && parts[2] == "history" && r.Method == http.MethodGet {
+				history, err := store.ListReasoningRuns(ctx, incidentID, 20)
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, history)
+				return
+			}
+			if len(parts) == 4 && parts[2] == "runs" && r.Method == http.MethodGet {
+				run, err := store.GetReasoningRun(ctx, incidentID, parts[3])
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+					return
+				}
+				writeJSON(w, http.StatusOK, run)
+				return
+			}
+		}
+
+		if len(parts) == 2 && parts[1] == "correlations" && r.Method == http.MethodGet {
+			correlations, err := store.ListCorrelatedIncidents(ctx, incidentID, 24*time.Hour, 8)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, correlations)
+			return
+		}
+
 		item, err := store.GetIncident(ctx, incidentID)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -400,7 +457,7 @@ func sortedKeys(values map[string]struct{}) []string {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

@@ -19,6 +19,21 @@ async function request(path, params) {
   return response.json();
 }
 
+async function requestJson(path, options = {}) {
+  const response = await fetch(withQuery(path), {
+    method: options.method || "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (!response.ok) {
+    throw new Error(`Request failed for ${path}`);
+  }
+  return response.json();
+}
+
 export function fetchIncidents(filters) {
   return request("/api/incidents", { ...filters, limit: 200 });
 }
@@ -29,6 +44,26 @@ export function fetchIncident(incidentId) {
 
 export function fetchTimeline(incidentId) {
   return request(`/api/incidents/${incidentId}/timeline`);
+}
+
+export function runReasoning(incidentId) {
+  return requestJson(`/api/incidents/${incidentId}/reasoning/run`, { method: "POST" });
+}
+
+export function retryReasoning(incidentId) {
+  return requestJson(`/api/incidents/${incidentId}/reasoning/retry`, { method: "POST" });
+}
+
+export function fetchReasoningHistory(incidentId) {
+  return request(`/api/incidents/${incidentId}/reasoning/history`);
+}
+
+export function fetchReasoningRun(incidentId, runId) {
+  return request(`/api/incidents/${incidentId}/reasoning/runs/${runId}`);
+}
+
+export function fetchCorrelations(incidentId) {
+  return request(`/api/incidents/${incidentId}/correlations`);
 }
 
 export function fetchTopology(filters) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -47,6 +48,10 @@ type Incident struct {
 	TimelineSummary        []clickhouse.TimelineEvent `json:"timeline_summary"`
 	Impacts                []IncidentImpact           `json:"impacts"`
 	Reasoning              *Reasoning                 `json:"reasoning,omitempty"`
+	ReasoningStatus        string                     `json:"reasoning_status"`
+	ReasoningError         string                     `json:"reasoning_error"`
+	ReasoningRequestedAt   *time.Time                 `json:"reasoning_requested_at,omitempty"`
+	ReasoningUpdatedAt     *time.Time                 `json:"reasoning_updated_at,omitempty"`
 }
 
 type IncidentImpact struct {
@@ -62,6 +67,7 @@ type Reasoning struct {
 	RootCauseService        string            `json:"root_cause_service"`
 	RootCauseSignal         string            `json:"root_cause_signal"`
 	ConfidenceScore         float64           `json:"confidence_score"`
+	ConfidenceExplanation   map[string]any    `json:"confidence_explanation"`
 	CausalChain             []string          `json:"causal_chain"`
 	CorrelatedSignals       []string          `json:"correlated_signals"`
 	PropagationPath         []string          `json:"propagation_path"`
@@ -75,6 +81,47 @@ type Reasoning struct {
 	HistoricalMatches       []map[string]any  `json:"historical_matches"`
 	Severity                string            `json:"severity"`
 	CreatedAt               time.Time         `json:"created_at"`
+}
+
+type ReasoningRequest struct {
+	IncidentID  string     `json:"incident_id"`
+	Status      string     `json:"status"`
+	LastError   string     `json:"last_error"`
+	Attempts    int        `json:"attempts"`
+	TriggerType string     `json:"trigger_type"`
+	RequestedAt time.Time  `json:"requested_at"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+type ReasoningRun struct {
+	RunID                string         `json:"reasoning_run_id"`
+	IncidentID           string         `json:"incident_id"`
+	Status               string         `json:"status"`
+	Provider             string         `json:"provider"`
+	Model                string         `json:"model"`
+	TriggerType          string         `json:"trigger_type"`
+	ErrorMessage         string         `json:"error_message"`
+	Summary              string         `json:"summary"`
+	RootCauseService     string         `json:"root_cause_service"`
+	RootCauseSignal      string         `json:"root_cause_signal"`
+	RootCauseConfidence  float64        `json:"root_cause_confidence"`
+	SuggestedActions     []string       `json:"suggested_actions"`
+	PropagationPath      []string       `json:"propagation_path"`
+	EvidenceSnapshot     map[string]any `json:"evidence_snapshot"`
+	ConfidenceExplanation map[string]any `json:"confidence_explanation"`
+	CorrelationSummary   string         `json:"correlation_summary"`
+	StartedAt            time.Time      `json:"started_at"`
+	CompletedAt          *time.Time     `json:"completed_at,omitempty"`
+}
+
+type CorrelatedIncident struct {
+	IncidentID       string    `json:"incident_id"`
+	Timestamp        time.Time `json:"timestamp"`
+	RootCauseSummary string    `json:"root_cause_summary"`
+	CorrelationReason string   `json:"correlation_reason"`
+	CorrelationScore float64   `json:"correlation_score"`
 }
 
 func NewStore(ctx context.Context, cfg config.PostgresConfig) (*Store, error) {
@@ -136,6 +183,7 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			root_cause_service TEXT NOT NULL DEFAULT '',
 			root_cause_signal TEXT NOT NULL DEFAULT '',
 			confidence_score DOUBLE PRECISION NOT NULL,
+			confidence_explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
 			causal_chain JSONB NOT NULL DEFAULT '[]'::jsonb,
 			correlated_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
 			propagation_path JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -150,8 +198,21 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 			severity TEXT NOT NULL DEFAULT 'unknown',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		)`,
+		`CREATE TABLE IF NOT EXISTS reasoning_requests (
+			incident_id TEXT PRIMARY KEY REFERENCES incidents(incident_id) ON DELETE CASCADE,
+			status TEXT NOT NULL DEFAULT 'pending',
+			last_error TEXT NOT NULL DEFAULT '',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			trigger_type TEXT NOT NULL DEFAULT 'manual',
+			requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			started_at TIMESTAMPTZ,
+			completed_at TIMESTAMPTZ,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS reasoning_requests_status_idx ON reasoning_requests(status, requested_at DESC)`,
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS root_cause_service TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS root_cause_signal TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS confidence_explanation JSONB NOT NULL DEFAULT '{}'::jsonb`,
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS propagation_path JSONB NOT NULL DEFAULT '[]'::jsonb`,
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS customer_impact TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS missing_telemetry_signals JSONB NOT NULL DEFAULT '[]'::jsonb`,
@@ -159,6 +220,28 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS observability_summary JSONB NOT NULL DEFAULT '{}'::jsonb`,
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS deployment_correlation TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS historical_matches JSONB NOT NULL DEFAULT '[]'::jsonb`,
+		`ALTER TABLE reasoning_requests ADD COLUMN IF NOT EXISTS trigger_type TEXT NOT NULL DEFAULT 'manual'`,
+		`CREATE TABLE IF NOT EXISTS reasoning_runs (
+			reasoning_run_id TEXT PRIMARY KEY,
+			incident_id TEXT NOT NULL REFERENCES incidents(incident_id) ON DELETE CASCADE,
+			status TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			model TEXT NOT NULL,
+			trigger_type TEXT NOT NULL,
+			error_message TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			root_cause_service TEXT NOT NULL DEFAULT '',
+			root_cause_signal TEXT NOT NULL DEFAULT '',
+			root_cause_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+			suggested_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+			propagation_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+			evidence_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+			confidence_explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
+			correlation_summary TEXT NOT NULL DEFAULT '',
+			started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			completed_at TIMESTAMPTZ
+		)`,
+		`CREATE INDEX IF NOT EXISTS reasoning_runs_incident_idx ON reasoning_runs(incident_id, started_at DESC)`,
 		`CREATE TABLE IF NOT EXISTS incident_knowledge_base (
 			incident_id TEXT PRIMARY KEY REFERENCES incidents(incident_id) ON DELETE CASCADE,
 			fingerprint TEXT NOT NULL,
@@ -504,13 +587,15 @@ func (s *Store) ListIncidents(ctx context.Context, filters QueryFilters) ([]Inci
 			i.incident_id, i.project_id, i.problem_id, i.incident_type, i.predictive_confidence, i.cluster, i.namespace, i.service, i.timestamp, i.severity, i.anomaly_score,
 			i.telemetry_snapshot, i.detector_signals, i.root_cause_entity, i.dependency_chain,
 			i.remediation_suggestions, i.timeline_summary,
-			r.incident_id, r.root_cause, r.root_cause_service, r.root_cause_signal, r.confidence_score,
+			r.incident_id, r.root_cause, r.root_cause_service, r.root_cause_signal, r.confidence_score, r.confidence_explanation,
 			r.causal_chain, r.correlated_signals, r.propagation_path, r.impact_assessment,
 			r.customer_impact, r.recommended_actions, r.missing_telemetry_signals,
 			r.observability_score, r.observability_summary, r.deployment_correlation, r.historical_matches,
-			r.severity, r.created_at
+			r.severity, r.created_at,
+			rr.status, rr.last_error, rr.requested_at, rr.updated_at
 		FROM incidents i
 		LEFT JOIN reasoning r ON r.incident_id = i.incident_id
+		LEFT JOIN reasoning_requests rr ON rr.incident_id = i.incident_id
 		WHERE ($1 = '' OR i.project_id = $1)
 		  AND ($2 = '' OR i.cluster = $2)
 		  AND ($3 = '' OR i.namespace = $3)
@@ -555,13 +640,15 @@ func (s *Store) GetIncident(ctx context.Context, incidentID string) (*Incident, 
 			i.incident_id, i.project_id, i.problem_id, i.incident_type, i.predictive_confidence, i.cluster, i.namespace, i.service, i.timestamp, i.severity, i.anomaly_score,
 			i.telemetry_snapshot, i.detector_signals, i.root_cause_entity, i.dependency_chain,
 			i.remediation_suggestions, i.timeline_summary,
-			r.incident_id, r.root_cause, r.root_cause_service, r.root_cause_signal, r.confidence_score,
+			r.incident_id, r.root_cause, r.root_cause_service, r.root_cause_signal, r.confidence_score, r.confidence_explanation,
 			r.causal_chain, r.correlated_signals, r.propagation_path, r.impact_assessment,
 			r.customer_impact, r.recommended_actions, r.missing_telemetry_signals,
 			r.observability_score, r.observability_summary, r.deployment_correlation, r.historical_matches,
-			r.severity, r.created_at
+			r.severity, r.created_at,
+			rr.status, rr.last_error, rr.requested_at, rr.updated_at
 		FROM incidents i
 		LEFT JOIN reasoning r ON r.incident_id = i.incident_id
+		LEFT JOIN reasoning_requests rr ON rr.incident_id = i.incident_id
 		WHERE i.incident_id = $1
 	`, incidentID)
 	if err != nil {
@@ -640,17 +727,20 @@ func scanIncident(scanner rowScanner) (Incident, error) {
 	var reasoningID *string
 	var rootCause, rootCauseService, rootCauseSignal, impact, customerImpact, severity, deploymentCorrelation *string
 	var confidence, observabilityScore *float64
-	var causalJSON, correlatedJSON, propagationJSON, actionsJSON, missingSignalsJSON, observabilitySummaryJSON, historicalMatchesJSON []byte
+	var confidenceExplanationJSON, causalJSON, correlatedJSON, propagationJSON, actionsJSON, missingSignalsJSON, observabilitySummaryJSON, historicalMatchesJSON []byte
 	var createdAt *time.Time
+	var reasoningStatus, reasoningError *string
+	var reasoningRequestedAt, reasoningUpdatedAt *time.Time
 
 	err := scanner.Scan(
 		&item.ID, &item.ProjectID, &item.ProblemID, &item.IncidentType, &item.PredictiveConfidence, &item.Cluster, &item.Namespace, &item.Service, &item.Timestamp, &item.Severity, &item.AnomalyScore,
 		&snapshotJSON, &signalsJSON, &item.RootCauseEntity, &dependencyJSON, &remediationJSON, &timelineJSON,
-		&reasoningID, &rootCause, &rootCauseService, &rootCauseSignal, &confidence,
+		&reasoningID, &rootCause, &rootCauseService, &rootCauseSignal, &confidence, &confidenceExplanationJSON,
 		&causalJSON, &correlatedJSON, &propagationJSON, &impact,
 		&customerImpact, &actionsJSON, &missingSignalsJSON,
 		&observabilityScore, &observabilitySummaryJSON, &deploymentCorrelation, &historicalMatchesJSON,
 		&severity, &createdAt,
+		&reasoningStatus, &reasoningError, &reasoningRequestedAt, &reasoningUpdatedAt,
 	)
 	if err != nil {
 		return Incident{}, err
@@ -676,7 +766,9 @@ func scanIncident(scanner rowScanner) (Incident, error) {
 			Severity:              derefString(severity),
 			CreatedAt:             derefTime(createdAt),
 			ObservabilitySummary:  map[string]string{},
+			ConfidenceExplanation: map[string]any{},
 		}
+		_ = json.Unmarshal(confidenceExplanationJSON, &reasoning.ConfidenceExplanation)
 		_ = json.Unmarshal(causalJSON, &reasoning.CausalChain)
 		_ = json.Unmarshal(correlatedJSON, &reasoning.CorrelatedSignals)
 		_ = json.Unmarshal(propagationJSON, &reasoning.PropagationPath)
@@ -686,7 +778,261 @@ func scanIncident(scanner rowScanner) (Incident, error) {
 		_ = json.Unmarshal(historicalMatchesJSON, &reasoning.HistoricalMatches)
 		item.Reasoning = &reasoning
 	}
+	if reasoningStatus != nil {
+		item.ReasoningStatus = *reasoningStatus
+	}
+	if reasoningError != nil {
+		item.ReasoningError = *reasoningError
+	}
+	item.ReasoningRequestedAt = reasoningRequestedAt
+	item.ReasoningUpdatedAt = reasoningUpdatedAt
+	if item.ReasoningStatus == "" {
+		if item.Reasoning != nil {
+			item.ReasoningStatus = "completed"
+		} else {
+			item.ReasoningStatus = "not_generated"
+		}
+	}
 	return item, nil
+}
+
+func (s *Store) CreateReasoningRequest(ctx context.Context, incidentID, triggerType string) (*ReasoningRequest, error) {
+	var hasReasoning bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM reasoning WHERE incident_id = $1)`, incidentID).Scan(&hasReasoning); err != nil {
+		return nil, err
+	}
+	if hasReasoning && triggerType != "retry" {
+		return &ReasoningRequest{
+			IncidentID: incidentID,
+			Status:     "completed",
+			TriggerType: triggerType,
+		}, nil
+	}
+
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO reasoning_requests (
+			incident_id, status, last_error, attempts, trigger_type, requested_at, updated_at
+		) VALUES ($1, 'pending', '', 0, $2, NOW(), NOW())
+		ON CONFLICT (incident_id) DO UPDATE
+		SET
+			status = 'pending',
+			last_error = '',
+			trigger_type = EXCLUDED.trigger_type,
+			requested_at = NOW(),
+			updated_at = NOW()
+		RETURNING incident_id, status, last_error, attempts, trigger_type, requested_at, started_at, completed_at, updated_at
+	`, incidentID, triggerType)
+	var req ReasoningRequest
+	if err := row.Scan(&req.IncidentID, &req.Status, &req.LastError, &req.Attempts, &req.TriggerType, &req.RequestedAt, &req.StartedAt, &req.CompletedAt, &req.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &req, nil
+}
+
+func (s *Store) ListReasoningRuns(ctx context.Context, incidentID string, limit int) ([]ReasoningRun, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			reasoning_run_id,
+			incident_id,
+			status,
+			provider,
+			model,
+			trigger_type,
+			error_message,
+			summary,
+			root_cause_service,
+			root_cause_signal,
+			root_cause_confidence,
+			suggested_actions,
+			propagation_path,
+			evidence_snapshot,
+			confidence_explanation,
+			correlation_summary,
+			started_at,
+			completed_at
+		FROM reasoning_runs
+		WHERE incident_id = $1
+		ORDER BY started_at DESC
+		LIMIT $2
+	`, incidentID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []ReasoningRun{}
+	for rows.Next() {
+		var item ReasoningRun
+		var actionsJSON, propagationJSON, evidenceJSON, confidenceJSON []byte
+		if err := rows.Scan(
+			&item.RunID,
+			&item.IncidentID,
+			&item.Status,
+			&item.Provider,
+			&item.Model,
+			&item.TriggerType,
+			&item.ErrorMessage,
+			&item.Summary,
+			&item.RootCauseService,
+			&item.RootCauseSignal,
+			&item.RootCauseConfidence,
+			&actionsJSON,
+			&propagationJSON,
+			&evidenceJSON,
+			&confidenceJSON,
+			&item.CorrelationSummary,
+			&item.StartedAt,
+			&item.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(actionsJSON, &item.SuggestedActions)
+		_ = json.Unmarshal(propagationJSON, &item.PropagationPath)
+		_ = json.Unmarshal(evidenceJSON, &item.EvidenceSnapshot)
+		_ = json.Unmarshal(confidenceJSON, &item.ConfidenceExplanation)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *Store) GetReasoningRun(ctx context.Context, incidentID, runID string) (*ReasoningRun, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			reasoning_run_id,
+			incident_id,
+			status,
+			provider,
+			model,
+			trigger_type,
+			error_message,
+			summary,
+			root_cause_service,
+			root_cause_signal,
+			root_cause_confidence,
+			suggested_actions,
+			propagation_path,
+			evidence_snapshot,
+			confidence_explanation,
+			correlation_summary,
+			started_at,
+			completed_at
+		FROM reasoning_runs
+		WHERE incident_id = $1 AND reasoning_run_id = $2
+	`, incidentID, runID)
+	var item ReasoningRun
+	var actionsJSON, propagationJSON, evidenceJSON, confidenceJSON []byte
+	if err := row.Scan(
+		&item.RunID,
+		&item.IncidentID,
+		&item.Status,
+		&item.Provider,
+		&item.Model,
+		&item.TriggerType,
+		&item.ErrorMessage,
+		&item.Summary,
+		&item.RootCauseService,
+		&item.RootCauseSignal,
+		&item.RootCauseConfidence,
+		&actionsJSON,
+		&propagationJSON,
+		&evidenceJSON,
+		&confidenceJSON,
+		&item.CorrelationSummary,
+		&item.StartedAt,
+		&item.CompletedAt,
+	); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(actionsJSON, &item.SuggestedActions)
+	_ = json.Unmarshal(propagationJSON, &item.PropagationPath)
+	_ = json.Unmarshal(evidenceJSON, &item.EvidenceSnapshot)
+	_ = json.Unmarshal(confidenceJSON, &item.ConfidenceExplanation)
+	return &item, nil
+}
+
+func (s *Store) ListCorrelatedIncidents(ctx context.Context, incidentID string, window time.Duration, limit int) ([]CorrelatedIncident, error) {
+	if limit <= 0 || limit > 20 {
+		limit = 8
+	}
+	current, err := s.GetIncident(ctx, incidentID)
+	if err != nil || current == nil {
+		return []CorrelatedIncident{}, err
+	}
+	rootService := ""
+	rootSignal := ""
+	if current.Reasoning != nil {
+		rootService = current.Reasoning.RootCauseService
+		rootSignal = current.Reasoning.RootCauseSignal
+	}
+	start := current.Timestamp.Add(-window)
+	end := current.Timestamp.Add(window)
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			i.incident_id,
+			i.timestamp,
+			COALESCE(r.root_cause, ''),
+			COALESCE(r.root_cause_service, ''),
+			COALESCE(r.root_cause_signal, ''),
+			i.service
+		FROM incidents i
+		LEFT JOIN reasoning r ON r.incident_id = i.incident_id
+		WHERE i.incident_id <> $1
+		  AND i.timestamp BETWEEN $2 AND $3
+		  AND (
+			i.service = $4 OR
+			r.root_cause_service = $5 OR
+			r.root_cause_signal = $6 OR
+			i.namespace = $7 AND i.cluster = $8
+		  )
+		ORDER BY i.timestamp DESC
+		LIMIT $9
+	`, incidentID, start, end, current.Service, rootService, rootSignal, current.Namespace, current.Cluster, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := []CorrelatedIncident{}
+	for rows.Next() {
+		var id string
+		var ts time.Time
+		var summary, rcService, rcSignal, svc string
+		if err := rows.Scan(&id, &ts, &summary, &rcService, &rcSignal, &svc); err != nil {
+			return nil, err
+		}
+		score := 0.0
+		reasons := []string{}
+		if svc != "" && svc == current.Service {
+			score += 0.35
+			reasons = append(reasons, "same service")
+		}
+		if rootService != "" && rcService == rootService {
+			score += 0.35
+			reasons = append(reasons, "same root cause service")
+		}
+		if rootSignal != "" && rcSignal == rootSignal {
+			score += 0.2
+			reasons = append(reasons, "same root cause signal")
+		}
+		if len(reasons) == 0 {
+			reasons = append(reasons, "similar time window and scope")
+		}
+		if score == 0 {
+			score = 0.15
+		}
+		results = append(results, CorrelatedIncident{
+			IncidentID:       id,
+			Timestamp:        ts,
+			RootCauseSummary: summary,
+			CorrelationReason: strings.Join(reasons, ", "),
+			CorrelationScore: score,
+		})
+	}
+	return results, rows.Err()
 }
 
 func mapKeys(values map[string]struct{}) []string {

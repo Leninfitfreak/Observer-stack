@@ -22,7 +22,7 @@ Background engines started by `cmd/server/main.go`:
 - Change intelligence engine
 
 ## ai-brain (Python) Responsibilities
-- Poll pending incidents
+- Poll pending incidents (auto mode) or explicit reasoning requests (manual mode)
 - Build compressed telemetry context (`app/telemetry.py`)
 - Invoke LLM provider (Ollama/OpenAI compatible)
 - Generate root-cause narrative and remediation
@@ -45,7 +45,7 @@ Background engines started by `cmd/server/main.go`:
 
 ## Persistence Model (Postgres)
 Major tables include:
-- `incidents`, `reasoning`, `reasoning_validations`
+- `incidents`, `reasoning`, `reasoning_requests`, `reasoning_validations`
 - `problems`
 - `incident_impacts`
 - `service_dependencies`, `dependency_graphs`
@@ -60,6 +60,7 @@ Major tables include:
 - `/api/incidents`
 - `/api/incidents/{id}`
 - `/api/incidents/{id}/timeline`
+- `POST /api/incidents/{id}/reasoning/run`
 - `/api/topology`
 - `/api/filters`
 - `/api/problems`
@@ -69,4 +70,24 @@ Major tables include:
 - `/api/slo-status`
 - `/api/runbooks`
 - `/api/observability-report`
+
+## Manual Reasoning Mode (POC Token Control)
+By default, Deep Observer does **not** trigger LLM reasoning automatically. Reasoning runs only when a user clicks the AI reasoning button in the UI.
+
+Recommended env settings:
+- `REASONING_MODE=manual`
+- `REASONING_AUTO_TRIGGER=false`
+- `LLM_PROVIDER=openai` (or `ollama_cloud` / `ollama`)
+- `OPENAI_API_KEY=...` (backend-only)
+
+Behavior:
+- No LLM calls on page load, incident selection, polling, or refresh.
+- `POST /api/incidents/{id}/reasoning/run` enqueues a reasoning request.
+- `ai-brain` picks up requests, runs the LLM, and stores results for the UI.
+
+## Reasoning History + Correlation
+- Each reasoning run is stored in `reasoning_runs` with provider/model/trigger metadata.
+- `GET /api/incidents/{id}/reasoning/history` returns recent runs.
+- `POST /api/incidents/{id}/reasoning/retry` creates a new run without erasing history.
+- `GET /api/incidents/{id}/correlations` lists related incidents based on shared root-cause signals and time proximity.
 

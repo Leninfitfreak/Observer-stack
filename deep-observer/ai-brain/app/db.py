@@ -43,6 +43,7 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         ALTER TABLE reasoning
             ADD COLUMN IF NOT EXISTS root_cause_service TEXT NOT NULL DEFAULT '',
             ADD COLUMN IF NOT EXISTS root_cause_signal TEXT NOT NULL DEFAULT '',
+            ADD COLUMN IF NOT EXISTS confidence_explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
             ADD COLUMN IF NOT EXISTS propagation_path JSONB NOT NULL DEFAULT '[]'::jsonb,
             ADD COLUMN IF NOT EXISTS customer_impact TEXT NOT NULL DEFAULT '',
             ADD COLUMN IF NOT EXISTS missing_telemetry_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -79,6 +80,42 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             validation_result TEXT NOT NULL DEFAULT 'partial',
             confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS reasoning_requests (
+            incident_id TEXT PRIMARY KEY REFERENCES incidents(incident_id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            last_error TEXT NOT NULL DEFAULT '',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            trigger_type TEXT NOT NULL DEFAULT 'manual',
+            requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            started_at TIMESTAMPTZ,
+            completed_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        "ALTER TABLE reasoning_requests ADD COLUMN IF NOT EXISTS trigger_type TEXT NOT NULL DEFAULT 'manual'",
+        """
+        CREATE TABLE IF NOT EXISTS reasoning_runs (
+            reasoning_run_id TEXT PRIMARY KEY,
+            incident_id TEXT NOT NULL REFERENCES incidents(incident_id) ON DELETE CASCADE,
+            status TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            trigger_type TEXT NOT NULL,
+            error_message TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL DEFAULT '',
+            root_cause_service TEXT NOT NULL DEFAULT '',
+            root_cause_signal TEXT NOT NULL DEFAULT '',
+            root_cause_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+            suggested_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+            propagation_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+            evidence_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+            confidence_explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
+            correlation_summary TEXT NOT NULL DEFAULT '',
+            started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            completed_at TIMESTAMPTZ
         )
         """,
     ]
@@ -131,6 +168,87 @@ def fetch_pending_incidents(conn: psycopg.Connection, settings: Settings) -> lis
             if isinstance(row[key], str):
                 row[key] = json.loads(row[key])
     return rows
+
+
+def fetch_reasoning_requests(conn: psycopg.Connection, settings: Settings, limit: int = 20) -> list[dict]:
+    where_parts = ["rr.status = 'pending'", "i.project_id = %s"]
+    params: list[object] = [settings.project_id]
+    if settings.cluster_id:
+        where_parts.append("i.cluster = %s")
+        params.append(settings.cluster_id)
+    if settings.namespace_filter:
+        where_parts.append("i.namespace = %s")
+        params.append(settings.namespace_filter)
+    if settings.service_filter:
+        where_parts.append("i.service = %s")
+        params.append(settings.service_filter)
+    with conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        cur.execute(
+            f"""
+            SELECT
+                i.incident_id,
+                i.project_id,
+                i.problem_id,
+                i.cluster,
+                i.namespace,
+                i.service,
+                i.timestamp,
+                i.severity,
+                i.anomaly_score,
+                i.telemetry_snapshot,
+                i.detector_signals,
+                i.timeline_summary,
+                i.incident_type,
+                i.predictive_confidence,
+                rr.trigger_type
+            FROM reasoning_requests rr
+            INNER JOIN incidents i ON i.incident_id = rr.incident_id
+            WHERE {" AND ".join(where_parts)}
+            ORDER BY rr.requested_at ASC
+            LIMIT %s
+            """,
+            (*params, limit),
+        )
+        rows = cur.fetchall()
+    for row in rows:
+        for key in ("telemetry_snapshot", "detector_signals", "timeline_summary"):
+            if isinstance(row[key], str):
+                row[key] = json.loads(row[key])
+    return rows
+
+
+def claim_reasoning_request(conn: psycopg.Connection, incident_id: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE reasoning_requests
+            SET status = 'running',
+                started_at = COALESCE(started_at, NOW()),
+                updated_at = NOW(),
+                attempts = attempts + 1
+            WHERE incident_id = %s
+              AND status = 'pending'
+            RETURNING incident_id
+            """,
+            (incident_id,),
+        )
+        return cur.fetchone() is not None
+
+
+def update_reasoning_request_status(conn: psycopg.Connection, incident_id: str, status: str, error: str = "") -> None:
+    completed_at = "NOW()" if status in {"completed", "failed"} else "NULL"
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE reasoning_requests
+            SET status = %s,
+                last_error = %s,
+                completed_at = {completed_at},
+                updated_at = NOW()
+            WHERE incident_id = %s
+            """,
+            (status, error or "", incident_id),
+        )
 
 
 def predictive_incident_exists(conn: psycopg.Connection, cluster: str, namespace: str, service: str, within_minutes: int = 20) -> bool:
@@ -254,6 +372,7 @@ def store_reasoning(conn: psycopg.Connection, incident: dict, reasoning: dict) -
                 root_cause_service,
                 root_cause_signal,
                 confidence_score,
+                confidence_explanation,
                 causal_chain,
                 correlated_signals,
                 propagation_path,
@@ -267,7 +386,7 @@ def store_reasoning(conn: psycopg.Connection, incident: dict, reasoning: dict) -
                 historical_matches,
                 severity
             ) VALUES (
-                %s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s,%s::jsonb,%s
+                %s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s::jsonb,%s::jsonb,%s,%s::jsonb,%s,%s::jsonb,%s
             )
             ON CONFLICT (incident_id) DO NOTHING
             """,
@@ -277,6 +396,7 @@ def store_reasoning(conn: psycopg.Connection, incident: dict, reasoning: dict) -
                 reasoning["root_cause_service"],
                 reasoning["root_cause_signal"],
                 reasoning["confidence_score"],
+                json.dumps(reasoning.get("confidence_explanation", {}), default=str),
                 json.dumps(reasoning["causal_chain"], default=str),
                 json.dumps(reasoning["correlated_signals"], default=str),
                 json.dumps(reasoning["propagation_path"], default=str),
@@ -439,5 +559,93 @@ def store_reasoning_validation(conn: psycopg.Connection, report) -> None:
                 json.dumps(report.unsupported_statements, default=str),
                 report.validation_result,
                 report.confidence_score,
+            ),
+        )
+
+
+def create_reasoning_run(conn: psycopg.Connection, run: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO reasoning_runs (
+                reasoning_run_id,
+                incident_id,
+                status,
+                provider,
+                model,
+                trigger_type,
+                error_message,
+                summary,
+                root_cause_service,
+                root_cause_signal,
+                root_cause_confidence,
+                suggested_actions,
+                propagation_path,
+                evidence_snapshot,
+                confidence_explanation,
+                correlation_summary,
+                started_at,
+                completed_at
+            ) VALUES (
+                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s
+            )
+            """,
+            (
+                run["reasoning_run_id"],
+                run["incident_id"],
+                run["status"],
+                run["provider"],
+                run["model"],
+                run["trigger_type"],
+                run.get("error_message", ""),
+                run.get("summary", ""),
+                run.get("root_cause_service", ""),
+                run.get("root_cause_signal", ""),
+                run.get("root_cause_confidence", 0.0),
+                json.dumps(run.get("suggested_actions", []), default=str),
+                json.dumps(run.get("propagation_path", []), default=str),
+                json.dumps(run.get("evidence_snapshot", {}), default=str),
+                json.dumps(run.get("confidence_explanation", {}), default=str),
+                run.get("correlation_summary", ""),
+                run.get("started_at"),
+                run.get("completed_at"),
+            ),
+        )
+
+
+def update_reasoning_run(conn: psycopg.Connection, run_id: str, updates: dict) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE reasoning_runs
+            SET
+                status = %s,
+                error_message = %s,
+                summary = %s,
+                root_cause_service = %s,
+                root_cause_signal = %s,
+                root_cause_confidence = %s,
+                suggested_actions = %s::jsonb,
+                propagation_path = %s::jsonb,
+                evidence_snapshot = %s::jsonb,
+                confidence_explanation = %s::jsonb,
+                correlation_summary = %s,
+                completed_at = %s
+            WHERE reasoning_run_id = %s
+            """,
+            (
+                updates.get("status", ""),
+                updates.get("error_message", ""),
+                updates.get("summary", ""),
+                updates.get("root_cause_service", ""),
+                updates.get("root_cause_signal", ""),
+                updates.get("root_cause_confidence", 0.0),
+                json.dumps(updates.get("suggested_actions", []), default=str),
+                json.dumps(updates.get("propagation_path", []), default=str),
+                json.dumps(updates.get("evidence_snapshot", {}), default=str),
+                json.dumps(updates.get("confidence_explanation", {}), default=str),
+                updates.get("correlation_summary", ""),
+                updates.get("completed_at"),
+                run_id,
             ),
         )

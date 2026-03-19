@@ -1,13 +1,59 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchTimeline } from "../api";
+import {
+  fetchIncident,
+  fetchTimeline,
+  runReasoning,
+  retryReasoning,
+  fetchReasoningHistory,
+  fetchReasoningRun,
+  fetchCorrelations,
+} from "../api";
 
 export default function IncidentDetailsPanel({ incident, serviceHealth, clusterReport, changes, sloStatus, runbooks, observabilityReport }) {
   const [timeline, setTimeline] = useState([]);
+  const [activeIncident, setActiveIncident] = useState(null);
+  const [reasoningStatus, setReasoningStatus] = useState("");
+  const [reasoningError, setReasoningError] = useState("");
+  const [reasoningBusy, setReasoningBusy] = useState(false);
+  const [reasoningHistory, setReasoningHistory] = useState([]);
+  const [selectedRun, setSelectedRun] = useState(null);
+  const [correlations, setCorrelations] = useState([]);
 
   useEffect(() => {
     if (!incident) return;
     fetchTimeline(incident.incident_id)
       .then((payload) => setTimeline(payload.events || []))
+      .catch(console.error);
+  }, [incident]);
+
+  useEffect(() => {
+    if (!incident) {
+      setActiveIncident(null);
+      setReasoningStatus("");
+      setReasoningError("");
+      setReasoningBusy(false);
+      setReasoningHistory([]);
+      setSelectedRun(null);
+      setCorrelations([]);
+      return;
+    }
+    setActiveIncident(incident);
+    setReasoningStatus(incident.reasoning_status || "");
+    setReasoningError(incident.reasoning_error || "");
+    setReasoningBusy(false);
+  }, [incident]);
+
+  useEffect(() => {
+    if (!incident) return;
+    fetchReasoningHistory(incident.incident_id)
+      .then((payload) => {
+        const items = Array.isArray(payload) ? payload : [];
+        setReasoningHistory(items);
+        setSelectedRun(items[0] || null);
+      })
+      .catch(console.error);
+    fetchCorrelations(incident.incident_id)
+      .then((payload) => setCorrelations(Array.isArray(payload) ? payload : []))
       .catch(console.error);
   }, [incident]);
 
@@ -24,7 +70,8 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
     [timeline],
   );
 
-  if (!incident) {
+  const currentIncident = activeIncident || incident;
+  if (!currentIncident) {
     return (
       <section className="rounded-3xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-400">
         Select an incident to inspect the reasoning summary, charts, timeline, and propagation path.
@@ -32,11 +79,78 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
     );
   }
 
-  const reasoning = incident.reasoning;
+  const reasoning = currentIncident.reasoning;
   const coverage = reasoning?.observability_summary || {};
-  const anomalyScore = formatScore(incident.anomaly_score);
-  const telemetryEvidence = buildTelemetryEvidence(incident);
-  const impactedServices = formatImpactedServices(incident.impacts);
+  const anomalyScore = formatScore(currentIncident.anomaly_score);
+  const telemetryEvidence = buildTelemetryEvidence(currentIncident);
+  const impactedServices = formatImpactedServices(currentIncident.impacts);
+  const derivedStatus = reasoningStatus || currentIncident.reasoning_status || (reasoning ? "completed" : "not_generated");
+  const canRunReasoning = ["not_generated", "failed", "completed"].includes(derivedStatus) && !reasoningBusy;
+  const confidenceDetails = reasoning?.confidence_explanation || {};
+  const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
+
+  const refreshIncident = async () => {
+    const updated = await fetchIncident(currentIncident.incident_id);
+    if (updated) {
+      setActiveIncident(updated);
+      setReasoningStatus(updated.reasoning_status || derivedStatus);
+      setReasoningError(updated.reasoning_error || "");
+      fetchReasoningHistory(updated.incident_id)
+        .then((payload) => {
+          const items = Array.isArray(payload) ? payload : [];
+          setReasoningHistory(items);
+          setSelectedRun(items[0] || null);
+        })
+        .catch(console.error);
+      fetchCorrelations(updated.incident_id)
+        .then((payload) => setCorrelations(Array.isArray(payload) ? payload : []))
+        .catch(console.error);
+    }
+    return updated;
+  };
+
+  const pollForReasoning = async (attempt = 0) => {
+    if (attempt > 10) return;
+    const updated = await refreshIncident();
+    const status = updated?.reasoning_status || derivedStatus;
+    if (status === "completed" || status === "failed") return;
+    setTimeout(() => {
+      pollForReasoning(attempt + 1).catch(() => {});
+    }, 3000);
+  };
+
+  const handleRunReasoning = async () => {
+    if (!currentIncident) return;
+    setReasoningBusy(true);
+    setReasoningStatus("running");
+    setReasoningError("");
+    try {
+      const response =
+        derivedStatus === "not_generated"
+          ? await runReasoning(currentIncident.incident_id)
+          : await retryReasoning(currentIncident.incident_id);
+      setReasoningStatus(response?.status || "pending");
+      await pollForReasoning(0);
+    } catch (err) {
+      setReasoningStatus("failed");
+      setReasoningError(err?.message || "Reasoning request failed");
+    } finally {
+      setReasoningBusy(false);
+    }
+  };
+
+  const handleSelectRun = async (run) => {
+    if (!run || !currentIncident) {
+      setSelectedRun(null);
+      return;
+    }
+    try {
+      const detail = await fetchReasoningRun(currentIncident.incident_id, run.reasoning_run_id);
+      setSelectedRun(detail || run);
+    } catch {
+      setSelectedRun(run);
+    }
+  };
 
   return (
     <section className="space-y-4">
@@ -44,9 +158,9 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-300">Incident Details Panel</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">{incident.service}</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-white">{currentIncident.service}</h2>
             <p className="mt-1 text-sm text-slate-400">
-              {incident.cluster} / {incident.namespace} / {new Date(incident.timestamp).toLocaleString()}
+              {currentIncident.cluster} / {currentIncident.namespace} / {new Date(currentIncident.timestamp).toLocaleString()}
             </p>
           </div>
           <div className="rounded-3xl border border-white/10 bg-slate-950/80 px-4 py-3 text-right">
@@ -56,25 +170,133 @@ export default function IncidentDetailsPanel({ incident, serviceHealth, clusterR
         </div>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
-          <InfoCard title="Root Cause Service" value={reasoning?.root_cause_service || incident.root_cause_entity || "Pending"} />
-          <InfoCard title="Root Cause Signal" value={reasoning?.root_cause_signal || toList(incident.signals).join(", ")} />
+          <InfoCard title="Root Cause Service" value={reasoning?.root_cause_service || currentIncident.root_cause_entity || "Pending"} />
+          <InfoCard title="Root Cause Signal" value={reasoning?.root_cause_signal || toList(currentIncident.signals).join(", ")} />
           <InfoCard title="Customer Impact" value={reasoning?.customer_impact || reasoning?.impact_assessment || "Pending"} />
           <InfoCard title="Observability Score" value={`${reasoning?.observability_score ?? coverage.observability_score ?? 0}%`} />
           <InfoCard title="Service Health Score" value={`${formatScore(serviceHealth?.health_score ?? 0)} / 100`} />
-          <InfoCard title="Root Cause Confidence" value={formatScore(reasoning?.confidence_score ?? incident.predictive_confidence ?? 0)} />
-          <InfoCard title="Incident Type" value={incident.incident_type || "observed"} />
+          <InfoCard title="Root Cause Confidence" value={formatScore(reasoning?.confidence_score ?? currentIncident.predictive_confidence ?? 0)} />
+          <InfoCard title="Incident Type" value={currentIncident.incident_type || "observed"} />
+        </div>
+
+        <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/80 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">AI Reasoning</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                AI reasoning runs on demand and may consume LLM tokens.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleRunReasoning}
+              disabled={!canRunReasoning}
+              className={`rounded-full px-4 py-2 text-xs font-semibold uppercase tracking-[0.3em] ${
+                canRunReasoning ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400" : "bg-slate-700 text-slate-300"
+              }`}
+            >
+              {derivedStatus === "failed" ? "Retry Reasoning" : derivedStatus === "completed" ? "Re-run Reasoning" : "Run Reasoning"}
+            </button>
+          </div>
+          <div className="mt-3 text-sm text-slate-300">
+            Status: <span className="font-semibold text-white">{formatReasoningStatus(derivedStatus, reasoningBusy)}</span>
+          </div>
+          {reasoningError ? (
+            <p className="mt-2 text-xs text-rose-300">Last error: {reasoningError}</p>
+          ) : null}
+        </div>
+
+        <div className="mt-6 grid gap-6 xl:grid-cols-2">
+          <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Confidence Explanation</h3>
+            <div className="mt-3 text-sm text-slate-200">
+              <p>Score: {formatScore(confidenceDetails.score ?? reasoning?.confidence_score ?? 0)}</p>
+              <p>Level: {toText(confidenceDetails.level || "unknown")}</p>
+              <p className="mt-2 text-slate-400">{toText(confidenceDetails.explanation_text || "No explanation yet.")}</p>
+            </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Supporting Factors</p>
+                <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                  {Array.isArray(confidenceDetails.supporting_factors) && confidenceDetails.supporting_factors.length
+                    ? confidenceDetails.supporting_factors.map((item) => <li key={item}>- {toText(item)}</li>)
+                    : <li className="text-slate-500">No data</li>}
+                </ul>
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Weakening Factors</p>
+                <ul className="mt-2 space-y-1 text-sm text-slate-200">
+                  {Array.isArray(confidenceDetails.weakening_factors) && confidenceDetails.weakening_factors.length
+                    ? confidenceDetails.weakening_factors.map((item) => <li key={item}>- {toText(item)}</li>)
+                    : <li className="text-slate-500">No data</li>}
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Reasoning History</h3>
+            <div className="mt-3 space-y-2 text-sm text-slate-200">
+              {reasoningHistory.length ? reasoningHistory.map((run) => (
+                <button
+                  key={run.reasoning_run_id}
+                  type="button"
+                  onClick={() => handleSelectRun(run)}
+                  className={`w-full rounded-2xl border border-white/10 px-3 py-2 text-left ${
+                    runDetail?.reasoning_run_id === run.reasoning_run_id ? "bg-slate-800/70" : "bg-slate-900/50"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-slate-400">{new Date(run.started_at).toLocaleString()}</span>
+                    <span className="text-xs uppercase tracking-[0.2em] text-cyan-300">{toText(run.status)}</span>
+                  </div>
+                  <div className="mt-1 text-sm text-white">{toText(run.summary || "No summary")}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {toText(run.provider)} / {toText(run.model)} / {toText(run.trigger_type)}
+                  </div>
+                </button>
+              )) : (
+                <p className="text-slate-500">No reasoning history yet.</p>
+              )}
+            </div>
+            {runDetail ? (
+              <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900/60 p-3 text-sm text-slate-200">
+                <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Selected Run</p>
+                <p className="mt-2">{toText(runDetail.summary || "No summary")}</p>
+                <p className="mt-2 text-xs text-slate-400">Confidence: {formatScore(runDetail.root_cause_confidence ?? 0)}</p>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Related Incidents</h3>
+          <div className="mt-3 space-y-2 text-sm text-slate-200">
+            {correlations.length ? correlations.map((item) => (
+              <div key={item.incident_id} className="rounded-2xl border border-white/10 bg-slate-900/60 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-slate-400">{new Date(item.timestamp).toLocaleString()}</span>
+                  <span className="text-xs uppercase tracking-[0.2em] text-cyan-300">{formatScore(item.correlation_score)}</span>
+                </div>
+                <div className="mt-1 text-sm text-white">{toText(item.root_cause_summary || item.incident_id)}</div>
+                <div className="mt-1 text-xs text-slate-400">{toText(item.correlation_reason || "related signal pattern")}</div>
+              </div>
+            )) : (
+              <p className="text-slate-500">No related incidents found yet.</p>
+            )}
+          </div>
         </div>
 
         <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <RichSection
             title="Incident Summary"
-            content={`${incident.incident_type || "observed"} incident on ${incident.service} with anomaly score ${anomalyScore}.`}
+            content={`${currentIncident.incident_type || "observed"} incident on ${currentIncident.service} with anomaly score ${anomalyScore}.`}
           />
           <RichSection title="Reasoning Summary" content={reasoning?.root_cause || "Reasoning pending"} />
-          <RichList title="Signals Detected" items={incident.signals || []} />
+          <RichList title="Signals Detected" items={currentIncident.signals || []} />
           <RichList title="Causal Propagation Chain" items={reasoning?.causal_chain || []} />
-          <RichList title="Suggested Actions" items={reasoning?.recommended_actions || incident.remediation_suggestions || []} />
-          <RichList title="Propagation Path" items={reasoning?.propagation_path || incident.dependency_chain || []} />
+          <RichList title="Suggested Actions" items={reasoning?.recommended_actions || currentIncident.remediation_suggestions || []} />
+          <RichList title="Propagation Path" items={reasoning?.propagation_path || currentIncident.dependency_chain || []} />
           <RichList title="Impacted Services" items={impactedServices} />
           <RichList title="Missing Telemetry Signals" items={reasoning?.missing_telemetry_signals || []} />
           <RichList title="Telemetry Evidence" items={telemetryEvidence} />
@@ -187,6 +409,23 @@ function formatScore(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "0.00";
   return numeric.toFixed(2);
+}
+
+function formatReasoningStatus(status, busy) {
+  if (busy) return "Running...";
+  switch (status) {
+    case "pending":
+      return "Pending";
+    case "running":
+      return "Running...";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "not_generated":
+    default:
+      return "Not generated";
+  }
 }
 
 function toList(value) {

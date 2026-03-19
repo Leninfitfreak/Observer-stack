@@ -48,6 +48,8 @@ class Settings:
     openai_model: str
     llm_timeout_seconds: int
     llm_max_retries: int
+    reasoning_mode: str
+    reasoning_auto_trigger: bool
 
 
 def get_settings() -> Settings:
@@ -79,6 +81,8 @@ def get_settings() -> Settings:
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         llm_timeout_seconds=int(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
         llm_max_retries=int(os.getenv("LLM_MAX_RETRIES", "3")),
+        reasoning_mode=os.getenv("REASONING_MODE", "manual"),
+        reasoning_auto_trigger=parse_bool(os.getenv("REASONING_AUTO_TRIGGER", "false")),
     )
     validate_settings(settings)
     return settings
@@ -90,3 +94,7 @@ def validate_settings(settings: Settings) -> None:
         raise RuntimeError("OLLAMA_API_KEY is required when using Ollama-based reasoning")
     if provider in {"openai", "openai_api"} and not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is required when using OpenAI-based reasoning")
+
+
+def parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}

@@ -13,6 +13,7 @@ OUTPUT_SCHEMA = {
     "root_cause_service": "",
     "root_cause_signal": "",
     "confidence_score": 0.0,
+    "confidence_explanation": {},
     "causal_chain": [],
     "correlated_signals": [],
     "propagation_path": [],
@@ -400,6 +401,16 @@ def fallback_reasoning(incident: dict, context: TelemetryContext, historical_mat
         "deployment_correlation": summarize_deployments(context.deployment_correlation.get("events", [])),
         "historical_matches": historical_matches,
         "severity": incident["severity"],
+        "confidence_explanation": build_confidence_explanation(
+            incident,
+            context,
+            {
+                "confidence_score": _as_float(incident.get("predictive_confidence"), 0.62),
+                "root_cause_service": inferred_service,
+                "root_cause_signal": signal,
+                "missing_telemetry_signals": _as_string_list(context.telemetry_coverage.get("missing_signals", [])),
+            },
+        ),
     }
 
 
@@ -449,7 +460,54 @@ def generate_reasoning(llm: LLMProvider, incident: dict, context: TelemetryConte
         result["root_cause_signal"],
         context,
     )
+    result["confidence_explanation"] = build_confidence_explanation(incident, context, result)
     return result
+
+
+def build_confidence_explanation(incident: dict, context: TelemetryContext, reasoning: dict) -> dict:
+    score = _as_float(reasoning.get("confidence_score"), 0.0)
+    level = "low"
+    if score >= 0.75:
+        level = "high"
+    elif score >= 0.5:
+        level = "medium"
+
+    supporting_factors = []
+    detector_signals = _as_string_list(incident.get("detector_signals", []))
+    if detector_signals:
+        supporting_factors.append(f"Signals detected: {', '.join(detector_signals[:4])}")
+    if incident.get("dependency_chain"):
+        supporting_factors.append("Dependency chain confirms propagation context")
+    if context.timeline:
+        supporting_factors.append("Timeline evidence contains recent anomaly events")
+
+    weakening_factors = []
+    missing = _as_string_list(reasoning.get("missing_telemetry_signals", []))
+    if missing:
+        weakening_factors.append(f"Missing telemetry: {', '.join(missing[:3])}")
+    observability_score = _as_float(reasoning.get("observability_score"), 0.0)
+    if observability_score < 50:
+        weakening_factors.append("Observability coverage is below 50%")
+    if not context.trace_summary:
+        weakening_factors.append("Trace coverage is limited for this incident")
+
+    evidence_count = len(detector_signals) + len(context.timeline or [])
+    missing_signal_count = len(missing)
+    explanation_text = (
+        f"Confidence is {level} because root cause evidence points to "
+        f"{reasoning.get('root_cause_service', incident.get('service', 'the service'))}, "
+        "but gaps in telemetry reduce certainty."
+    )
+
+    return {
+        "score": score,
+        "level": level,
+        "supporting_factors": supporting_factors,
+        "weakening_factors": weakening_factors,
+        "evidence_count": evidence_count,
+        "missing_signal_count": missing_signal_count,
+        "explanation_text": explanation_text,
+    }
 
 
 def normalize_summary(summary: dict) -> dict:

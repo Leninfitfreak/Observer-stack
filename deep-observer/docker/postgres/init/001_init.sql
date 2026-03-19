@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS reasoning (
     root_cause_service TEXT NOT NULL DEFAULT '',
     root_cause_signal TEXT NOT NULL DEFAULT '',
     confidence_score DOUBLE PRECISION NOT NULL,
+    confidence_explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
     causal_chain JSONB NOT NULL DEFAULT '[]'::jsonb,
     correlated_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
     propagation_path JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -43,6 +44,39 @@ CREATE TABLE IF NOT EXISTS reasoning (
     historical_matches JSONB NOT NULL DEFAULT '[]'::jsonb,
     severity TEXT NOT NULL DEFAULT 'unknown',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS reasoning_requests (
+    incident_id TEXT PRIMARY KEY REFERENCES incidents(incident_id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending',
+    last_error TEXT NOT NULL DEFAULT '',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    trigger_type TEXT NOT NULL DEFAULT 'manual',
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS reasoning_runs (
+    reasoning_run_id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL REFERENCES incidents(incident_id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    trigger_type TEXT NOT NULL,
+    error_message TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    root_cause_service TEXT NOT NULL DEFAULT '',
+    root_cause_signal TEXT NOT NULL DEFAULT '',
+    root_cause_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+    suggested_actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    propagation_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+    evidence_snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+    confidence_explanation JSONB NOT NULL DEFAULT '{}'::jsonb,
+    correlation_summary TEXT NOT NULL DEFAULT '',
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS incident_knowledge_base (
