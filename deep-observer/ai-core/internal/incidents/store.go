@@ -769,6 +769,8 @@ func scanIncident(scanner rowScanner) (Incident, error) {
 	_ = json.Unmarshal(dependencyJSON, &item.DependencyChain)
 	_ = json.Unmarshal(remediationJSON, &item.RemediationSuggestions)
 	_ = json.Unmarshal(timelineJSON, &item.TimelineSummary)
+	item.RootCauseEntity = normalizeIncidentEntity(item.RootCauseEntity)
+	item.DependencyChain = normalizeIncidentEntities(item.DependencyChain)
 
 	if reasoningID != nil {
 		reasoning := Reasoning{
@@ -794,6 +796,7 @@ func scanIncident(scanner rowScanner) (Incident, error) {
 		_ = json.Unmarshal(missingSignalsJSON, &reasoning.MissingTelemetrySignals)
 		_ = json.Unmarshal(observabilitySummaryJSON, &reasoning.ObservabilitySummary)
 		_ = json.Unmarshal(historicalMatchesJSON, &reasoning.HistoricalMatches)
+		reasoning.RootCauseService = normalizeIncidentEntity(reasoning.RootCauseService)
 		item.Reasoning = &reasoning
 	}
 	if reasoningStatus != nil {
@@ -1137,6 +1140,29 @@ func defaultProjectID(value string) string {
 	return value
 }
 
+func normalizeIncidentEntity(value string) string {
+	normalized := clickhouse.CanonicalTopologyNodeID(value)
+	if strings.TrimSpace(normalized) == "" {
+		return strings.TrimSpace(value)
+	}
+	return normalized
+}
+
+func normalizeIncidentEntities(values []string) []string {
+	if len(values) == 0 {
+		return values
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := normalizeIncidentEntity(value)
+		if normalized == "" {
+			continue
+		}
+		out = append(out, normalized)
+	}
+	return out
+}
+
 func defaultDependencyType(value string) string {
 	if value == "" {
 		return "trace_http"
@@ -1146,6 +1172,8 @@ func defaultDependencyType(value string) string {
 
 func edgeType(dependencyType string) string {
 	switch dependencyType {
+	case "messaging":
+		return "messaging"
 	case "messaging_kafka":
 		return "messaging_kafka"
 	case "trace_http":
@@ -1166,6 +1194,8 @@ func dependencyConfidence(dependencyType string) float64 {
 	case "trace_rpc":
 		return 0.95
 	case "trace_http":
+		return 0.9
+	case "messaging":
 		return 0.9
 	case "messaging_kafka":
 		return 0.9

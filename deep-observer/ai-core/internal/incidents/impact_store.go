@@ -61,6 +61,7 @@ func (s *Store) loadIncidentImpacts(ctx context.Context, incidentID string) ([]I
 		if scanErr := rows.Scan(&impact.IncidentID, &impact.Service, &impact.ImpactType, &impact.ImpactScore); scanErr != nil {
 			return nil, scanErr
 		}
+		impact.Service = normalizeIncidentEntity(impact.Service)
 		impacts = append(impacts, impact)
 	}
 	return impacts, rows.Err()

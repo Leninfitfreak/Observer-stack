@@ -53,7 +53,7 @@ func edgeWeight(edgeType string) float64 {
 	switch edgeType {
 	case "trace_rpc":
 		return 1.0
-	case "messaging_kafka":
+	case "messaging", "messaging_kafka":
 		return 0.95
 	case "trace_http":
 		return 0.9

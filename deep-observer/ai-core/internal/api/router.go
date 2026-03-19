@@ -226,17 +226,22 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 			Start:     start,
 			End:       end,
 		})
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
 		cluster := clusterFilter
 		namespace := namespaceFilter
-		graph = dedupeGraph(graph)
-		graph = sanitizeApplicationGraph(graph)
-		if len(graph.Edges) == 0 {
+		if err != nil {
 			if incidentGraph, incErr := buildGraphFromIncidentChains(ctx, store, project.ProjectID, clusterFilter, namespaceFilter, serviceFilter); incErr == nil {
 				graph = dedupeGraph(sanitizeApplicationGraph(incidentGraph))
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
+		} else {
+			graph = dedupeGraph(graph)
+			graph = sanitizeApplicationGraph(graph)
+			if len(graph.Edges) == 0 {
+				if incidentGraph, incErr := buildGraphFromIncidentChains(ctx, store, project.ProjectID, clusterFilter, namespaceFilter, serviceFilter); incErr == nil {
+					graph = dedupeGraph(sanitizeApplicationGraph(incidentGraph))
+				}
 			}
 		}
 		if serviceFilter != "" {
@@ -575,8 +580,8 @@ func normalizeDependencyType(value string) string {
 	switch value {
 	case "trace_parent_child", "http":
 		return "trace_http"
-	case "messaging":
-		return "messaging_kafka"
+	case "messaging_kafka":
+		return "messaging"
 	case "kubernetes":
 		return "kubernetes_dns"
 	default:
@@ -706,15 +711,7 @@ func normalizeServiceName(value string) string {
 }
 
 func inferNodeTypeFromID(id string) string {
-	value := strings.ToLower(strings.TrimSpace(id))
-	switch value {
-	case "kafka":
-		return "messaging"
-	case "postgres", "database":
-		return "database"
-	default:
-		return "service"
-	}
+	return clickhouse.InferTopologyNodeType(id)
 }
 
 func logFilters(endpoint, cluster, namespace, service, start, end, timeRange string) {
@@ -854,28 +851,25 @@ func splitChainParts(value string) []string {
 }
 
 func canonicalNodeID(value string) string {
-	raw := strings.ToLower(strings.TrimSpace(value))
-	switch {
-	case strings.HasPrefix(raw, "kafka"):
-		return "kafka"
-	case strings.HasPrefix(raw, "db:postgres"), strings.Contains(raw, "postgres"):
-		return "postgres"
-	case strings.HasPrefix(raw, "db:"):
-		return "database"
-	default:
-		normalized := normalizeServiceName(raw)
+	nodeID := clickhouse.CanonicalTopologyNodeID(value)
+	if nodeID == "" {
+		return ""
+	}
+	if clickhouse.InferTopologyNodeType(nodeID) == "service" {
+		normalized := normalizeServiceName(nodeID)
 		if normalized == "" || !serviceNodePattern.MatchString(normalized) {
 			return ""
 		}
 		return normalized
 	}
+	return nodeID
 }
 
 func inferDependencyType(source, target string) string {
-	if source == "kafka" || target == "kafka" {
-		return "messaging_kafka"
+	if inferNodeTypeFromID(source) == "messaging" || inferNodeTypeFromID(target) == "messaging" {
+		return "messaging"
 	}
-	if target == "postgres" || target == "database" {
+	if inferNodeTypeFromID(target) == "database" {
 		return "database"
 	}
 	return "trace_http"

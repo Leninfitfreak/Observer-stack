@@ -81,8 +81,8 @@ func edgeWeight(edgeType, signalHint string) float64 {
 	switch edgeType {
 	case "trace_rpc":
 		return 1.0
-	case "messaging_kafka":
-		if signalHint == "kafka" {
+	case "messaging", "messaging_kafka":
+		if signalHint == "messaging" {
 			return 1.28
 		}
 		return 0.98
@@ -104,7 +104,7 @@ func signalHint(signals []string) string {
 	for _, signal := range signals {
 		lowered := strings.ToLower(signal)
 		if strings.Contains(lowered, "kafka") || strings.Contains(lowered, "queue") || strings.Contains(lowered, "consumer_lag") {
-			return "kafka"
+			return "messaging"
 		}
 		if strings.Contains(lowered, "db") || strings.Contains(lowered, "database") || strings.Contains(lowered, "postgres") {
 			return "database"

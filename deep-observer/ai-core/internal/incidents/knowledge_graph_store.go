@@ -260,10 +260,10 @@ func itoa(value int) string {
 func inferNodeType(nodeID string) string {
 	id := strings.ToLower(strings.TrimSpace(nodeID))
 	switch {
-	case strings.HasPrefix(id, "db:"):
+	case clickhouse.InferTopologyNodeType(id) == "database":
 		return "database"
-	case strings.Contains(id, "kafka") || strings.Contains(id, "topic"):
-		return "kafka_topic"
+	case clickhouse.InferTopologyNodeType(id) == "messaging":
+		return "messaging"
 	case strings.Contains(id, "pod/"):
 		return "pod"
 	case strings.Contains(id, "node/"):
@@ -277,7 +277,7 @@ func inferNodeType(nodeID string) string {
 
 func graphEdgeType(depType string) string {
 	switch depType {
-	case "messaging":
+	case "messaging", "messaging_kafka":
 		return "publishes_to"
 	case "database":
 		return "connects_to"

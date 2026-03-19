@@ -230,37 +230,23 @@ func (c *Client) messagingEdges(ctx context.Context, filters Filters) ([]Topolog
 				avg(toFloat64(hasError)) AS error_rate
 			FROM %s
 			WHERE %s
-			  AND lowerUTF8(attributes_string['messaging.system']) = 'kafka'
+			  AND lowerUTF8(attributes_string['messaging.system']) != ''
 			  AND coalesce(nullIf(attributes_string['messaging.destination.name'], ''), nullIf(attributes_string['messaging.destination'], ''), nullIf(attributes_string['messaging.destination_name'], '')) != ''
 			  AND lowerUTF8(coalesce(attributes_string['messaging.operation'], attributes_string['messaging.operation.type'], '')) IN ('publish', 'send')
 			GROUP BY source, messaging_system, destination
-		),
-		consume AS (
-			SELECT
-				coalesce(
-					nullIf(serviceName, ''),
-					nullIf(resources_string['service.name'], ''),
-					nullIf(resources_string['k8s.service.name'], ''),
-					nullIf(resources_string['k8s.deployment.name'], '')
-				) AS target,
-				toInt64(count()) AS call_count
-			FROM %s
-			WHERE %s
-			  AND lowerUTF8(attributes_string['messaging.system']) = 'kafka'
-			  AND lowerUTF8(coalesce(attributes_string['messaging.operation'], attributes_string['messaging.operation.type'], '')) IN ('process', 'receive')
-			GROUP BY target
 		)
 		SELECT
 			publish.source AS source,
+			publish.messaging_system AS messaging_system,
 			publish.destination AS destination,
-			least(publish.call_count, (SELECT ifNull(sum(call_count), 0) FROM consume)) AS call_count,
+			publish.call_count AS call_count,
 			publish.avg_latency_ms AS avg_latency_ms,
 			publish.error_rate AS error_rate
 		FROM publish
 		WHERE source != ''
 		ORDER BY call_count DESC
 		LIMIT 100
-	`, tracesTable, traceWhere(filters), tracesTable, traceWhere(filters))
+	`, tracesTable, traceWhere(filters))
 	rows, err := c.conn.Query(ctx, query)
 	if err != nil {
 		return edges, err
@@ -268,7 +254,8 @@ func (c *Client) messagingEdges(ctx context.Context, filters Filters) ([]Topolog
 	defer rows.Close()
 	for rows.Next() {
 		var edge TopologyEdge
-		if scanErr := rows.Scan(&edge.Source, &edge.Destination, &edge.CallCount, &edge.AvgLatencyMs, &edge.ErrorRate); scanErr != nil {
+		var messagingSystem string
+		if scanErr := rows.Scan(&edge.Source, &messagingSystem, &edge.Destination, &edge.CallCount, &edge.AvgLatencyMs, &edge.ErrorRate); scanErr != nil {
 			return edges, scanErr
 		}
 		edge.Source = canonicalizeServiceName(edge.Source)
@@ -276,8 +263,8 @@ func (c *Client) messagingEdges(ctx context.Context, filters Filters) ([]Topolog
 		if ignoredService(edge.Source) {
 			continue
 		}
-		edge.Target = "kafka"
-		edge.DependencyType = "messaging_kafka"
+		edge.Target = CanonicalMessagingNodeID(messagingSystem, edge.Destination)
+		edge.DependencyType = "messaging"
 		edges = append(edges, edge)
 	}
 	consumerQuery := fmt.Sprintf(`
@@ -288,14 +275,20 @@ func (c *Client) messagingEdges(ctx context.Context, filters Filters) ([]Topolog
 				nullIf(resources_string['k8s.service.name'], ''),
 				nullIf(resources_string['k8s.deployment.name'], '')
 			) AS target,
+			lowerUTF8(attributes_string['messaging.system']) AS messaging_system,
+			coalesce(
+				nullIf(attributes_string['messaging.destination.name'], ''),
+				nullIf(attributes_string['messaging.destination'], ''),
+				nullIf(attributes_string['messaging.destination_name'], '')
+			) AS destination,
 			toInt64(count()) AS call_count,
 			avg(durationNano) / 1000000 AS avg_latency_ms,
 			avg(toFloat64(hasError)) AS error_rate
 		FROM %s
 		WHERE %s
-		  AND lowerUTF8(attributes_string['messaging.system']) = 'kafka'
+		  AND lowerUTF8(attributes_string['messaging.system']) != ''
 		  AND lowerUTF8(coalesce(attributes_string['messaging.operation'], attributes_string['messaging.operation.type'], '')) IN ('process', 'receive')
-		GROUP BY target
+		GROUP BY target, messaging_system, destination
 		ORDER BY call_count DESC
 		LIMIT 100
 	`, tracesTable, traceWhere(filters))
@@ -306,19 +299,22 @@ func (c *Client) messagingEdges(ctx context.Context, filters Filters) ([]Topolog
 	defer consumers.Close()
 	for consumers.Next() {
 		var target string
+		var messagingSystem string
+		var destination string
 		var calls int64
 		var avg, errRate float64
-		if scanErr := consumers.Scan(&target, &calls, &avg, &errRate); scanErr != nil {
+		if scanErr := consumers.Scan(&target, &messagingSystem, &destination, &calls, &avg, &errRate); scanErr != nil {
 			continue
 		}
 		target = canonicalizeServiceName(target)
-		if target == "" || ignoredService(target) || target == "kafka" {
+		source := CanonicalMessagingNodeID(messagingSystem, destination)
+		if target == "" || ignoredService(target) || source == "" {
 			continue
 		}
 		edges = append(edges, TopologyEdge{
-			Source:         "kafka",
+			Source:         source,
 			Target:         target,
-			DependencyType: "messaging_kafka",
+			DependencyType: "messaging",
 			CallCount:      calls,
 			AvgLatencyMs:   avg,
 			ErrorRate:      errRate,
@@ -362,11 +358,7 @@ func (c *Client) databaseEdges(ctx context.Context, filters Filters) ([]Topology
 			return edges, scanErr
 		}
 		edge.Source = canonicalizeServiceName(edge.Source)
-		if strings.Contains(dbSystem, "postgres") || strings.Contains(dbName, "postgres") {
-			edge.Target = "postgres"
-		} else {
-			edge.Target = "database"
-		}
+		edge.Target = CanonicalDatabaseNodeID(dbSystem, dbName)
 		if ignoredService(edge.Source) {
 			continue
 		}
@@ -513,15 +505,7 @@ func severityFromLogLevel(level uint8) string {
 }
 
 func classifyNodeType(id string) string {
-	value := strings.ToLower(strings.TrimSpace(id))
-	switch value {
-	case "kafka":
-		return "messaging"
-	case "postgres", "database":
-		return "database"
-	default:
-		return "service"
-	}
+	return InferTopologyNodeType(id)
 }
 
 func traceWhereWithAlias(alias string, filters Filters) string {

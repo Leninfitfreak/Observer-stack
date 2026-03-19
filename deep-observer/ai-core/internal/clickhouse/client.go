@@ -361,9 +361,13 @@ func (c *Client) ReadSnapshot(ctx context.Context, filters Filters, baselineWind
 			positionCaseInsensitive(metric_name, 'error') > 0 OR
 			positionCaseInsensitive(metric_name, 'duration') > 0 OR
 			positionCaseInsensitive(metric_name, 'request') > 0 OR
-			positionCaseInsensitive(metric_name, 'kafka') > 0 OR
+			positionCaseInsensitive(metric_name, 'messag') > 0 OR
+			positionCaseInsensitive(metric_name, 'broker') > 0 OR
+			positionCaseInsensitive(metric_name, 'topic') > 0 OR
 			positionCaseInsensitive(metric_name, 'lag') > 0 OR
 			positionCaseInsensitive(metric_name, 'queue') > 0 OR
+			positionCaseInsensitive(metric_name, 'db') > 0 OR
+			positionCaseInsensitive(metric_name, 'database') > 0 OR
 			positionCaseInsensitive(metric_name, 'jvm') > 0 OR
 			positionCaseInsensitive(metric_name, 'process') > 0
 		  )
@@ -515,6 +519,9 @@ func escape(value string) string {
 func ignoredService(service string) bool {
 	value := strings.ToLower(strings.TrimSpace(service))
 	if value == "" {
+		return true
+	}
+	if InferTopologyNodeType(CanonicalTopologyNodeID(value)) != "service" {
 		return true
 	}
 	if statefulReplicaPattern.MatchString(value) {
