@@ -621,12 +621,7 @@ func (s *Store) ListIncidents(ctx context.Context, filters QueryFilters) ([]Inci
 		  AND (
 		    $4 = '' OR
 		    i.service = $4 OR
-		    EXISTS (
-		      SELECT 1
-		      FROM incident_impacts ii
-		      WHERE ii.incident_id = i.incident_id
-		        AND ii.service = $4
-		    )
+		    i.root_cause_entity = $4
 		  )
 		  AND ($5 = '' OR i.problem_id = $5)
 		  AND ($6::timestamptz IS NULL OR i.timestamp >= $6)

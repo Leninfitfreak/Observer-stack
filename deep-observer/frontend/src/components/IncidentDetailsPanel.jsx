@@ -15,6 +15,7 @@ import IncidentTable from "./IncidentTable";
 export default function IncidentDetailsPanel({
   incident,
   filterQuery,
+  emptyHint,
   serviceHealth,
   clusterReport,
   changes,
@@ -101,7 +102,7 @@ export default function IncidentDetailsPanel({
   if (!currentIncident) {
     return (
       <section className="rounded-3xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-400">
-        Select an incident to inspect the reasoning summary, charts, timeline, and propagation path.
+        {emptyHint || "No incidents found for the selected filters."}
       </section>
     );
   }

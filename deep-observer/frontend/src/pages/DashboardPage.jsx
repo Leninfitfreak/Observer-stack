@@ -143,6 +143,9 @@ export default function DashboardPage() {
             if (!safeIncidents.length) return "";
             return safeIncidents.some((item) => item.incident_id === current) ? current : safeIncidents[0].incident_id;
           });
+          console.info("[filters] query=", query);
+          console.info("[filters] incidents_count=", safeIncidents.length);
+          console.info("[filters] selected_incident=", safeIncidents[0]?.incident_id || "");
         }).catch(console.error);
 
     load();
@@ -182,6 +185,7 @@ export default function DashboardPage() {
         <IncidentDetailsPanel
           incident={selectedIncident}
           filterQuery={query}
+          emptyHint={incidentHint || "No incidents found for the selected filters."}
           serviceHealth={serviceHealth.find((item) => item.service_name === (selectedIncident?.service || filters.service))}
           clusterReport={clusterReport}
           changes={changes}

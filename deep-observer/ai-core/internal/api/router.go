@@ -58,6 +58,7 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 			}
 			filtered = append(filtered, item)
 		}
+		fmt.Printf("api incidents result_count=%d\n", len(filtered))
 		writeJSON(w, http.StatusOK, filtered)
 	})
 
