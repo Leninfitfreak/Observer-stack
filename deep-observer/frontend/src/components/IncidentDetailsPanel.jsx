@@ -125,6 +125,7 @@ export default function IncidentDetailsPanel({
   const scope = canonicalEvidence.scope;
   const scopedRunbook = canonicalEvidence.runbook;
   const workflowStatus = (currentIncident?.workflow_status || "open").toLowerCase();
+  const reasoningReady = canonicalEvidence.reasoning_ready;
 
   const refreshIncident = async () => {
     if (!currentIncident?.incident_id) return null;
@@ -235,14 +236,14 @@ export default function IncidentDetailsPanel({
         </div>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
-          <InfoCard title="Root Cause Service" value={reasoning?.root_cause_service || currentIncident.root_cause_entity || "Pending"} />
-          <InfoCard title="Root Cause Signal" value={reasoning?.root_cause_signal || toList(currentIncident.signals).join(", ")} />
-          <InfoCard title="Customer Impact" value={reasoning?.customer_impact || reasoning?.impact_assessment || "Pending"} />
+          <InfoCard title="Root Cause Service" value={reasoningReady ? (reasoning?.root_cause_service || currentIncident.root_cause_entity || "Pending") : "Not generated"} />
+          <InfoCard title="Root Cause Signal" value={reasoningReady ? (reasoning?.root_cause_signal || toList(currentIncident.signals).join(", ")) : "Not generated"} />
+          <InfoCard title="Customer Impact" value={reasoningReady ? (reasoning?.customer_impact || reasoning?.impact_assessment || "Pending") : "Awaiting reasoning"} />
           <InfoCard title="Observability Score" value={`${canonicalEvidence.observability_score}%`} />
           <InfoCard title="Service Health Score" value={`${formatScore(serviceHealth?.health_score ?? 0)} / 100`} />
           <InfoCard
             title="Root Cause Confidence"
-            value={formatConfidenceLabel(reasoning?.confidence_score ?? currentIncident.predictive_confidence ?? 0, "Confidence pending")}
+            value={formatConfidenceLabel(reasoningReady ? reasoning?.confidence_score ?? 0 : 0, "Confidence pending")}
           />
           <InfoCard title="Incident Type" value={currentIncident.incident_type || "observed"} />
         </div>
@@ -254,7 +255,7 @@ export default function IncidentDetailsPanel({
             <p className="mt-1 text-xs text-slate-500">Operator guidance at a glance</p>
             </div>
             <span className="rounded-full bg-cyan-500/20 px-3 py-1 text-xs font-semibold uppercase tracking-[0.3em] text-cyan-200">
-              Confidence {formatScore(decisionPanel.confidence_score)}
+              {reasoningReady ? `Confidence ${formatScore(decisionPanel.confidence_score)}` : "Confidence Pending"}
             </span>
           </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
@@ -626,12 +627,12 @@ export default function IncidentDetailsPanel({
             }
           />
           <RichList
-            title="Runbook Suggestions"
+            title="Incident Guidance"
             items={scopedRunbook.incident_steps}
           />
           <RichSection
-            title="Observability Coverage Score"
-            content={`Score: ${Number(observabilityReport?.observability_coverage_score ?? 0).toFixed(2)} | Traces: ${observabilityReport?.services_with_traces ?? 0}/${observabilityReport?.services_discovered ?? 0} | Metrics: ${observabilityReport?.services_with_metrics ?? 0}/${observabilityReport?.services_discovered ?? 0} | Logs: ${observabilityReport?.services_with_logs ?? 0}/${observabilityReport?.services_discovered ?? 0}`}
+            title="Stack Observability Coverage"
+            content={`Stack-wide score: ${Number(observabilityReport?.observability_coverage_score ?? 0).toFixed(2)} | Traces: ${observabilityReport?.services_with_traces ?? 0}/${observabilityReport?.services_discovered ?? 0} | Metrics: ${observabilityReport?.services_with_metrics ?? 0}/${observabilityReport?.services_discovered ?? 0} | Logs: ${observabilityReport?.services_with_logs ?? 0}/${observabilityReport?.services_discovered ?? 0}`}
           />
         </div>
 
@@ -857,6 +858,8 @@ function priorityColor(priority) {
 function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correlations, incidentHistory }) {
   const snapshot = incident?.telemetry_snapshot || {};
   const scope = normalizeIncidentScope(incident);
+  const reasoningStatus = String(incident?.reasoning_status || "").toLowerCase();
+  const hasCompletedReasoning = Boolean(reasoning) && reasoningStatus === "completed";
   const qualityBySignal = extractQualityBySignal(reasoning, snapshot);
   const impactedServices = formatImpactedServices(incident?.impacts);
   const directEvidence = {
@@ -911,6 +914,7 @@ function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correla
   const confidenceDetails = buildCanonicalConfidenceDetails(
     incident,
     reasoning,
+    hasCompletedReasoning,
     scope,
     directEvidence,
     contextualEvidence,
@@ -918,13 +922,13 @@ function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correla
     telemetryAudit,
   );
   const observabilityGaps = buildCanonicalObservabilityGaps(scope, missingTelemetrySignals, contextualEvidence);
-  const trustScore = buildCanonicalTrustScore(reasoning, incident, telemetryAudit, observabilityGaps);
-  const prioritizedActions = buildCanonicalPrioritizedActions(incident, reasoning, telemetryAudit, missingTelemetrySignals, scope);
-  const decisionPanel = buildCanonicalDecisionPanel(incident, reasoning, prioritizedActions, telemetryAudit, scope, impactedServices);
+  const trustScore = buildCanonicalTrustScore(reasoning, incident, hasCompletedReasoning, telemetryAudit, observabilityGaps);
+  const prioritizedActions = buildCanonicalPrioritizedActions(incident, reasoning, hasCompletedReasoning, telemetryAudit, missingTelemetrySignals, scope);
+  const decisionPanel = buildCanonicalDecisionPanel(incident, reasoning, hasCompletedReasoning, prioritizedActions, telemetryAudit, scope, impactedServices);
   const logSummary = buildCanonicalLogSummary(incident);
-  const impactSummary = buildCanonicalImpactSummary(incident, reasoning, telemetryAudit, impactedServices, scope);
+  const impactSummary = buildCanonicalImpactSummary(incident, reasoning, hasCompletedReasoning, telemetryAudit, impactedServices, scope);
   const incidentTimeline = buildCanonicalIncidentTimeline(incident, reasoning);
-  const runbook = buildCanonicalRunbook(scope, prioritizedActions, missingTelemetrySignals, correlations, incidentHistory);
+  const runbook = buildCanonicalRunbook(scope, hasCompletedReasoning, prioritizedActions, missingTelemetrySignals, correlations, incidentHistory);
   const observabilityScore = buildCanonicalObservabilityScore(directEvidence, contextualEvidence, scope, qualityBySignal);
 
   return {
@@ -947,9 +951,11 @@ function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correla
     impacted_services: impactedServices,
     propagation_path: toList(reasoning?.propagation_path).length ? toList(reasoning?.propagation_path) : toList(incident?.dependency_chain),
     causal_chain: toList(reasoning?.causal_chain),
-    reasoning_summary: buildCanonicalReasoningSummary(reasoning, scope, telemetryAudit),
+    reasoning_summary: buildCanonicalReasoningSummary(reasoning, hasCompletedReasoning, scope, telemetryAudit),
     incident_summary: buildCanonicalIncidentSummary(incident, scope, telemetryAudit),
     runbook,
+    reasoning_ready: hasCompletedReasoning,
+    reasoning_status: reasoningStatus || "not_generated",
   };
 }
 
@@ -1094,7 +1100,20 @@ function buildCanonicalSignalSummary(incident, reasoning, missingTelemetrySignal
   };
 }
 
-function buildCanonicalConfidenceDetails(incident, reasoning, scope, directEvidence, contextualEvidence, qualityBySignal, telemetryAudit) {
+function buildCanonicalConfidenceDetails(incident, reasoning, hasCompletedReasoning, scope, directEvidence, contextualEvidence, qualityBySignal, telemetryAudit) {
+  if (!hasCompletedReasoning) {
+    return {
+      score: 0,
+      level: "pending",
+      explanation_text:
+        "Reasoning has not been generated for this incident yet. Confidence will be computed after a manual reasoning run from the same selected-incident evidence basis shown on this page.",
+      supporting_factors: [
+        `Selected incident scope: ${scope.service || "Unknown service"} / ${scope.namespace_label} / ${scope.cluster_label}`,
+        `Direct evidence currently shows ${directEvidence.request_count} requests, ${directEvidence.log_count} logs, and ${directEvidence.trace_sample_count} sampled traces.`,
+      ],
+      weakening_factors: ["RCA confidence is unavailable until reasoning is generated."],
+    };
+  }
   const score = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0);
   const supporting = [];
   const weakening = [];
@@ -1178,7 +1197,17 @@ function buildCanonicalObservabilityGaps(scope, missingTelemetrySignals, context
   };
 }
 
-function buildCanonicalTrustScore(reasoning, incident, telemetryAudit, observabilityGaps) {
+function buildCanonicalTrustScore(reasoning, incident, hasCompletedReasoning, telemetryAudit, observabilityGaps) {
+  if (!hasCompletedReasoning) {
+    const observabilityScore = Math.max(0, Math.min(1, buildEvidenceCoverageScore(telemetryAudit, observabilityGaps)));
+    const level = observabilityScore >= 0.75 ? "high" : observabilityScore >= 0.45 ? "medium" : "low";
+    return {
+      score: observabilityScore,
+      level,
+      summary:
+        "Trust currently reflects evidence coverage only. RCA trust and confidence will be available after a manual reasoning run.",
+    };
+  }
   let score = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.2);
   score -= Math.min(0.25, observabilityGaps.missing_critical_signals.length * 0.05);
   if (telemetryAudit.isSparse) score -= 0.15;
@@ -1193,13 +1222,36 @@ function buildCanonicalTrustScore(reasoning, incident, telemetryAudit, observabi
   };
 }
 
-function buildCanonicalPrioritizedActions(incident, reasoning, telemetryAudit, missingTelemetrySignals, scope) {
+function buildCanonicalPrioritizedActions(incident, reasoning, hasCompletedReasoning, telemetryAudit, missingTelemetrySignals, scope) {
+  if (!hasCompletedReasoning) {
+    const evidenceFirst = [];
+    if (telemetryAudit.isSparse) {
+      evidenceFirst.push(`Review the selected incident window for ${scope.service || "the selected service"} before drawing conclusions.`);
+    }
+    evidenceFirst.push(`Inspect incident-scoped traces, metrics, and logs for ${scope.service || "the selected service"} in ${scope.namespace_label}.`);
+    if (missingTelemetrySignals.some((item) => /log/i.test(item))) {
+      evidenceFirst.push(`Check whether logs for ${scope.service || "the selected service"} are available in the selected incident window.`);
+    }
+    if (missingTelemetrySignals.some((item) => /trace/i.test(item))) {
+      evidenceFirst.push(`Check whether trace correlation exists for the selected incident window before relying on broader service context.`);
+    }
+    evidenceFirst.push("Run reasoning manually when you want an RCA summary grounded on the evidence above.");
+    return Array.from(new Set(evidenceFirst))
+      .filter(Boolean)
+      .slice(0, 5)
+      .map((action) => ({
+        label: action,
+        priority: /run reasoning/i.test(action) ? "low" : telemetryAudit.isSparse ? "medium" : "high",
+        confidence: 0,
+        estimated_effort: "low",
+        risk_level: "low",
+      }));
+  }
   const rawActions = [
     ...toList(reasoning?.recommended_actions),
     ...toList(incident?.remediation_suggestions),
   ];
   const fallback = [
-    `Validate selected incident scope for ${scope.service || "service"} before remediation.`,
     telemetryAudit.isSparse
       ? `Collect direct incident telemetry for ${scope.service || "service"} before making strong remediation changes.`
       : `Inspect the strongest anomaly signals for ${scope.service || "service"} within the selected incident window.`,
@@ -1220,7 +1272,18 @@ function buildCanonicalPrioritizedActions(incident, reasoning, telemetryAudit, m
   return items;
 }
 
-function buildCanonicalDecisionPanel(incident, reasoning, prioritizedActions, telemetryAudit, scope, impactedServices) {
+function buildCanonicalDecisionPanel(incident, reasoning, hasCompletedReasoning, prioritizedActions, telemetryAudit, scope, impactedServices) {
+  if (!hasCompletedReasoning) {
+    return {
+      root_cause: "Reasoning has not been generated yet.",
+      impact_summary:
+        "This panel is showing selected-incident evidence only. No completed RCA is available until you run reasoning manually.",
+      confidence_score: null,
+      immediate_action: prioritizedActions[0]?.label || "Review selected-incident telemetry before making remediation changes.",
+      next_actions: prioritizedActions.slice(1, 4).map((item) => item.label),
+      investigation_steps: prioritizedActions.slice(0, 5).map((item) => item.label),
+    };
+  }
   return {
     root_cause: reasoning?.root_cause_service || reasoning?.root_cause || incident?.root_cause_entity || "Pending",
     impact_summary: telemetryAudit.isSparse
@@ -1239,11 +1302,13 @@ function buildCanonicalLogSummary(incident) {
   return buildLogSummary(incident);
 }
 
-function buildCanonicalImpactSummary(incident, reasoning, telemetryAudit, impactedServices, scope) {
+function buildCanonicalImpactSummary(incident, reasoning, hasCompletedReasoning, telemetryAudit, impactedServices, scope) {
   return {
-    primary_service: reasoning?.root_cause_service || incident?.root_cause_entity || scope.service || "service",
+    primary_service: (hasCompletedReasoning ? reasoning?.root_cause_service : null) || incident?.root_cause_entity || scope.service || "service",
     secondary_services: impactedServices,
-    summary_text: telemetryAudit.isSparse
+    summary_text: !hasCompletedReasoning
+      ? `RCA has not been generated yet. Current impact is based only on selected-incident telemetry and discovered dependencies for ${scope.service || "the selected service"}.`
+      : telemetryAudit.isSparse
       ? `Impact for ${scope.service || "this service"} is still uncertain because the selected incident has sparse direct evidence.`
       : reasoning?.impact_assessment || `Impact appears centered on ${scope.service || "the selected service"}.`,
     estimated_user_impact: reasoning?.customer_impact || "User impact is scoped to the selected incident only.",
@@ -1255,15 +1320,17 @@ function buildCanonicalIncidentTimeline(incident, reasoning) {
   return buildIncidentTimeline(incident, reasoning);
 }
 
-function buildCanonicalRunbook(scope, prioritizedActions, missingTelemetrySignals, correlations, incidentHistory) {
+function buildCanonicalRunbook(scope, hasCompletedReasoning, prioritizedActions, missingTelemetrySignals, correlations, incidentHistory) {
   const incidentSteps = Array.from(new Set([
-    `Validate the selected incident scope for ${scope.service || "service"} in ${scope.namespace_label} on ${scope.cluster_label}.`,
     ...prioritizedActions.slice(0, 4).map((item) => item.label),
     ...missingTelemetrySignals
-      .filter((item) => /trace|log|metric|scope|exception/i.test(item))
+      .filter((item) => /trace|log|metric|exception/i.test(item))
       .slice(0, 2)
       .map((item) => `Address evidence gap: ${item}`),
   ])).slice(0, 6);
+  if (!hasCompletedReasoning) {
+    incidentSteps.unshift("Review the selected-incident evidence panels before running reasoning.");
+  }
   const relatedContextSteps = [];
   if (Array.isArray(correlations) && correlations.length) {
     relatedContextSteps.push(`Related incidents exist (${correlations.length}); review them separately before broadening the RCA.`);
@@ -1277,17 +1344,26 @@ function buildCanonicalRunbook(scope, prioritizedActions, missingTelemetrySignal
   };
 }
 
-function buildCanonicalReasoningSummary(reasoning, scope, telemetryAudit) {
+function buildCanonicalReasoningSummary(reasoning, hasCompletedReasoning, scope, telemetryAudit) {
   if (!scope.scope_complete) {
     return "Selected-incident RCA is limited because the incident scope is incomplete.";
   }
-  if (reasoning?.root_cause) {
+  if (hasCompletedReasoning && reasoning?.root_cause) {
     return toText(reasoning.root_cause);
+  }
+  if (!hasCompletedReasoning) {
+    return "Reasoning has not been generated for this incident yet. The page is currently showing evidence only, not a completed RCA.";
   }
   if (telemetryAudit.isSparse) {
     return "Selected incident has sparse direct telemetry, so RCA remains low-confidence.";
   }
   return "Reasoning pending.";
+}
+
+function buildEvidenceCoverageScore(telemetryAudit, observabilityGaps) {
+  let score = telemetryAudit.isSparse ? 0.35 : 0.65;
+  score -= Math.min(0.2, observabilityGaps.missing_critical_signals.length * 0.03);
+  return Math.max(0, Math.min(1, score));
 }
 
 function buildCanonicalIncidentSummary(incident, scope, telemetryAudit) {
