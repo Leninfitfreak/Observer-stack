@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   fetchIncident,
   fetchTimeline,
@@ -84,20 +84,24 @@ export default function IncidentDetailsPanel({
       .catch(console.error);
   }, [incident, filterQuery]);
 
-  const chartPoints = useMemo(
-    () =>
-      timeline
-        .filter((event) => Number.isFinite(Number(event?.value)))
-        .slice(-8)
-        .map((event) => ({
-          ...event,
-          ts: new Date(event.timestamp).toLocaleTimeString(),
-          value: Number(event.value),
-        })),
-    [timeline],
-  );
+  const chartPoints = timeline
+    .filter((event) => Number.isFinite(Number(event?.value)))
+    .slice(-8)
+    .map((event) => ({
+      ...event,
+      ts: new Date(event.timestamp).toLocaleTimeString(),
+      value: Number(event.value),
+    }));
 
   const currentIncident = activeIncident || incident;
+  const reasoning = currentIncident?.reasoning;
+  const canonicalEvidence = buildCanonicalIncidentEvidence({
+    incident: currentIncident,
+    timeline,
+    reasoning,
+    correlations,
+    incidentHistory,
+  });
   if (!currentIncident) {
     return (
       <section className="rounded-3xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-400">
@@ -106,21 +110,9 @@ export default function IncidentDetailsPanel({
     );
   }
 
-  const reasoning = currentIncident.reasoning;
   const anomalyScore = formatScore(currentIncident.anomaly_score);
   const derivedStatus = reasoningStatus || currentIncident.reasoning_status || (reasoning ? "completed" : "not_generated");
   const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
-  const canonicalEvidence = useMemo(
-    () =>
-      buildCanonicalIncidentEvidence({
-        incident: currentIncident,
-        timeline,
-        reasoning,
-        correlations,
-        incidentHistory,
-      }),
-    [currentIncident, timeline, reasoning, correlations, incidentHistory],
-  );
   const canRunReasoning =
     canonicalEvidence.scope.scope_complete &&
     ["not_generated", "failed", "completed"].includes(derivedStatus) &&
