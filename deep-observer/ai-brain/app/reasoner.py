@@ -718,14 +718,23 @@ def build_confidence_explanation(incident: dict, context: TelemetryContext, reas
     if context.timeline:
         supporting_factors.append("Timeline evidence contains recent anomaly events")
     presence = _telemetry_presence(incident, context)
+    snapshot = incident.get("telemetry_snapshot", {}) or {}
+    direct_trace_count = int(len(snapshot.get("trace_ids", []) or []))
+    direct_log_count = int(snapshot.get("log_count", 0) or 0)
     if presence["trace_count"] > 0:
-        supporting_factors.append(f"Trace evidence present ({presence['trace_count']} requests)")
+        if direct_trace_count > 0:
+            supporting_factors.append(f"Incident-scoped trace evidence present ({presence['trace_count']} requests)")
+        else:
+            supporting_factors.append(f"Broader scoped trace evidence present ({presence['trace_count']} requests)")
     if presence["log_count"] > 0:
-        supporting_factors.append(f"Incident-scoped logs present ({presence['log_count']} events)")
+        if direct_log_count > 0:
+            supporting_factors.append(f"Incident-scoped logs present ({presence['log_count']} events)")
+        else:
+            supporting_factors.append(f"Broader scoped logs present ({presence['log_count']} events)")
     if presence["db_dependency_count"] > 0:
-        supporting_factors.append(f"Database evidence present ({presence['db_dependency_count']} dependencies)")
+        supporting_factors.append(f"Contextual database evidence present ({presence['db_dependency_count']} dependencies)")
     if presence["messaging_flow_count"] > 0:
-        supporting_factors.append(f"Messaging evidence present ({presence['messaging_flow_count']} flows)")
+        supporting_factors.append(f"Contextual messaging evidence present ({presence['messaging_flow_count']} flows)")
     if presence["exception_count"] > 0:
         supporting_factors.append(f"Exception evidence present ({presence['exception_count']} signals)")
 

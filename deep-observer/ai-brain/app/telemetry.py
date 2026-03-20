@@ -335,6 +335,7 @@ class TelemetryReader:
         for (service, namespace, cluster), series in by_service.items():
             if len(series["latency"]) < 8:
                 continue
+            cluster, namespace = self._resolve_incident_scope(client, service, cluster, namespace)
             predicted_latency = self._forecast(series["latency"])
             predicted_error = self._forecast(series["error"])
             baseline_latency = mean(series["latency"][:-3]) if len(series["latency"]) > 3 else mean(series["latency"])
@@ -369,6 +370,52 @@ class TelemetryReader:
                 }
             )
         return predictions
+
+    def _resolve_incident_scope(self, client, service: str, cluster: str, namespace: str) -> tuple[str, str]:
+        service = self._canonicalize_name(service)
+        cluster = str(cluster or "").strip()
+        namespace = str(namespace or "").strip()
+        if service and cluster and namespace:
+            return cluster, namespace
+        lookback_start_ms = int((datetime.now(timezone.utc) - timedelta(hours=2)).timestamp() * 1000)
+        rows = client.query(
+            f"""
+            SELECT cluster, namespace
+            FROM (
+                SELECT
+                    ifNull(nullIf(resources_string['k8s.cluster.name'], ''), '') AS cluster,
+                    ifNull(nullIf(resources_string['k8s.namespace.name'], ''), '') AS namespace,
+                    max(timestamp) AS observed_at
+                FROM {TRACES_TABLE}
+                WHERE timestamp >= now() - INTERVAL 2 HOUR
+                  AND {self._trace_service_expr()} = '{service}'
+                GROUP BY cluster, namespace
+                UNION ALL
+                SELECT
+                    ifNull(nullIf(resource_attrs['k8s.cluster.name'], ''), '') AS cluster,
+                    ifNull(nullIf(resource_attrs['k8s.namespace.name'], ''), '') AS namespace,
+                    max(toDateTime(samples.unix_milli / 1000)) AS observed_at
+                FROM {SAMPLES_TABLE} AS samples
+                INNER JOIN {METRICS_TABLE} AS ts USING fingerprint
+                WHERE samples.unix_milli >= {lookback_start_ms}
+                  AND {self._metric_service_expr('ts')} = '{service}'
+                GROUP BY cluster, namespace
+            )
+            WHERE cluster != '' OR namespace != ''
+            ORDER BY observed_at DESC
+            LIMIT 5
+            """
+        ).result_rows
+        for resolved_cluster, resolved_namespace in rows:
+            resolved_cluster = str(resolved_cluster or "").strip()
+            resolved_namespace = str(resolved_namespace or "").strip()
+            if not cluster and resolved_cluster:
+                cluster = resolved_cluster
+            if not namespace and resolved_namespace:
+                namespace = resolved_namespace
+            if cluster and namespace:
+                break
+        return cluster, namespace
 
     def _fetch_trace_summary(self, client, service: str, namespace: str, cluster: str, start: datetime, end: datetime):
         canonical = client.query(

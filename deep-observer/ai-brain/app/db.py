@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 import psycopg
 
@@ -307,13 +308,40 @@ def predictive_incident_exists(conn: psycopg.Connection, cluster: str, namespace
 
 def create_predictive_incident(conn: psycopg.Connection, settings: Settings, prediction: dict) -> str:
     incident_id = str(uuid.uuid4())
+    incident_time = datetime.now(timezone.utc)
+    horizon_minutes = int(prediction.get("horizon_minutes", 10) or 10)
+    window_start = incident_time - timedelta(minutes=30)
+    window_end = incident_time + timedelta(minutes=horizon_minutes)
+    cluster = str(prediction.get("cluster", "") or "").strip()
+    namespace = str(prediction.get("namespace", "") or "").strip()
+    service = str(prediction.get("service", "") or "").strip()
+    scope_complete = all([cluster, namespace, service])
+    scope_warnings = []
+    if not cluster:
+        scope_warnings.append("cluster missing from predictive scope")
+    if not namespace:
+        scope_warnings.append("namespace missing from predictive scope")
+    if not service:
+        scope_warnings.append("service missing from predictive scope")
     telemetry_snapshot = {
+        "filters": {
+            "cluster": cluster,
+            "namespace": namespace,
+            "service": service,
+            "start": window_start.isoformat(),
+            "end": window_end.isoformat(),
+        },
+        "observed_at": incident_time.isoformat(),
+        "incident_window_start": window_start.isoformat(),
+        "incident_window_end": window_end.isoformat(),
         "forecast_horizon_minutes": prediction.get("horizon_minutes", 10),
         "predicted_latency_ms": prediction.get("predicted_latency_ms", 0),
         "predicted_error_rate": prediction.get("predicted_error_rate", 0),
         "recent_latency_series": prediction.get("recent_latency_series", []),
         "recent_error_series": prediction.get("recent_error_series", []),
         "model": "exponential_smoothing",
+        "scope_complete": scope_complete,
+        "scope_warnings": scope_warnings,
     }
     anomaly_score = float(prediction.get("anomaly_score", 0))
     severity = prediction.get("severity", "medium")
@@ -350,15 +378,15 @@ def create_predictive_incident(conn: psycopg.Connection, settings: Settings, pre
                 incident_id,
                 settings.project_id,
                 prediction.get("problem_id", ""),
-                prediction.get("cluster", ""),
-                prediction.get("namespace", ""),
-                prediction.get("service", ""),
+                cluster,
+                namespace,
+                service,
                 severity,
                 anomaly_score,
                 json.dumps(telemetry_snapshot, default=str),
                 json.dumps(detector_signals, default=str),
                 confidence,
-                prediction.get("service", ""),
+                service,
             ),
         )
     return incident_id

@@ -61,6 +61,21 @@ type Incident struct {
 	InvestigatingAt        *time.Time                 `json:"investigating_at,omitempty"`
 	ResolvedAt             *time.Time                 `json:"resolved_at,omitempty"`
 	WorkflowUpdatedAt      *time.Time                 `json:"workflow_updated_at,omitempty"`
+	Scope                  IncidentScope              `json:"scope"`
+}
+
+type IncidentScope struct {
+	IncidentID          string     `json:"incident_id"`
+	Cluster             string     `json:"cluster"`
+	Namespace           string     `json:"namespace"`
+	Service             string     `json:"service"`
+	IncidentType        string     `json:"incident_type"`
+	IncidentWindowStart *time.Time `json:"incident_window_start,omitempty"`
+	IncidentWindowEnd   *time.Time `json:"incident_window_end,omitempty"`
+	SignalSet           []string   `json:"signal_set"`
+	AnomalyScore        float64    `json:"anomaly_score"`
+	ScopeComplete       bool       `json:"scope_complete"`
+	ScopeWarnings       []string   `json:"scope_warnings,omitempty"`
 }
 
 type IncidentImpact struct {
@@ -635,6 +650,9 @@ func (s *Store) ListIncidents(ctx context.Context, filters QueryFilters) ([]Inci
 		if err != nil {
 			return nil, err
 		}
+		if err := s.normalizeIncidentScope(ctx, &item); err != nil {
+			return nil, err
+		}
 		items = append(items, item)
 	}
 	if err := s.attachIncidentImpacts(ctx, items); err != nil {
@@ -670,6 +688,9 @@ func (s *Store) GetIncident(ctx context.Context, incidentID string) (*Incident, 
 	}
 	item, err := scanIncident(rows)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.normalizeIncidentScope(ctx, &item); err != nil {
 		return nil, err
 	}
 	impacts, err := s.loadIncidentImpacts(ctx, item.ID)
@@ -860,7 +881,177 @@ func scanIncident(scanner rowScanner) (Incident, error) {
 			item.ReasoningStatus = "not_generated"
 		}
 	}
+	item.Scope = deriveIncidentScope(item)
 	return item, nil
+}
+
+func (s *Store) normalizeIncidentScope(ctx context.Context, item *Incident) error {
+	if item == nil {
+		return nil
+	}
+	scope := deriveIncidentScope(*item)
+	if !scope.ScopeComplete && (scope.Namespace == "" || scope.Cluster == "") && item.Service != "" {
+		cluster, namespace, err := s.lookupIncidentScope(ctx, item.Service, item.Cluster)
+		if err != nil {
+			return err
+		}
+		if scope.Cluster == "" && cluster != "" {
+			scope.Cluster = cluster
+		}
+		if scope.Namespace == "" && namespace != "" {
+			scope.Namespace = namespace
+		}
+		scope = finalizeIncidentScope(*item, scope)
+	}
+	item.Cluster = scope.Cluster
+	item.Namespace = scope.Namespace
+	item.Service = scope.Service
+	item.Scope = scope
+	return nil
+}
+
+func (s *Store) lookupIncidentScope(ctx context.Context, service, cluster string) (string, string, error) {
+	service = strings.TrimSpace(service)
+	cluster = strings.TrimSpace(cluster)
+	if service == "" {
+		return "", "", nil
+	}
+	row := s.pool.QueryRow(ctx, `
+		WITH scoped AS (
+			SELECT cluster, namespace, max(timestamp) AS observed_at
+			FROM incidents
+			WHERE service = $1
+			  AND namespace <> ''
+			  AND ($2 = '' OR cluster = $2)
+			GROUP BY cluster, namespace
+			UNION ALL
+			SELECT cluster, namespace, max(last_seen) AS observed_at
+			FROM services_registry
+			WHERE service_name = $1
+			  AND namespace <> ''
+			  AND ($2 = '' OR cluster = $2)
+			GROUP BY cluster, namespace
+		)
+		SELECT cluster, namespace
+		FROM scoped
+		ORDER BY observed_at DESC
+		LIMIT 1
+	`, service, cluster)
+	var resolvedCluster, resolvedNamespace string
+	if err := row.Scan(&resolvedCluster, &resolvedNamespace); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no rows") {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	return resolvedCluster, resolvedNamespace, nil
+}
+
+func deriveIncidentScope(item Incident) IncidentScope {
+	scope := IncidentScope{
+		IncidentID:   item.ID,
+		Cluster:      firstNonEmpty(strings.TrimSpace(item.Cluster), strings.TrimSpace(item.TelemetrySnapshot.Filters.Cluster)),
+		Namespace:    firstNonEmpty(strings.TrimSpace(item.Namespace), strings.TrimSpace(item.TelemetrySnapshot.Filters.Namespace)),
+		Service:      firstNonEmpty(strings.TrimSpace(item.Service), strings.TrimSpace(item.TelemetrySnapshot.Filters.Service), normalizeIncidentEntity(item.RootCauseEntity)),
+		IncidentType: defaultIncidentType(item.IncidentType),
+		SignalSet:    append([]string(nil), item.Signals...),
+		AnomalyScore: item.AnomalyScore,
+	}
+	if scope.Cluster == "" || scope.Namespace == "" {
+		problemCluster, problemNamespace := parsePredictiveProblemScope(item.ProblemID)
+		scope.Cluster = firstNonEmpty(scope.Cluster, problemCluster)
+		scope.Namespace = firstNonEmpty(scope.Namespace, problemNamespace)
+	}
+	return finalizeIncidentScope(item, scope)
+}
+
+func finalizeIncidentScope(item Incident, scope IncidentScope) IncidentScope {
+	warnings := append([]string{}, item.TelemetrySnapshot.ScopeWarnings...)
+	start, end := deriveIncidentWindow(item)
+	scope.IncidentWindowStart = start
+	scope.IncidentWindowEnd = end
+	if strings.TrimSpace(scope.Cluster) == "" {
+		warnings = append(warnings, "cluster missing from incident scope")
+	}
+	if strings.TrimSpace(scope.Namespace) == "" {
+		warnings = append(warnings, "namespace missing from incident scope")
+	}
+	if strings.TrimSpace(scope.Service) == "" {
+		warnings = append(warnings, "service missing from incident scope")
+	}
+	if start == nil || end == nil {
+		warnings = append(warnings, "incident window could not be derived")
+	}
+	scope.ScopeWarnings = uniqueStrings(warnings)
+	scope.ScopeComplete = len(scope.ScopeWarnings) == 0
+	return scope
+}
+
+func deriveIncidentWindow(item Incident) (*time.Time, *time.Time) {
+	start := item.TelemetrySnapshot.IncidentWindowStart
+	end := item.TelemetrySnapshot.IncidentWindowEnd
+	if start == nil && !item.TelemetrySnapshot.Filters.Start.IsZero() {
+		t := item.TelemetrySnapshot.Filters.Start.UTC()
+		start = &t
+	}
+	if end == nil && !item.TelemetrySnapshot.Filters.End.IsZero() {
+		t := item.TelemetrySnapshot.Filters.End.UTC()
+		end = &t
+	}
+	if start == nil {
+		t := item.Timestamp.UTC().Add(-30 * time.Minute)
+		start = &t
+	}
+	if end == nil {
+		windowEnd := item.Timestamp.UTC().Add(5 * time.Minute)
+		if strings.EqualFold(defaultIncidentType(item.IncidentType), "predictive") {
+			horizon := item.TelemetrySnapshot.ForecastHorizonMinutes
+			if horizon <= 0 {
+				horizon = 10
+			}
+			windowEnd = item.Timestamp.UTC().Add(time.Duration(horizon) * time.Minute)
+		}
+		end = &windowEnd
+	}
+	if start != nil && end != nil && end.Before(*start) {
+		fixedEnd := start.Add(5 * time.Minute)
+		end = &fixedEnd
+	}
+	return start, end
+}
+
+func parsePredictiveProblemScope(problemID string) (string, string) {
+	parts := strings.Split(strings.TrimSpace(problemID), ":")
+	if len(parts) < 2 {
+		return "", ""
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		items = append(items, value)
+	}
+	return items
 }
 
 func (s *Store) CreateReasoningRequest(ctx context.Context, incidentID, triggerType string) (*ReasoningRequest, error) {

@@ -107,23 +107,38 @@ export default function IncidentDetailsPanel({
   }
 
   const reasoning = currentIncident.reasoning;
-  const coverage = reasoning?.observability_summary || {};
   const anomalyScore = formatScore(currentIncident.anomaly_score);
-  const telemetryEvidence = buildTelemetryEvidence(currentIncident);
-  const impactedServices = formatImpactedServices(currentIncident.impacts);
   const derivedStatus = reasoningStatus || currentIncident.reasoning_status || (reasoning ? "completed" : "not_generated");
-  const canRunReasoning = ["not_generated", "failed", "completed"].includes(derivedStatus) && !reasoningBusy;
-  const confidenceDetails = reasoning?.confidence_explanation || {};
   const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
-  const prioritizedActions = buildPrioritizedActions(currentIncident, reasoning);
-  const decisionPanel = buildDecisionPanel(currentIncident, reasoning, prioritizedActions);
-  const signalSummary = buildSignalSummary(currentIncident, reasoning);
-  const logSummary = buildLogSummary(currentIncident);
-  const impactSummary = buildImpactSummary(currentIncident, reasoning);
-  const incidentTimeline = buildIncidentTimeline(currentIncident, reasoning);
-  const observabilityGaps = buildObservabilityGaps(currentIncident, reasoning);
-  const trustScore = buildTrustScore(currentIncident, reasoning, signalSummary, observabilityGaps);
-  const telemetryAudit = assessTelemetryData(currentIncident, timeline, reasoning);
+  const canonicalEvidence = useMemo(
+    () =>
+      buildCanonicalIncidentEvidence({
+        incident: currentIncident,
+        timeline,
+        reasoning,
+        correlations,
+        incidentHistory,
+      }),
+    [currentIncident, timeline, reasoning, correlations, incidentHistory],
+  );
+  const canRunReasoning =
+    canonicalEvidence.scope.scope_complete &&
+    ["not_generated", "failed", "completed"].includes(derivedStatus) &&
+    !reasoningBusy;
+  const confidenceDetails = canonicalEvidence.confidence_details;
+  const prioritizedActions = canonicalEvidence.prioritized_actions;
+  const decisionPanel = canonicalEvidence.decision_panel;
+  const signalSummary = canonicalEvidence.signal_summary;
+  const logSummary = canonicalEvidence.log_summary;
+  const impactSummary = canonicalEvidence.impact_summary;
+  const incidentTimeline = canonicalEvidence.incident_timeline;
+  const observabilityGaps = canonicalEvidence.observability_gaps;
+  const trustScore = canonicalEvidence.trust_score;
+  const telemetryAudit = canonicalEvidence.telemetry_audit;
+  const telemetryEvidence = canonicalEvidence.telemetry_evidence;
+  const impactedServices = canonicalEvidence.impacted_services;
+  const scope = canonicalEvidence.scope;
+  const scopedRunbook = canonicalEvidence.runbook;
   const workflowStatus = (currentIncident.workflow_status || "open").toLowerCase();
 
   const refreshIncident = async () => {
@@ -212,10 +227,15 @@ export default function IncidentDetailsPanel({
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-300">Incident Details Panel</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">{currentIncident.service}</h2>
+            <h2 className="mt-2 text-2xl font-semibold text-white">{scope.service || currentIncident.service || "Unknown service"}</h2>
             <p className="mt-1 text-sm text-slate-400">
-              {currentIncident.cluster} / {currentIncident.namespace} / {new Date(currentIncident.timestamp).toLocaleString()}
+              {scope.cluster_label} / {scope.namespace_label} / {new Date(currentIncident.timestamp).toLocaleString()}
             </p>
+            {!scope.scope_complete ? (
+              <p className="mt-2 text-xs text-amber-300">
+                Scope incomplete: {scope.scope_warnings.join(" | ")}
+              </p>
+            ) : null}
           </div>
           <div className="rounded-3xl border border-white/10 bg-slate-950/80 px-4 py-3 text-right">
             <div className="text-xs uppercase tracking-[0.3em] text-slate-400">Anomaly Score</div>
@@ -227,7 +247,7 @@ export default function IncidentDetailsPanel({
           <InfoCard title="Root Cause Service" value={reasoning?.root_cause_service || currentIncident.root_cause_entity || "Pending"} />
           <InfoCard title="Root Cause Signal" value={reasoning?.root_cause_signal || toList(currentIncident.signals).join(", ")} />
           <InfoCard title="Customer Impact" value={reasoning?.customer_impact || reasoning?.impact_assessment || "Pending"} />
-          <InfoCard title="Observability Score" value={`${reasoning?.observability_score ?? coverage.observability_score ?? 0}%`} />
+          <InfoCard title="Observability Score" value={`${canonicalEvidence.observability_score}%`} />
           <InfoCard title="Service Health Score" value={`${formatScore(serviceHealth?.health_score ?? 0)} / 100`} />
           <InfoCard
             title="Root Cause Confidence"
@@ -584,15 +604,15 @@ export default function IncidentDetailsPanel({
         <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <RichSection
             title="Incident Summary"
-            content={`${currentIncident.incident_type || "observed"} incident on ${currentIncident.service} with anomaly score ${anomalyScore}.`}
+            content={canonicalEvidence.incident_summary}
           />
-          <RichSection title="Reasoning Summary" content={reasoning?.root_cause || "Reasoning pending"} />
-          <RichList title="Signals Detected" items={currentIncident.signals || []} />
-          <RichList title="Causal Propagation Chain" items={reasoning?.causal_chain || []} />
+          <RichSection title="Reasoning Summary" content={canonicalEvidence.reasoning_summary} />
+          <RichList title="Signals Detected" items={signalSummary.critical_signals.concat(signalSummary.secondary_signals)} />
+          <RichList title="Causal Propagation Chain" items={canonicalEvidence.causal_chain} />
           <RichList title="Suggested Actions" items={prioritizedActions.map((item) => item.label)} />
-          <RichList title="Propagation Path" items={reasoning?.propagation_path || currentIncident.dependency_chain || []} />
+          <RichList title="Propagation Path" items={canonicalEvidence.propagation_path} />
           <RichList title="Impacted Services" items={impactedServices} />
-          <RichList title="Missing Telemetry Signals" items={reasoning?.missing_telemetry_signals || []} />
+          <RichList title="Missing Telemetry Signals" items={canonicalEvidence.missing_telemetry_signals} />
           <RichList title="Telemetry Evidence" items={telemetryEvidence} />
         </div>
 
@@ -616,10 +636,7 @@ export default function IncidentDetailsPanel({
           />
           <RichList
             title="Runbook Suggestions"
-            items={(Array.isArray(runbooks) ? runbooks : [])
-              .slice(0, 3)
-              .flatMap((runbook) => (Array.isArray(runbook.steps) ? runbook.steps.slice(0, 4) : []))
-            }
+            items={scopedRunbook.incident_steps}
           />
           <RichSection
             title="Observability Coverage Score"
@@ -653,6 +670,14 @@ export default function IncidentDetailsPanel({
             <p className="mt-3 text-xs text-amber-300">
               Reasoning is operating with sparse telemetry. Confidence and recommendations are limited to the available evidence.
             </p>
+          ) : null}
+          {scopedRunbook.related_context_steps.length ? (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900/60 p-3">
+              <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Related Context</p>
+              <ul className="mt-2 space-y-1 text-sm text-slate-300">
+                {scopedRunbook.related_context_steps.map((item) => <li key={item}>- {toText(item)}</li>)}
+              </ul>
+            </div>
           ) : null}
         </div>
       </div>
@@ -831,6 +856,453 @@ function priorityColor(priority) {
     default:
       return "text-slate-400";
   }
+}
+
+function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correlations, incidentHistory }) {
+  const snapshot = incident?.telemetry_snapshot || {};
+  const scope = normalizeIncidentScope(incident);
+  const qualityBySignal = extractQualityBySignal(reasoning, snapshot);
+  const impactedServices = formatImpactedServices(incident?.impacts);
+  const directEvidence = {
+    request_count: Number(snapshot.request_count || 0),
+    log_count: Number(snapshot.log_count || 0),
+    trace_sample_count: Array.isArray(snapshot.trace_ids) ? snapshot.trace_ids.length : 0,
+    error_rate: Number(snapshot.error_rate || 0),
+    p95_latency_ms: Number(snapshot.p95_latency_ms || 0),
+    cpu_utilization: Number(snapshot.cpu_utilization || 0),
+    memory_utilization: Number(snapshot.memory_utilization || 0),
+    metric_highlights: snapshot.metric_highlights && typeof snapshot.metric_highlights === "object" ? snapshot.metric_highlights : {},
+    timeline_event_count: Array.isArray(timeline) ? timeline.length : 0,
+    direct_dependency_nodes: toList(incident?.dependency_chain),
+  };
+
+  const contextualEvidence = {
+    traces_present: qualityBySignal.traces === "present" || qualityBySignal.traces === "sparse",
+    logs_present: qualityBySignal.logs === "present" || qualityBySignal.logs === "sparse",
+    metrics_present: qualityBySignal.metrics !== "missing",
+    database_present: qualityBySignal.database === "present" || qualityBySignal.database === "sparse",
+    messaging_present: qualityBySignal.messaging === "present" || qualityBySignal.messaging === "sparse",
+    exception_present: qualityBySignal.exceptions === "present" || qualityBySignal.exceptions === "sparse",
+    infra_present: qualityBySignal.infra === "present" || qualityBySignal.infra === "sparse",
+    topology_present: qualityBySignal.topology === "present",
+  };
+
+  const directDependencyText = directEvidence.direct_dependency_nodes.join(" ").toLowerCase();
+  const directDatabasePresent = /\bdb:|database\b/.test(directDependencyText);
+  const directMessagingPresent = /\bmessaging:|queue|topic|messag/.test(directDependencyText);
+  const directExceptionPresent = Array.isArray(snapshot.error_logs) && snapshot.error_logs.length > 0;
+
+  const telemetryAudit = {
+    hasChartData: Array.isArray(timeline) && timeline.some((event) => Number.isFinite(Number(event?.value))),
+    isSparse:
+      !scope.scope_complete ||
+      (directEvidence.request_count === 0 &&
+        directEvidence.log_count === 0 &&
+        directEvidence.trace_sample_count === 0 &&
+        Object.keys(directEvidence.metric_highlights).length === 0),
+    evidenceSignals:
+      Number(directEvidence.request_count > 0) +
+      Number(directEvidence.log_count > 0) +
+      Number(directEvidence.trace_sample_count > 0) +
+      Number(Object.keys(directEvidence.metric_highlights).length > 0) +
+      Number(directDatabasePresent || contextualEvidence.database_present) +
+      Number(directMessagingPresent || contextualEvidence.messaging_present),
+    telemetryQuality: qualityBySignal,
+  };
+
+  const missingTelemetrySignals = buildCanonicalMissingTelemetrySignals(scope, directEvidence, contextualEvidence, qualityBySignal);
+  const signalSummary = buildCanonicalSignalSummary(incident, reasoning, missingTelemetrySignals, qualityBySignal);
+  const confidenceDetails = buildCanonicalConfidenceDetails(
+    incident,
+    reasoning,
+    scope,
+    directEvidence,
+    contextualEvidence,
+    qualityBySignal,
+    telemetryAudit,
+  );
+  const observabilityGaps = buildCanonicalObservabilityGaps(scope, missingTelemetrySignals, contextualEvidence);
+  const trustScore = buildCanonicalTrustScore(reasoning, incident, telemetryAudit, observabilityGaps);
+  const prioritizedActions = buildCanonicalPrioritizedActions(incident, reasoning, telemetryAudit, missingTelemetrySignals, scope);
+  const decisionPanel = buildCanonicalDecisionPanel(incident, reasoning, prioritizedActions, telemetryAudit, scope, impactedServices);
+  const logSummary = buildCanonicalLogSummary(incident);
+  const impactSummary = buildCanonicalImpactSummary(incident, reasoning, telemetryAudit, impactedServices, scope);
+  const incidentTimeline = buildCanonicalIncidentTimeline(incident, reasoning);
+  const runbook = buildCanonicalRunbook(scope, prioritizedActions, missingTelemetrySignals, correlations, incidentHistory);
+  const observabilityScore = buildCanonicalObservabilityScore(directEvidence, contextualEvidence, scope, qualityBySignal);
+
+  return {
+    scope,
+    direct_evidence: directEvidence,
+    contextual_evidence: contextualEvidence,
+    telemetry_audit: telemetryAudit,
+    telemetry_evidence: buildCanonicalTelemetryEvidence(scope, directEvidence, contextualEvidence, qualityBySignal),
+    missing_telemetry_signals: missingTelemetrySignals,
+    signal_summary: signalSummary,
+    confidence_details: confidenceDetails,
+    observability_gaps: observabilityGaps,
+    trust_score: trustScore,
+    prioritized_actions: prioritizedActions,
+    decision_panel: decisionPanel,
+    log_summary: logSummary,
+    impact_summary: impactSummary,
+    incident_timeline: incidentTimeline,
+    observability_score: Number.isFinite(observabilityScore) ? observabilityScore.toFixed(2) : "0.00",
+    impacted_services: impactedServices,
+    propagation_path: toList(reasoning?.propagation_path).length ? toList(reasoning?.propagation_path) : toList(incident?.dependency_chain),
+    causal_chain: toList(reasoning?.causal_chain),
+    reasoning_summary: buildCanonicalReasoningSummary(reasoning, scope, telemetryAudit),
+    incident_summary: buildCanonicalIncidentSummary(incident, scope, telemetryAudit),
+    runbook,
+  };
+}
+
+function buildCanonicalObservabilityScore(directEvidence, contextualEvidence, scope, qualityBySignal) {
+  let score = 0;
+  score += directEvidence.request_count > 0 || directEvidence.trace_sample_count > 0 ? 24 : 6;
+  score += directEvidence.log_count > 0 ? 18 : contextualEvidence.logs_present ? 10 : 4;
+  score += qualityBySignal.metrics === "present" ? 18 : qualityBySignal.metrics === "zero" ? 10 : 4;
+  score += contextualEvidence.database_present ? 10 : 4;
+  score += contextualEvidence.messaging_present ? 10 : 4;
+  score += contextualEvidence.exception_present ? 10 : 4;
+  score += contextualEvidence.infra_present ? 5 : 2;
+  score += contextualEvidence.topology_present ? 5 : 2;
+  if (!scope.scope_complete) {
+    score = Math.min(score, 45);
+  }
+  return Math.max(0, Math.min(100, Number(score.toFixed(2))));
+}
+
+function normalizeIncidentScope(incident) {
+  const rawScope = incident?.scope && typeof incident.scope === "object" ? incident.scope : {};
+  const scopeWarnings = toList(rawScope.scope_warnings);
+  return {
+    incident_id: rawScope.incident_id || incident?.incident_id || "",
+    cluster: rawScope.cluster || incident?.cluster || "",
+    namespace: rawScope.namespace || incident?.namespace || "",
+    service: rawScope.service || incident?.service || incident?.root_cause_entity || "",
+    incident_type: rawScope.incident_type || incident?.incident_type || "observed",
+    incident_window_start: rawScope.incident_window_start || incident?.telemetry_snapshot?.incident_window_start || incident?.timestamp || "",
+    incident_window_end: rawScope.incident_window_end || incident?.telemetry_snapshot?.incident_window_end || incident?.timestamp || "",
+    signal_set: Array.isArray(rawScope.signal_set) ? rawScope.signal_set : toList(incident?.signals),
+    anomaly_score: Number(rawScope.anomaly_score ?? incident?.anomaly_score ?? 0),
+    scope_complete: rawScope.scope_complete !== false && scopeWarnings.length === 0,
+    scope_warnings: scopeWarnings,
+    cluster_label: rawScope.cluster || incident?.cluster || "Unknown cluster",
+    namespace_label: rawScope.namespace || incident?.namespace || "Unknown namespace",
+  };
+}
+
+function extractQualityBySignal(reasoning, snapshot) {
+  const summary = reasoning?.observability_summary || {};
+  const raw = summary.quality_by_signal;
+  if (raw && typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {
+      // ignore parse failure
+    }
+  }
+  if (snapshot?.telemetry_quality && typeof snapshot.telemetry_quality === "object") {
+    return snapshot.telemetry_quality;
+  }
+  return {};
+}
+
+function buildCanonicalTelemetryEvidence(scope, directEvidence, contextualEvidence, qualityBySignal) {
+  const lines = [
+    `Selected incident scope: ${scope.service || "Unknown service"} / ${scope.namespace_label} / ${scope.cluster_label}`,
+    `Incident window: ${formatTimestamp(scope.incident_window_start)} to ${formatTimestamp(scope.incident_window_end)}`,
+    `Incident-scoped requests: ${directEvidence.request_count}`,
+    `Incident-scoped logs: ${directEvidence.log_count}`,
+    `Incident-scoped trace samples: ${directEvidence.trace_sample_count}`,
+  ];
+  if (Number.isFinite(directEvidence.error_rate)) {
+    lines.push(`Incident-scoped error rate: ${directEvidence.error_rate.toFixed(4)}`);
+  }
+  if (Number.isFinite(directEvidence.p95_latency_ms)) {
+    lines.push(`Incident-scoped p95 latency: ${directEvidence.p95_latency_ms.toFixed(2)} ms`);
+  }
+  Object.entries(qualityBySignal).forEach(([signal, status]) => {
+    lines.push(`${signal} evidence quality: ${status}`);
+  });
+  if (contextualEvidence.database_present) {
+    lines.push("Contextual database evidence is present in the scoped service window.");
+  }
+  if (contextualEvidence.messaging_present) {
+    lines.push("Contextual messaging evidence is present in the scoped service window.");
+  }
+  if (contextualEvidence.topology_present) {
+    lines.push("Contextual dependency topology is available for this incident scope.");
+  }
+  return lines;
+}
+
+function buildCanonicalMissingTelemetrySignals(scope, directEvidence, contextualEvidence, qualityBySignal) {
+  const missing = [];
+  if (!scope.scope_complete) {
+    missing.push(`Incident scope is incomplete: ${scope.scope_warnings.join(", ")}`);
+  }
+  if (directEvidence.request_count === 0 && directEvidence.trace_sample_count === 0) {
+    missing.push(
+      contextualEvidence.traces_present
+        ? "No incident-scoped traces were attached; only broader scoped trace context is available."
+        : "No incident-scoped traces were found.",
+    );
+  }
+  if (directEvidence.log_count === 0) {
+    missing.push(
+      contextualEvidence.logs_present
+        ? "No incident-scoped logs were attached; only broader scoped log context is available."
+        : "No incident-scoped logs were found.",
+    );
+  }
+  if (qualityBySignal.metrics === "missing") {
+    missing.push("No incident-scoped service metrics were found.");
+  } else if (qualityBySignal.metrics === "zero") {
+    missing.push("Service metrics are present but zero across the incident window.");
+  }
+  if (!contextualEvidence.exception_present) {
+    missing.push("No exception evidence was found for the selected incident scope.");
+  }
+  if (!contextualEvidence.infra_present) {
+    missing.push("No runtime host/container evidence was correlated for the selected incident scope.");
+  }
+  return Array.from(new Set(missing));
+}
+
+function buildCanonicalSignalSummary(incident, reasoning, missingTelemetrySignals, qualityBySignal) {
+  const critical = [];
+  const secondary = [];
+  const missing = [...missingTelemetrySignals];
+  const combined = Array.from(new Set([...toList(incident?.signals), ...toList(reasoning?.correlated_signals)]));
+  combined.forEach((signal) => {
+    const normalized = signal.toLowerCase();
+    if (/(latency|error|timeout|availability|saturation|exception)/.test(normalized)) {
+      critical.push(signal);
+    } else {
+      secondary.push(signal);
+    }
+  });
+  if (qualityBySignal.database === "present" || qualityBySignal.database === "sparse") {
+    secondary.push("database dependency evidence");
+  }
+  if (qualityBySignal.messaging === "present" || qualityBySignal.messaging === "sparse") {
+    secondary.push("messaging dependency evidence");
+  }
+  return {
+    critical_signals: Array.from(new Set(critical)).slice(0, 6),
+    secondary_signals: Array.from(new Set(secondary)).slice(0, 6),
+    missing_signals: Array.from(new Set(missing)).slice(0, 6),
+  };
+}
+
+function buildCanonicalConfidenceDetails(incident, reasoning, scope, directEvidence, contextualEvidence, qualityBySignal, telemetryAudit) {
+  const score = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0);
+  const supporting = [];
+  const weakening = [];
+  if (directEvidence.request_count > 0 || directEvidence.trace_sample_count > 0) {
+    supporting.push(`Incident-scoped trace/request evidence is present (${directEvidence.request_count} requests, ${directEvidence.trace_sample_count} sampled traces).`);
+  } else if (contextualEvidence.traces_present) {
+    supporting.push("Broader scoped trace evidence is present, but it is contextual rather than direct incident evidence.");
+  } else {
+    weakening.push("No trace evidence was found for the selected incident scope.");
+  }
+  if (directEvidence.log_count > 0) {
+    supporting.push(`Incident-scoped logs are present (${directEvidence.log_count} events).`);
+  } else if (contextualEvidence.logs_present) {
+    supporting.push("Broader scoped log evidence is present, but not directly attached to the selected incident snapshot.");
+  } else {
+    weakening.push("No logs were found for the selected incident scope.");
+  }
+  if (contextualEvidence.database_present) {
+    supporting.push(
+      directEvidence.direct_dependency_nodes.some((item) => /db:|database/i.test(item))
+        ? "Database evidence is directly attached to the selected incident."
+        : "Database evidence is available as contextual service-window evidence.",
+    );
+  }
+  if (contextualEvidence.messaging_present) {
+    supporting.push(
+      directEvidence.direct_dependency_nodes.some((item) => /messaging:|queue|topic/i.test(item))
+        ? "Messaging evidence is directly attached to the selected incident."
+        : "Messaging evidence is available as contextual service-window evidence.",
+    );
+  }
+  if (!scope.scope_complete) {
+    weakening.push(`Incident scope is incomplete: ${scope.scope_warnings.join(", ")}.`);
+  }
+  if (qualityBySignal.metrics === "zero") {
+    weakening.push("Metric values are present but zero across the selected incident window.");
+  }
+  if (telemetryAudit.isSparse) {
+    weakening.push("Direct incident telemetry is sparse, so the RCA remains low-confidence.");
+  }
+  const level = score >= 0.75 ? "high" : score >= 0.45 ? "medium" : "low";
+  const explanationText = telemetryAudit.isSparse
+    ? "Confidence is limited because the selected incident has sparse direct telemetry. Contextual topology, database, or messaging evidence is called out separately when present."
+    : "Confidence is based on the selected incident scope first, with broader scoped evidence labeled separately as contextual support.";
+  return {
+    score,
+    level,
+    explanation_text: explanationText,
+    supporting_factors: Array.from(new Set(supporting)),
+    weakening_factors: Array.from(new Set(weakening)),
+  };
+}
+
+function buildCanonicalObservabilityGaps(scope, missingTelemetrySignals, contextualEvidence) {
+  const criticalMissing = missingTelemetrySignals.filter((signal) => /trace|log|metric|exception|scope|runtime/i.test(signal));
+  const recommendations = [];
+  if (criticalMissing.some((item) => /trace/i.test(item))) {
+    recommendations.push(`Ensure the selected incident scope for ${scope.service || "service"} includes direct trace correlation.`);
+  }
+  if (criticalMissing.some((item) => /log/i.test(item))) {
+    recommendations.push(`Ensure structured logs are available for ${scope.service || "service"} within the selected incident window.`);
+  }
+  if (criticalMissing.some((item) => /metric/i.test(item))) {
+    recommendations.push(`Ensure service metrics are queryable for ${scope.service || "service"} within the selected incident window.`);
+  }
+  if (criticalMissing.some((item) => /exception/i.test(item))) {
+    recommendations.push("Capture exception evidence for the selected incident scope.");
+  }
+  if (!contextualEvidence.topology_present) {
+    recommendations.push("Dependency topology is unavailable for this scope, so propagation analysis is limited.");
+  }
+  return {
+    missing_critical_signals: criticalMissing,
+    impact_on_confidence: criticalMissing.length
+      ? "Confidence is reduced because selected-incident evidence is incomplete or only partially direct."
+      : "Selected-incident telemetry coverage is internally consistent.",
+    recommended_instrumentation_steps: recommendations.slice(0, 4),
+    summary: criticalMissing.length
+      ? "Improve missing selected-incident evidence before making stronger RCA claims."
+      : "No critical observability gap is blocking selected-incident diagnosis.",
+  };
+}
+
+function buildCanonicalTrustScore(reasoning, incident, telemetryAudit, observabilityGaps) {
+  let score = Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.2);
+  score -= Math.min(0.25, observabilityGaps.missing_critical_signals.length * 0.05);
+  if (telemetryAudit.isSparse) score -= 0.15;
+  score = Math.max(0, Math.min(1, score));
+  const level = score >= 0.75 ? "high" : score >= 0.45 ? "medium" : "low";
+  return {
+    score,
+    level,
+    summary: telemetryAudit.isSparse
+      ? "Trust is limited because the selected incident has sparse direct telemetry and relies on contextual evidence."
+      : `Trust is ${level} because panels are now grounded on a single selected-incident evidence contract.`,
+  };
+}
+
+function buildCanonicalPrioritizedActions(incident, reasoning, telemetryAudit, missingTelemetrySignals, scope) {
+  const rawActions = [
+    ...toList(reasoning?.recommended_actions),
+    ...toList(incident?.remediation_suggestions),
+  ];
+  const fallback = [
+    `Validate selected incident scope for ${scope.service || "service"} before remediation.`,
+    telemetryAudit.isSparse
+      ? `Collect direct incident telemetry for ${scope.service || "service"} before making strong remediation changes.`
+      : `Inspect the strongest anomaly signals for ${scope.service || "service"} within the selected incident window.`,
+  ];
+  if (missingTelemetrySignals.length) {
+    fallback.push(`Close the biggest evidence gaps: ${missingTelemetrySignals.slice(0, 2).join(" | ")}`);
+  }
+  const unique = Array.from(new Set((rawActions.length ? rawActions : fallback).map((item) => toText(item)).filter(Boolean)));
+  const items = unique.map((action) =>
+    classifyAction(action, Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0.2), reasoning, incident),
+  );
+  items.sort((a, b) => {
+    const priorityOrder = { high: 0, medium: 1, low: 2 };
+    const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+    if (priorityDiff !== 0) return priorityDiff;
+    return b.confidence - a.confidence;
+  });
+  return items;
+}
+
+function buildCanonicalDecisionPanel(incident, reasoning, prioritizedActions, telemetryAudit, scope, impactedServices) {
+  return {
+    root_cause: reasoning?.root_cause_service || reasoning?.root_cause || incident?.root_cause_entity || "Pending",
+    impact_summary: telemetryAudit.isSparse
+      ? "Direct selected-incident telemetry is sparse, so impact is partly inferred and labeled cautiously."
+      : impactedServices.length
+      ? `Impact is currently evidence-backed for ${impactedServices.length} impacted services.`
+      : `Impact is currently centered on ${scope.service || "the selected service"}.`,
+    confidence_score: Number(reasoning?.confidence_score ?? incident?.predictive_confidence ?? 0),
+    immediate_action: prioritizedActions[0]?.label || "Review selected incident evidence before acting.",
+    next_actions: prioritizedActions.slice(1, 4).map((item) => item.label),
+    investigation_steps: prioritizedActions.slice(0, 5).map((item) => item.label),
+  };
+}
+
+function buildCanonicalLogSummary(incident) {
+  return buildLogSummary(incident);
+}
+
+function buildCanonicalImpactSummary(incident, reasoning, telemetryAudit, impactedServices, scope) {
+  return {
+    primary_service: reasoning?.root_cause_service || incident?.root_cause_entity || scope.service || "service",
+    secondary_services: impactedServices,
+    summary_text: telemetryAudit.isSparse
+      ? `Impact for ${scope.service || "this service"} is still uncertain because the selected incident has sparse direct evidence.`
+      : reasoning?.impact_assessment || `Impact appears centered on ${scope.service || "the selected service"}.`,
+    estimated_user_impact: reasoning?.customer_impact || "User impact is scoped to the selected incident only.",
+    severity_label: String(incident?.severity || "unknown").toUpperCase(),
+  };
+}
+
+function buildCanonicalIncidentTimeline(incident, reasoning) {
+  return buildIncidentTimeline(incident, reasoning);
+}
+
+function buildCanonicalRunbook(scope, prioritizedActions, missingTelemetrySignals, correlations, incidentHistory) {
+  const incidentSteps = Array.from(new Set([
+    `Validate the selected incident scope for ${scope.service || "service"} in ${scope.namespace_label} on ${scope.cluster_label}.`,
+    ...prioritizedActions.slice(0, 4).map((item) => item.label),
+    ...missingTelemetrySignals
+      .filter((item) => /trace|log|metric|scope|exception/i.test(item))
+      .slice(0, 2)
+      .map((item) => `Address evidence gap: ${item}`),
+  ])).slice(0, 6);
+  const relatedContextSteps = [];
+  if (Array.isArray(correlations) && correlations.length) {
+    relatedContextSteps.push(`Related incidents exist (${correlations.length}); review them separately before broadening the RCA.`);
+  }
+  if (Array.isArray(incidentHistory) && incidentHistory.length) {
+    relatedContextSteps.push(`Historical incidents exist for ${scope.service || "this service"}; use them only as supporting context, not direct evidence.`);
+  }
+  return {
+    incident_steps: incidentSteps,
+    related_context_steps: relatedContextSteps,
+  };
+}
+
+function buildCanonicalReasoningSummary(reasoning, scope, telemetryAudit) {
+  if (!scope.scope_complete) {
+    return "Selected-incident RCA is limited because the incident scope is incomplete.";
+  }
+  if (reasoning?.root_cause) {
+    return toText(reasoning.root_cause);
+  }
+  if (telemetryAudit.isSparse) {
+    return "Selected incident has sparse direct telemetry, so RCA remains low-confidence.";
+  }
+  return "Reasoning pending.";
+}
+
+function buildCanonicalIncidentSummary(incident, scope, telemetryAudit) {
+  const base = `${scope.incident_type || "observed"} incident on ${scope.service || "unknown service"} with anomaly score ${formatScore(scope.anomaly_score)}.`;
+  if (!scope.scope_complete) {
+    return `${base} Scope is incomplete, so only scoped evidence that can be verified is shown.`;
+  }
+  if (telemetryAudit.isSparse) {
+    return `${base} Direct incident telemetry is sparse and contextual evidence is labeled separately.`;
+  }
+  return `${base} Panels below use the same selected-incident evidence model.`;
 }
 
 function buildDecisionPanel(incident, reasoning, prioritizedActions) {

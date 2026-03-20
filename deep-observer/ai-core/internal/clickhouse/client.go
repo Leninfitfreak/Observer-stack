@@ -50,6 +50,8 @@ type ServiceSelection struct {
 type Snapshot struct {
 	Filters              Filters            `json:"filters"`
 	ObservedAt           time.Time          `json:"observed_at"`
+	IncidentWindowStart  *time.Time         `json:"incident_window_start,omitempty"`
+	IncidentWindowEnd    *time.Time         `json:"incident_window_end,omitempty"`
 	RequestCount         int64              `json:"request_count"`
 	ErrorCount           int64              `json:"error_count"`
 	ErrorRate            float64            `json:"error_rate"`
@@ -66,6 +68,14 @@ type Snapshot struct {
 	TraceIDs             []string           `json:"trace_ids"`
 	MetricHighlights     map[string]float64 `json:"metric_highlights"`
 	TelemetryQuality     map[string]string  `json:"telemetry_quality"`
+	ForecastHorizonMinutes int              `json:"forecast_horizon_minutes"`
+	PredictedLatencyMs   float64            `json:"predicted_latency_ms"`
+	PredictedErrorRate   float64            `json:"predicted_error_rate"`
+	RecentLatencySeries  []float64          `json:"recent_latency_series"`
+	RecentErrorSeries    []float64          `json:"recent_error_series"`
+	Model                string             `json:"model"`
+	ScopeComplete        bool               `json:"scope_complete"`
+	ScopeWarnings        []string           `json:"scope_warnings"`
 }
 
 func NewClient(ctx context.Context, cfg config.ClickHouseConfig) (*Client, error) {
