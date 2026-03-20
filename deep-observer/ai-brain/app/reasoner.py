@@ -67,7 +67,14 @@ def _compact_context(context: TelemetryContext) -> dict:
     edges = context.topology.get("edges", [])[:8]
     timeline = context.timeline[:8]
     detector_snapshot = context.metrics_summary.get("detector_snapshot", {})
+    db_dependencies = context.db_summary.get("dependencies", [])[:6]
+    messaging_flows = context.messaging_summary.get("flows", [])[:8]
     return {
+        "scope": {
+            "service": context.service_context.get("service", ""),
+            "namespace": context.namespace_context.get("namespace", ""),
+            "cluster": context.cluster_context.get("cluster", ""),
+        },
         "metrics_summary": {
             "highlights": context.metrics_summary.get("highlights", {}),
             "detector_snapshot": {
@@ -83,8 +90,34 @@ def _compact_context(context: TelemetryContext) -> dict:
         "logs_summary": {
             "log_count": context.logs_summary.get("log_count", 0),
             "context_log_count": context.logs_summary.get("context_log_count", 0),
+            "examples": context.logs_summary.get("examples", [])[:5],
         },
         "trace_summary": context.trace_summary,
+        "database_evidence": {
+            "systems": context.db_summary.get("systems", []),
+            "total_calls": context.db_summary.get("total_calls", 0),
+            "dependencies": db_dependencies,
+            "query_examples": context.db_summary.get("query_examples", [])[:3],
+        },
+        "messaging_evidence": {
+            "systems": context.messaging_summary.get("systems", []),
+            "destinations": context.messaging_summary.get("destinations", []),
+            "total_calls": context.messaging_summary.get("total_calls", 0),
+            "flows": messaging_flows,
+        },
+        "exception_evidence": {
+            "exception_count": context.exception_summary.get("exception_count", 0),
+            "error_span_count": context.exception_summary.get("error_span_count", 0),
+            "types": context.exception_summary.get("types", []),
+            "examples": context.exception_summary.get("examples", [])[:5],
+        },
+        "infra_evidence": {
+            "pods": context.infra_summary.get("pods", []),
+            "containers": context.infra_summary.get("containers", []),
+            "nodes": context.infra_summary.get("nodes", []),
+            "hosts": context.infra_summary.get("hosts", []),
+            "environments": context.infra_summary.get("environments", []),
+        },
         "service_context": context.service_context,
         "namespace_context": context.namespace_context,
         "cluster_context": context.cluster_context,
@@ -110,6 +143,10 @@ def _compact_context(context: TelemetryContext) -> dict:
             for event in timeline
         ],
         "telemetry_coverage": context.telemetry_coverage,
+        "uncertainty": {
+            "missing_signals": _as_string_list(context.telemetry_coverage.get("missing_signals", [])),
+            "quality_by_signal": _quality_by_signal(context),
+        },
         "deployment_correlation": {
             "events": [
                 {
@@ -171,6 +208,10 @@ def _reasoning_layers(incident: dict, context: TelemetryContext) -> dict:
         "cluster": cluster,
         "telemetry_coverage": context.telemetry_coverage,
         "recent_deployments": context.deployment_correlation.get("events", [])[:5],
+        "database_evidence": context.db_summary,
+        "messaging_evidence": context.messaging_summary,
+        "exception_evidence": context.exception_summary,
+        "infra_evidence": context.infra_summary,
     }
     return {
         "service_reasoning_worker": service_worker,
@@ -189,11 +230,13 @@ def build_prompt(incident: dict, context: TelemetryContext, historical_matches: 
     }
     return (
         "You are Deep Observer, an AIOps root cause analysis engine. "
-        "Use the provided metrics, logs, traces, topology, telemetry coverage, deployment evidence, and historical incidents "
+        "Use the provided structured scope, metrics, logs, traces, database evidence, messaging evidence, exception evidence, infra evidence, topology, telemetry coverage, deployment evidence, and historical incidents "
         "to determine the most probable root cause service and signal. "
         "Set root_cause_service to an actual service name from incident.service or topology.nodes, never to a span/operation name. "
+        "Treat database, messaging, exception, and topology relationships as direct evidence only when they are explicitly present in the payload. "
         "Do not claim a specific infrastructure bottleneck or root cause unless the provided telemetry explicitly supports it. "
         "If telemetry is sparse or missing, say that root cause is insufficiently supported and keep confidence low. "
+        "Clearly separate proven evidence from suspected correlation, and lower confidence when important evidence is absent. "
         "Apply causal scoring using dependency weight, temporal ordering, and signal strength. "
         "Correlate related anomalies into a single problem narrative with blast radius. "
         "Correlate anomalies into a single problem, describe the propagation path, customer impact, missing telemetry, "
@@ -342,6 +385,19 @@ def _observed_metric_names(context: TelemetryContext) -> list[str]:
     return [str(name).lower() for name in highlights.keys()]
 
 
+def _quality_by_signal(context: TelemetryContext) -> dict:
+    raw = context.telemetry_coverage.get("quality_by_signal", {})
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
 def _telemetry_presence(incident: dict, context: TelemetryContext) -> dict:
     snapshot = incident.get("telemetry_snapshot", {}) or {}
     request_count = float(snapshot.get("request_count", 0) or 0)
@@ -357,6 +413,10 @@ def _telemetry_presence(incident: dict, context: TelemetryContext) -> dict:
     topology_edges = len(context.topology.get("edges", []) or [])
     timeline_events = len(context.timeline or [])
     detector_signals = len(_as_string_list(incident.get("detector_signals", [])))
+    db_dependency_count = len(context.db_summary.get("dependencies", []) or [])
+    messaging_flow_count = len(context.messaging_summary.get("flows", []) or [])
+    exception_count = int(context.exception_summary.get("exception_count", 0) or 0) + int(context.exception_summary.get("error_span_count", 0) or 0)
+    infra_entity_count = sum(len(context.infra_summary.get(key, []) or []) for key in ("pods", "containers", "nodes", "hosts"))
     strong_signals = 0
     if error_rate > 0:
         strong_signals += 1
@@ -376,6 +436,14 @@ def _telemetry_presence(incident: dict, context: TelemetryContext) -> dict:
         strong_signals += 1
     if timeline_events > 0:
         strong_signals += 1
+    if db_dependency_count > 0:
+        strong_signals += 1
+    if messaging_flow_count > 0:
+        strong_signals += 1
+    if exception_count > 0:
+        strong_signals += 1
+    if infra_entity_count > 0:
+        strong_signals += 1
     return {
         "request_count": request_count,
         "error_rate": error_rate,
@@ -390,6 +458,10 @@ def _telemetry_presence(incident: dict, context: TelemetryContext) -> dict:
         "topology_edges": topology_edges,
         "timeline_events": timeline_events,
         "detector_signals": detector_signals,
+        "db_dependency_count": db_dependency_count,
+        "messaging_flow_count": messaging_flow_count,
+        "exception_count": exception_count,
+        "infra_entity_count": infra_entity_count,
         "strong_signals": strong_signals,
     }
 
@@ -421,7 +493,7 @@ def _insufficient_telemetry(incident: dict, context: TelemetryContext) -> bool:
 def _missing_telemetry(context: TelemetryContext, incident: dict) -> list[str]:
     missing = _as_string_list(context.telemetry_coverage.get("missing_signals", []))
     presence = _telemetry_presence(incident, context)
-    quality = context.telemetry_coverage.get("quality_by_signal", {}) or {}
+    quality = _quality_by_signal(context)
     if presence["trace_count"] == 0:
         missing.append("No distributed tracing captured for this incident window")
     if presence["log_count"] == 0:
@@ -430,6 +502,14 @@ def _missing_telemetry(context: TelemetryContext, incident: dict) -> list[str]:
         missing.append("Metrics are present, but their values are zero across the incident window")
     elif not presence["metric_names"] and presence["cpu_utilization"] == 0 and presence["memory_utilization"] == 0:
         missing.append("No service-level metrics captured for this incident window")
+    if presence["db_dependency_count"] == 0:
+        missing.append("No database dependency evidence captured for this incident window")
+    if presence["messaging_flow_count"] == 0:
+        missing.append("No messaging dependency evidence captured for this incident window")
+    if presence["exception_count"] == 0:
+        missing.append("No exception evidence captured for this incident window")
+    if presence["infra_entity_count"] == 0:
+        missing.append("No runtime host/container evidence captured for this incident window")
     if presence["request_count"] == 0 and presence["trace_count"] == 0:
         missing.append("No request activity was observed for this incident scope")
     return dedupe_list([item for item in missing if item])
@@ -452,11 +532,19 @@ def _evidence_score(incident: dict, context: TelemetryContext) -> float:
         score += 0.1
     if presence["timeline_events"] > 0:
         score += 0.1
+    if presence["db_dependency_count"] > 0:
+        score += 0.08
+    if presence["messaging_flow_count"] > 0:
+        score += 0.08
+    if presence["exception_count"] > 0:
+        score += 0.06
+    if presence["infra_entity_count"] > 0:
+        score += 0.05
     if presence["detector_signals"] > 0:
         score += min(0.15, presence["detector_signals"] * 0.05)
     if presence["context_log_count"] > 0:
         score += 0.05
-    quality = context.telemetry_coverage.get("quality_by_signal", {}) or {}
+    quality = _quality_by_signal(context)
     degraded_signals = sum(1 for value in quality.values() if value in {"missing", "sparse", "stale", "zero", "contradictory"})
     if degraded_signals > 0:
         score -= min(0.2, degraded_signals * 0.08)
@@ -634,6 +722,12 @@ def build_confidence_explanation(incident: dict, context: TelemetryContext, reas
         supporting_factors.append(f"Trace evidence present ({presence['trace_count']} requests)")
     if presence["log_count"] > 0:
         supporting_factors.append(f"Incident-scoped logs present ({presence['log_count']} events)")
+    if presence["db_dependency_count"] > 0:
+        supporting_factors.append(f"Database evidence present ({presence['db_dependency_count']} dependencies)")
+    if presence["messaging_flow_count"] > 0:
+        supporting_factors.append(f"Messaging evidence present ({presence['messaging_flow_count']} flows)")
+    if presence["exception_count"] > 0:
+        supporting_factors.append(f"Exception evidence present ({presence['exception_count']} signals)")
 
     weakening_factors = []
     missing = _as_string_list(reasoning.get("missing_telemetry_signals", []))
@@ -644,7 +738,7 @@ def build_confidence_explanation(incident: dict, context: TelemetryContext, reas
         weakening_factors.append("Observability coverage is below 50%")
     if presence["trace_count"] == 0:
         weakening_factors.append("Trace coverage is limited for this incident")
-    if (context.telemetry_coverage.get("quality_by_signal", {}) or {}).get("metrics") == "zero":
+    if _quality_by_signal(context).get("metrics") == "zero":
         weakening_factors.append("Metrics exist but remain at zero values for this incident window")
     if _insufficient_telemetry(incident, context):
         weakening_factors.append("Telemetry volume is too sparse to support a specific root cause")

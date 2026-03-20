@@ -18,7 +18,9 @@ const (
 	metricsTable = "signoz_metrics.distributed_time_series_v4"
 	samplesTable = "signoz_metrics.distributed_samples_v4"
 	logsTable    = "signoz_logs.distributed_logs_v2"
+	logsResTable = "signoz_logs.distributed_logs_v2_resource"
 	tracesTable  = "signoz_traces.distributed_signoz_index_v3"
+	tracesResTable = "signoz_traces.distributed_traces_v3_resource"
 )
 
 type Client struct {
@@ -409,6 +411,7 @@ func sanitizeSnapshot(snapshot *Snapshot) {
 }
 
 func traceWhere(filters Filters) string {
+	resourceFilter := traceResourceFilter(filters)
 	parts := []string{
 		fmt.Sprintf("timestamp >= toDateTime64(%d / 1000.0, 3)", filters.Start.UnixMilli()),
 		fmt.Sprintf("timestamp < toDateTime64(%d / 1000.0, 3)", filters.End.UnixMilli()),
@@ -420,16 +423,20 @@ func traceWhere(filters Filters) string {
 	if filters.Service != "" {
 		parts = append(parts, fmt.Sprintf("replaceRegexpOne(replaceRegexpOne(lowerUTF8(coalesce(nullIf(serviceName, ''), nullIf(resources_string['service.name'], ''), nullIf(resources_string['k8s.service.name'], ''), nullIf(resources_string['k8s.deployment.name'], ''))), '-[a-f0-9]{8,10}-[a-z0-9]{5}$', ''), '-[a-f0-9]{8,10}$', '') = '%s'", escape(canonicalizeServiceName(filters.Service))))
 	}
-	if filters.Namespace != "" {
+	if filters.Namespace != "" && resourceFilter == "" {
 		parts = append(parts, fmt.Sprintf("resources_string['k8s.namespace.name'] = '%s'", escape(filters.Namespace)))
 	}
-	if filters.Cluster != "" {
+	if filters.Cluster != "" && resourceFilter == "" {
 		parts = append(parts, fmt.Sprintf("resources_string['k8s.cluster.name'] = '%s'", escape(filters.Cluster)))
+	}
+	if resourceFilter != "" {
+		parts = append(parts, resourceFilter)
 	}
 	return strings.Join(parts, " AND ")
 }
 
 func logWhere(filters Filters) string {
+	resourceFilter := logResourceFilter(filters)
 	parts := []string{
 		fmt.Sprintf("timestamp >= %d", filters.Start.UnixNano()),
 		fmt.Sprintf("timestamp < %d", filters.End.UnixNano()),
@@ -437,13 +444,66 @@ func logWhere(filters Filters) string {
 	if filters.Service != "" {
 		parts = append(parts, fmt.Sprintf("replaceRegexpOne(replaceRegexpOne(lowerUTF8(coalesce(nullIf(resources_string['service.name'], ''), nullIf(resources_string['k8s.service.name'], ''), nullIf(resources_string['k8s.deployment.name'], ''))), '-[a-f0-9]{8,10}-[a-z0-9]{5}$', ''), '-[a-f0-9]{8,10}$', '') = '%s'", escape(canonicalizeServiceName(filters.Service))))
 	}
-	if filters.Namespace != "" {
+	if filters.Namespace != "" && resourceFilter == "" {
 		parts = append(parts, fmt.Sprintf("resources_string['k8s.namespace.name'] = '%s'", escape(filters.Namespace)))
 	}
-	if filters.Cluster != "" {
+	if filters.Cluster != "" && resourceFilter == "" {
 		parts = append(parts, fmt.Sprintf("resources_string['k8s.cluster.name'] = '%s'", escape(filters.Cluster)))
 	}
+	if resourceFilter != "" {
+		parts = append(parts, resourceFilter)
+	}
 	return strings.Join(parts, " AND ")
+}
+
+func traceResourceFilter(filters Filters) string {
+	subQuery := resourceFingerprintSubquery(tracesResTable, filters)
+	if subQuery == "" {
+		return ""
+	}
+	return fmt.Sprintf("resource_fingerprint GLOBAL IN (%s)", subQuery)
+}
+
+func logResourceFilter(filters Filters) string {
+	subQuery := resourceFingerprintSubquery(logsResTable, filters)
+	if subQuery == "" {
+		return ""
+	}
+	return fmt.Sprintf("resource_fingerprint GLOBAL IN (%s)", subQuery)
+}
+
+func resourceFingerprintSubquery(table string, filters Filters) string {
+	if strings.TrimSpace(filters.Service) == "" && strings.TrimSpace(filters.Namespace) == "" && strings.TrimSpace(filters.Cluster) == "" {
+		return ""
+	}
+	parts := []string{
+		fmt.Sprintf("seen_at_ts_bucket_start >= %d", filters.Start.Unix()),
+		fmt.Sprintf("seen_at_ts_bucket_start <= %d", filters.End.Unix()),
+	}
+	if strings.TrimSpace(filters.Service) != "" {
+		service := escape(canonicalizeServiceName(filters.Service))
+		parts = append(parts, fmt.Sprintf(
+			"((simpleJSONExtractString(labels, 'service.name') = '%[1]s' AND labels LIKE '%%\\\"service.name\\\":\\\"%[1]s%%') OR "+
+				"(simpleJSONExtractString(labels, 'k8s.service.name') = '%[1]s' AND labels LIKE '%%\\\"k8s.service.name\\\":\\\"%[1]s%%') OR "+
+				"(simpleJSONExtractString(labels, 'k8s.deployment.name') = '%[1]s' AND labels LIKE '%%\\\"k8s.deployment.name\\\":\\\"%[1]s%%'))",
+			service,
+		))
+	}
+	if strings.TrimSpace(filters.Namespace) != "" {
+		namespace := escape(filters.Namespace)
+		parts = append(parts, fmt.Sprintf(
+			"(simpleJSONExtractString(labels, 'k8s.namespace.name') = '%[1]s' AND labels LIKE '%%\\\"k8s.namespace.name\\\":\\\"%[1]s%%')",
+			namespace,
+		))
+	}
+	if strings.TrimSpace(filters.Cluster) != "" {
+		cluster := escape(filters.Cluster)
+		parts = append(parts, fmt.Sprintf(
+			"(simpleJSONExtractString(labels, 'k8s.cluster.name') = '%[1]s' AND labels LIKE '%%\\\"k8s.cluster.name\\\":\\\"%[1]s%%')",
+			cluster,
+		))
+	}
+	return fmt.Sprintf("SELECT fingerprint FROM %s WHERE %s", table, strings.Join(parts, " AND "))
 }
 
 func matchMapExpr(column, key, value string) string {

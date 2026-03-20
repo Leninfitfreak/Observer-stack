@@ -509,6 +509,7 @@ func classifyNodeType(id string) string {
 }
 
 func traceWhereWithAlias(alias string, filters Filters) string {
+	resourceFilter := traceResourceFilterWithAlias(alias, filters)
 	parts := []string{
 		fmt.Sprintf("%s.timestamp >= toDateTime64(%d / 1000.0, 3)", alias, filters.Start.UnixMilli()),
 		fmt.Sprintf("%s.timestamp < toDateTime64(%d / 1000.0, 3)", alias, filters.End.UnixMilli()),
@@ -520,11 +521,22 @@ func traceWhereWithAlias(alias string, filters Filters) string {
 	if filters.Service != "" {
 		parts = append(parts, fmt.Sprintf("replaceRegexpOne(replaceRegexpOne(lowerUTF8(coalesce(nullIf(%s.serviceName, ''), nullIf(%s.resources_string['service.name'], ''), nullIf(%s.resources_string['k8s.service.name'], ''), nullIf(%s.resources_string['k8s.deployment.name'], ''))), '-[a-f0-9]{8,10}-[a-z0-9]{5}$', ''), '-[a-f0-9]{8,10}$', '') = '%s'", alias, alias, alias, alias, escape(canonicalizeServiceName(filters.Service))))
 	}
-	if filters.Namespace != "" {
+	if filters.Namespace != "" && resourceFilter == "" {
 		parts = append(parts, fmt.Sprintf("%s.resources_string['k8s.namespace.name'] = '%s'", alias, escape(filters.Namespace)))
 	}
-	if filters.Cluster != "" {
+	if filters.Cluster != "" && resourceFilter == "" {
 		parts = append(parts, fmt.Sprintf("%s.resources_string['k8s.cluster.name'] = '%s'", alias, escape(filters.Cluster)))
 	}
+	if resourceFilter != "" {
+		parts = append(parts, resourceFilter)
+	}
 	return strings.Join(parts, " AND ")
+}
+
+func traceResourceFilterWithAlias(alias string, filters Filters) string {
+	subQuery := resourceFingerprintSubquery(tracesResTable, filters)
+	if subQuery == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s.resource_fingerprint GLOBAL IN (%s)", alias, subQuery)
 }
