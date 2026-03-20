@@ -51,6 +51,9 @@ func (c *Client) BuildTopology(ctx context.Context, filters Filters) (TopologyGr
 		Edges:       []TopologyEdge{},
 	}
 
+	topologyScope := filters
+	topologyScope.Service = ""
+
 	nodeRows, err := c.conn.Query(ctx, fmt.Sprintf(`
 		SELECT
 			coalesce(
@@ -69,7 +72,7 @@ func (c *Client) BuildTopology(ctx context.Context, filters Filters) (TopologyGr
 		HAVING service != ''
 		ORDER BY request_count DESC
 		LIMIT 50
-	`, tracesTable, traceWhere(filters)))
+	`, tracesTable, traceWhere(topologyScope)))
 	if err != nil {
 		return graph, err
 	}
@@ -93,68 +96,18 @@ func (c *Client) BuildTopology(ctx context.Context, filters Filters) (TopologyGr
 		return graph, err
 	}
 
-	edgeRows, err := c.conn.Query(ctx, fmt.Sprintf(`
-		SELECT
-			parent.source_service AS source,
-			child.target_service AS target,
-			if(max(length(child.rpc_system)) > 0 OR max(length(parent.rpc_system)) > 0, 'trace_rpc', 'trace_http') AS dependency_type,
-			toInt64(count()) AS call_count,
-			avg(child.duration_nano) / 1000000 AS avg_latency_ms,
-			avg(toFloat64(child.has_error)) AS error_rate
-		FROM (
-			SELECT
-				trace_id,
-				parent_span_id,
-				duration_nano,
-				has_error,
-				coalesce(
-					nullIf(serviceName, ''),
-					nullIf(resources_string['service.name'], ''),
-					nullIf(resources_string['k8s.service.name'], ''),
-					nullIf(resources_string['k8s.deployment.name'], '')
-				) AS target_service,
-				coalesce(attributes_string['rpc.system'], '') AS rpc_system
-			FROM %s
-			WHERE %s
-		) AS child
-		INNER JOIN (
-			SELECT
-				trace_id,
-				span_id,
-				coalesce(
-					nullIf(serviceName, ''),
-					nullIf(resources_string['service.name'], ''),
-					nullIf(resources_string['k8s.service.name'], ''),
-					nullIf(resources_string['k8s.deployment.name'], '')
-				) AS source_service,
-				coalesce(attributes_string['rpc.system'], '') AS rpc_system
-			FROM %s
-			WHERE %s
-		) AS parent
-			ON child.trace_id = parent.trace_id
-			AND child.parent_span_id = parent.span_id
-		WHERE child.target_service != ''
-		  AND parent.source_service != ''
-		  AND child.target_service != parent.source_service
-		GROUP BY source, target
-		ORDER BY call_count DESC
-		LIMIT 100
-	`, tracesTable, traceWhere(filters), tracesTable, traceWhere(filters)))
+	activeServiceSet := make(map[string]struct{}, len(nodeMap))
+	for serviceID, node := range nodeMap {
+		if node.NodeType == "service" && serviceID != "" {
+			activeServiceSet[serviceID] = struct{}{}
+		}
+	}
+
+	serviceEdges, err := c.serviceMapEdges(ctx, topologyScope, activeServiceSet)
 	if err != nil {
 		return graph, err
 	}
-	defer edgeRows.Close()
-
-	for edgeRows.Next() {
-		var edge TopologyEdge
-		if scanErr := edgeRows.Scan(&edge.Source, &edge.Target, &edge.DependencyType, &edge.CallCount, &edge.AvgLatencyMs, &edge.ErrorRate); scanErr != nil {
-			return graph, scanErr
-		}
-		edge.Source = canonicalizeServiceName(edge.Source)
-		edge.Target = canonicalizeServiceName(edge.Target)
-		if ignoredService(edge.Source) || ignoredService(edge.Target) {
-			continue
-		}
+	for _, edge := range filterEdgesForServiceScope(serviceEdges, filters.Service) {
 		graph.Edges = append(graph.Edges, edge)
 		if _, ok := nodeMap[edge.Source]; !ok {
 			nodeMap[edge.Source] = TopologyNode{ID: edge.Source, Label: edge.Source, NodeType: "service", Cluster: filters.Cluster, Namespace: filters.Namespace}
@@ -163,16 +116,13 @@ func (c *Client) BuildTopology(ctx context.Context, filters Filters) (TopologyGr
 			nodeMap[edge.Target] = TopologyNode{ID: edge.Target, Label: edge.Target, NodeType: "service", Cluster: filters.Cluster, Namespace: filters.Namespace}
 		}
 	}
-	if err := edgeRows.Err(); err != nil {
-		return graph, err
-	}
 
-	messagingEdges, err := c.messagingEdges(ctx, filters)
+	messagingEdges, err := c.messagingEdges(ctx, topologyScope)
 	if err != nil {
 		return graph, err
 	}
 	addEdges := func(edges []TopologyEdge) {
-		for _, edge := range edges {
+		for _, edge := range filterEdgesForServiceScope(edges, filters.Service) {
 			graph.Edges = append(graph.Edges, edge)
 			if _, ok := nodeMap[edge.Source]; !ok {
 				nodeMap[edge.Source] = TopologyNode{ID: edge.Source, Label: edge.Source, NodeType: classifyNodeType(edge.Source), Cluster: filters.Cluster, Namespace: filters.Namespace}
@@ -183,7 +133,7 @@ func (c *Client) BuildTopology(ctx context.Context, filters Filters) (TopologyGr
 		}
 	}
 	addEdges(messagingEdges)
-	databaseEdges, err := c.databaseEdges(ctx, filters)
+	databaseEdges, err := c.databaseEdges(ctx, topologyScope)
 	if err == nil {
 		addEdges(databaseEdges)
 	}
@@ -206,6 +156,80 @@ func (c *Client) BuildTopology(ctx context.Context, filters Filters) (TopologyGr
 		return graph.Nodes[i].ID < graph.Nodes[j].ID
 	})
 	return graph, nil
+}
+
+func (c *Client) serviceMapEdges(ctx context.Context, filters Filters, activeServices map[string]struct{}) ([]TopologyEdge, error) {
+	edges := []TopologyEdge{}
+	parts := []string{
+		fmt.Sprintf("timestamp >= toDateTime(%d)", filters.Start.Unix()),
+		fmt.Sprintf("timestamp <= toDateTime(%d)", filters.End.Unix()),
+	}
+	if filters.Cluster != "" {
+		parts = append(parts, fmt.Sprintf("k8s_cluster_name = '%s'", escape(filters.Cluster)))
+	}
+	if filters.Namespace != "" {
+		parts = append(parts, fmt.Sprintf("k8s_namespace_name = '%s'", escape(filters.Namespace)))
+	}
+	rows, err := c.conn.Query(ctx, fmt.Sprintf(`
+		WITH
+			quantilesMergeState(0.95)(duration_quantiles_state) AS duration_q_state,
+			finalizeAggregation(duration_q_state) AS duration_q_result
+		SELECT
+			src,
+			dest,
+			toInt64(sum(total_count)) AS call_count,
+			duration_q_result[1] AS p95_latency_ms,
+			if(sum(total_count) = 0, 0, sum(error_count) / sum(total_count)) AS error_rate
+		FROM %s
+		WHERE %s
+		GROUP BY src, dest
+		ORDER BY call_count DESC
+		LIMIT 100
+	`, dependencyGraphTable, strings.Join(parts, " AND ")))
+	if err != nil {
+		return edges, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var source string
+		var target string
+		var edge TopologyEdge
+		if scanErr := rows.Scan(&source, &target, &edge.CallCount, &edge.AvgLatencyMs, &edge.ErrorRate); scanErr != nil {
+			return edges, scanErr
+		}
+		source = canonicalizeServiceName(source)
+		target = canonicalizeServiceName(target)
+		if source == "" || target == "" || source == target {
+			continue
+		}
+		if len(activeServices) > 0 {
+			if _, ok := activeServices[source]; !ok {
+				continue
+			}
+			if _, ok := activeServices[target]; !ok {
+				continue
+			}
+		}
+		edge.Source = source
+		edge.Target = target
+		edge.DependencyType = "trace_http"
+		edges = append(edges, edge)
+	}
+	return edges, rows.Err()
+}
+
+func filterEdgesForServiceScope(edges []TopologyEdge, selectedService string) []TopologyEdge {
+	service := canonicalizeServiceName(selectedService)
+	if service == "" {
+		return edges
+	}
+	filtered := make([]TopologyEdge, 0, len(edges))
+	for _, edge := range edges {
+		if canonicalizeServiceName(edge.Source) == service || canonicalizeServiceName(edge.Target) == service {
+			filtered = append(filtered, edge)
+		}
+	}
+	return filtered
 }
 
 func (c *Client) messagingEdges(ctx context.Context, filters Filters) ([]TopologyEdge, error) {

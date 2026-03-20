@@ -229,7 +229,7 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 			graph, err = client.BuildTopology(ctx, clickhouse.Filters{
 				Cluster:   clusterFilter,
 				Namespace: namespaceFilter,
-				Service:   "",
+				Service:   serviceFilter,
 				Start:     start,
 				End:       end,
 			})
@@ -783,51 +783,38 @@ func filterGraphByServiceChain(graph clickhouse.TopologyGraph, service string) c
 }
 
 func filterGraphByServiceSet(graph clickhouse.TopologyGraph, services []string) clickhouse.TopologyGraph {
-	targets := make([]string, 0, len(services))
+	targetSet := map[string]struct{}{}
 	for _, service := range services {
 		target := normalizeServiceName(service)
 		if target != "" {
-			targets = append(targets, target)
+			targetSet[target] = struct{}{}
 		}
 	}
-	if len(targets) == 0 {
+	if len(targetSet) == 0 {
 		return graph
 	}
-	adj := map[string][]string{}
-	for _, edge := range graph.Edges {
-		adj[edge.Source] = append(adj[edge.Source], edge.Target)
-		adj[edge.Target] = append(adj[edge.Target], edge.Source)
-	}
 	seen := map[string]struct{}{}
-	queue := append([]string{}, targets...)
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		if _, ok := seen[current]; ok {
+	edges := make([]clickhouse.TopologyEdge, 0, len(graph.Edges))
+	for _, edge := range graph.Edges {
+		_, sourceTargeted := targetSet[normalizeServiceName(edge.Source)]
+		_, targetTargeted := targetSet[normalizeServiceName(edge.Target)]
+		if !sourceTargeted && !targetTargeted {
 			continue
 		}
-		seen[current] = struct{}{}
-		for _, next := range adj[current] {
-			if _, ok := seen[next]; !ok {
-				queue = append(queue, next)
-			}
-		}
+		edges = append(edges, edge)
+		seen[edge.Source] = struct{}{}
+		seen[edge.Target] = struct{}{}
 	}
-	if len(seen) == 0 {
+	for service := range targetSet {
+		seen[service] = struct{}{}
+	}
+	if len(edges) == 0 && len(seen) == 0 {
 		return clickhouse.TopologyGraph{GeneratedAt: graph.GeneratedAt, Nodes: []clickhouse.TopologyNode{}, Edges: []clickhouse.TopologyEdge{}}
 	}
 	nodes := make([]clickhouse.TopologyNode, 0, len(graph.Nodes))
 	for _, node := range graph.Nodes {
 		if _, ok := seen[node.ID]; ok {
 			nodes = append(nodes, node)
-		}
-	}
-	edges := make([]clickhouse.TopologyEdge, 0, len(graph.Edges))
-	for _, edge := range graph.Edges {
-		_, sourceOK := seen[edge.Source]
-		_, targetOK := seen[edge.Target]
-		if sourceOK && targetOK {
-			edges = append(edges, edge)
 		}
 	}
 	graph.Nodes = nodes

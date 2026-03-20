@@ -400,13 +400,35 @@ def _quality_by_signal(context: TelemetryContext) -> dict:
 
 def _telemetry_presence(incident: dict, context: TelemetryContext) -> dict:
     snapshot = incident.get("telemetry_snapshot", {}) or {}
-    request_count = float(snapshot.get("request_count", 0) or 0)
-    error_rate = float(snapshot.get("error_rate", 0) or 0)
-    p95_latency = float(snapshot.get("p95_latency_ms", 0) or 0)
-    avg_latency = float(snapshot.get("avg_latency_ms", 0) or 0)
+    trace_scope_level = str(context.trace_summary.get("scope_level", "missing") or "missing")
+    log_scope_level = str(context.logs_summary.get("scope_level", "missing") or "missing")
+    request_count = float(
+        context.trace_summary.get("request_count", 0)
+        if trace_scope_level == "incident"
+        else snapshot.get("request_count", 0) or 0
+    )
+    error_rate = float(
+        context.trace_summary.get("error_rate", 0)
+        if trace_scope_level == "incident"
+        else snapshot.get("error_rate", 0) or 0
+    )
+    p95_latency = float(
+        context.trace_summary.get("p95_latency_ms", 0)
+        if trace_scope_level == "incident"
+        else snapshot.get("p95_latency_ms", 0) or 0
+    )
+    avg_latency = float(
+        context.trace_summary.get("avg_latency_ms", 0)
+        if trace_scope_level == "incident"
+        else snapshot.get("avg_latency_ms", 0) or 0
+    )
     cpu = float(snapshot.get("cpu_utilization", 0) or 0)
     memory = float(snapshot.get("memory_utilization", 0) or 0)
-    log_count = int(context.logs_summary.get("log_count", 0) or snapshot.get("log_count", 0) or 0)
+    log_count = int(
+        context.logs_summary.get("log_count", 0)
+        if log_scope_level == "incident"
+        else snapshot.get("log_count", 0) or 0
+    )
     context_log_count = int(context.logs_summary.get("context_log_count", 0) or 0)
     trace_count = int(context.trace_summary.get("request_count", 0) or 0)
     metric_names = _observed_metric_names(context)
@@ -454,6 +476,8 @@ def _telemetry_presence(incident: dict, context: TelemetryContext) -> dict:
         "log_count": log_count,
         "context_log_count": context_log_count,
         "trace_count": trace_count,
+        "trace_scope_level": trace_scope_level,
+        "log_scope_level": log_scope_level,
         "metric_names": metric_names,
         "topology_edges": topology_edges,
         "timeline_events": timeline_events,
@@ -462,6 +486,11 @@ def _telemetry_presence(incident: dict, context: TelemetryContext) -> dict:
         "messaging_flow_count": messaging_flow_count,
         "exception_count": exception_count,
         "infra_entity_count": infra_entity_count,
+        "db_scope_level": str(context.db_summary.get("scope_level", "missing") or "missing"),
+        "messaging_scope_level": str(context.messaging_summary.get("scope_level", "missing") or "missing"),
+        "exception_scope_level": str(context.exception_summary.get("scope_level", "missing") or "missing"),
+        "infra_scope_level": str(context.infra_summary.get("scope_level", "missing") or "missing"),
+        "topology_scope_level": str(context.topology.get("scope_level", "missing") or "missing"),
         "strong_signals": strong_signals,
     }
 
@@ -722,21 +751,30 @@ def build_confidence_explanation(incident: dict, context: TelemetryContext, reas
     direct_trace_count = int(len(snapshot.get("trace_ids", []) or []))
     direct_log_count = int(snapshot.get("log_count", 0) or 0)
     if presence["trace_count"] > 0:
-        if direct_trace_count > 0:
+        if presence["trace_scope_level"] == "incident" or direct_trace_count > 0:
             supporting_factors.append(f"Incident-scoped trace evidence present ({presence['trace_count']} requests)")
         else:
             supporting_factors.append(f"Broader scoped trace evidence present ({presence['trace_count']} requests)")
     if presence["log_count"] > 0:
-        if direct_log_count > 0:
+        if presence["log_scope_level"] == "incident" or direct_log_count > 0:
             supporting_factors.append(f"Incident-scoped logs present ({presence['log_count']} events)")
         else:
             supporting_factors.append(f"Broader scoped logs present ({presence['log_count']} events)")
     if presence["db_dependency_count"] > 0:
-        supporting_factors.append(f"Contextual database evidence present ({presence['db_dependency_count']} dependencies)")
+        if presence["db_scope_level"] == "incident":
+            supporting_factors.append(f"Incident-scoped database evidence present ({presence['db_dependency_count']} dependencies)")
+        else:
+            supporting_factors.append(f"Contextual database evidence present ({presence['db_dependency_count']} dependencies)")
     if presence["messaging_flow_count"] > 0:
-        supporting_factors.append(f"Contextual messaging evidence present ({presence['messaging_flow_count']} flows)")
+        if presence["messaging_scope_level"] == "incident":
+            supporting_factors.append(f"Incident-scoped messaging evidence present ({presence['messaging_flow_count']} flows)")
+        else:
+            supporting_factors.append(f"Contextual messaging evidence present ({presence['messaging_flow_count']} flows)")
     if presence["exception_count"] > 0:
-        supporting_factors.append(f"Exception evidence present ({presence['exception_count']} signals)")
+        if presence["exception_scope_level"] == "incident":
+            supporting_factors.append(f"Incident-scoped exception evidence present ({presence['exception_count']} signals)")
+        else:
+            supporting_factors.append(f"Contextual exception evidence present ({presence['exception_count']} signals)")
 
     weakening_factors = []
     missing = _as_string_list(reasoning.get("missing_telemetry_signals", []))

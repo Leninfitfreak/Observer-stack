@@ -18,6 +18,7 @@ LOGS_TABLE = "signoz_logs.distributed_logs_v2"
 LOG_RESOURCES_TABLE = "signoz_logs.distributed_logs_v2_resource"
 METRICS_TABLE = "signoz_metrics.distributed_time_series_v4"
 SAMPLES_TABLE = "signoz_metrics.distributed_samples_v4"
+DEPENDENCY_GRAPH_TABLE = "signoz_traces.distributed_dependency_graph_minutes_v2"
 logger = logging.getLogger(__name__)
 
 
@@ -77,18 +78,39 @@ class TelemetryReader:
         if incident_time.tzinfo is None:
             incident_time = incident_time.replace(tzinfo=timezone.utc)
         incident_time = incident_time.astimezone(timezone.utc)
-        end = incident_time + timedelta(minutes=5)
-        start = incident_time - timedelta(minutes=30)
-        service = self._canonicalize_name(incident["service"]).replace("'", "''")
-        namespace = incident["namespace"].replace("'", "''")
-        cluster = incident["cluster"].replace("'", "''")
+        scope = incident.get("scope", {}) if isinstance(incident.get("scope"), dict) else {}
+        snapshot = incident.get("telemetry_snapshot", {}) if isinstance(incident.get("telemetry_snapshot"), dict) else {}
+        snapshot_filters = snapshot.get("filters", {}) if isinstance(snapshot.get("filters"), dict) else {}
+        start = self._parse_time(
+            scope.get("incident_window_start")
+            or snapshot.get("incident_window_start")
+        ) or (incident_time - timedelta(minutes=30))
+        end = self._parse_time(
+            scope.get("incident_window_end")
+            or snapshot.get("incident_window_end")
+        ) or (incident_time + timedelta(minutes=5))
+        if end <= start:
+            start = incident_time - timedelta(minutes=30)
+            end = incident_time + timedelta(minutes=5)
+        query_service = self._first_scope_value(snapshot_filters, "Service", "service")
+        query_namespace = self._first_scope_value(snapshot_filters, "Namespace", "namespace")
+        query_cluster = self._first_scope_value(snapshot_filters, "Cluster", "cluster")
+        service = self._canonicalize_name(
+            self._preferred_scope_value(query_service, scope.get("service"), incident.get("service", ""))
+        ).replace("'", "''")
+        namespace = str(
+            self._preferred_scope_value(query_namespace, scope.get("namespace"), incident.get("namespace", "") or "")
+        ).replace("'", "''")
+        cluster = str(
+            self._preferred_scope_value(query_cluster, scope.get("cluster"), incident.get("cluster", "") or "")
+        ).replace("'", "''")
         warnings: list[str] = []
 
         trace_summary = self._safe_context_fetch(
             "trace summary",
             incident,
             lambda: self._fetch_trace_summary(client, service, namespace, cluster, start, end),
-            (),
+            {"request_count": 0, "avg_latency_ms": 0, "p95_latency_ms": 0, "error_rate": 0, "scope_level": "missing"},
             warnings,
         )
 
@@ -96,43 +118,14 @@ class TelemetryReader:
             "logs summary",
             incident,
             lambda: self._fetch_logs_summary(client, service, namespace, cluster, start, end),
-            (),
+            {"log_count": 0, "context_log_count": 0, "anomaly_log_count": 0, "examples": [], "scope_level": "missing"},
             warnings,
         )
 
         metrics_rows = self._safe_context_fetch(
             "metrics summary",
             incident,
-            lambda: client.query(
-                f"""
-                SELECT
-                    ts.metric_name,
-                    argMax(samples.value, samples.unix_milli) AS latest_value,
-                    max(samples.unix_milli) AS latest_unix_milli
-                FROM {SAMPLES_TABLE} AS samples
-                INNER JOIN {METRICS_TABLE} AS ts USING fingerprint
-                WHERE samples.unix_milli >= {int(start.timestamp() * 1000)}
-                  AND samples.unix_milli < {int(end.timestamp() * 1000)}
-                  AND {self._metric_service_expr('ts')} = '{service}'
-                  AND {self._eq_or_any("ts.resource_attrs['k8s.namespace.name']", namespace)}
-                  AND {self._eq_or_any("ts.resource_attrs['k8s.cluster.name']", cluster)}
-                  AND (
-                    positionCaseInsensitive(ts.metric_name, 'cpu') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'memory') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'latency') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'error') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'request') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'messag') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'queue') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'topic') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'db') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'database') > 0 OR
-                    positionCaseInsensitive(ts.metric_name, 'jvm') > 0
-                  )
-                GROUP BY ts.metric_name
-                LIMIT 40
-                """
-            ).result_rows,
+            lambda: self._fetch_metrics_summary(client, service, namespace, cluster, start, end),
             [],
             warnings,
         )
@@ -205,28 +198,33 @@ class TelemetryReader:
                 "detector_snapshot": incident["telemetry_snapshot"],
             },
             logs_summary={
-                "log_count": logs_summary[0] if logs_summary else 0,
-                "context_log_count": logs_summary[1] if logs_summary else 0,
-                "examples": self._normalize_array(logs_summary[2]) if logs_summary else [],
+                "log_count": int(logs_summary.get("log_count", 0) or 0),
+                "context_log_count": int(logs_summary.get("context_log_count", 0) or 0),
+                "anomaly_log_count": int(logs_summary.get("anomaly_log_count", 0) or 0),
+                "examples": self._normalize_array(logs_summary.get("examples")) if logs_summary else [],
+                "scope_level": str(logs_summary.get("scope_level", "missing") or "missing"),
             },
             trace_summary={
-                "request_count": trace_summary[0] if trace_summary else 0,
-                "avg_latency_ms": trace_summary[1] if trace_summary else 0,
-                "p95_latency_ms": trace_summary[2] if trace_summary else 0,
-                "error_rate": trace_summary[3] if trace_summary else 0,
+                "request_count": int(trace_summary.get("request_count", 0) or 0),
+                "avg_latency_ms": float(trace_summary.get("avg_latency_ms", 0) or 0),
+                "p95_latency_ms": float(trace_summary.get("p95_latency_ms", 0) or 0),
+                "error_rate": float(trace_summary.get("error_rate", 0) or 0),
+                "scope_level": str(trace_summary.get("scope_level", "missing") or "missing"),
             },
             db_summary=db_summary,
             messaging_summary=messaging_summary,
             exception_summary=exception_summary,
             infra_summary=infra_summary,
             service_context={
-                "service": incident["service"],
+                "service": scope.get("service") or incident["service"],
                 "detector_signals": incident["detector_signals"],
                 "incident_severity": incident["severity"],
                 "anomaly_score": incident["anomaly_score"],
+                "incident_window_start": start.isoformat(),
+                "incident_window_end": end.isoformat(),
             },
-            namespace_context={"namespace": incident["namespace"]},
-            cluster_context={"cluster": incident["cluster"]},
+            namespace_context={"namespace": scope.get("namespace") or incident["namespace"]},
+            cluster_context={"cluster": scope.get("cluster") or incident["cluster"]},
             topology=topology,
             timeline=timeline,
             telemetry_coverage=telemetry_coverage,
@@ -255,13 +253,16 @@ class TelemetryReader:
             logs_summary={
                 "log_count": 0,
                 "context_log_count": 0,
+                "anomaly_log_count": 0,
                 "examples": [],
+                "scope_level": "missing",
             },
             trace_summary={
                 "request_count": 0,
                 "avg_latency_ms": 0,
                 "p95_latency_ms": 0,
                 "error_rate": 0,
+                "scope_level": "missing",
             },
             db_summary={"dependencies": [], "systems": [], "total_calls": 0, "query_examples": []},
             messaging_summary={"flows": [], "systems": [], "destinations": [], "total_calls": 0},
@@ -272,6 +273,8 @@ class TelemetryReader:
                 "detector_signals": incident.get("detector_signals", []),
                 "incident_severity": incident.get("severity", ""),
                 "anomaly_score": incident.get("anomaly_score", 0),
+                "incident_window_start": "",
+                "incident_window_end": "",
             },
             namespace_context={"namespace": incident.get("namespace", "")},
             cluster_context={"cluster": incident.get("cluster", "")},
@@ -296,6 +299,42 @@ class TelemetryReader:
             )
             warnings.append(f"{section} unavailable")
             return default
+
+    def _parse_time(self, value):
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            text = str(value).strip()
+            if not text:
+                return None
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            try:
+                dt = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    def _first_scope_value(self, data: dict, *keys: str):
+        if not isinstance(data, dict):
+            return None
+        for key in keys:
+            if key in data:
+                return data.get(key)
+        return None
+
+    def _preferred_scope_value(self, *values):
+        for value in values:
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
 
     def detect_predictive_anomalies(self) -> list[dict]:
         try:
@@ -418,82 +457,121 @@ class TelemetryReader:
         return cluster, namespace
 
     def _fetch_trace_summary(self, client, service: str, namespace: str, cluster: str, start: datetime, end: datetime):
-        canonical = client.query(
-            f"""
-            SELECT
-                count() AS request_count,
-                avg(durationNano) / 1000000 AS avg_latency_ms,
-                quantile(0.95)(durationNano) / 1000000 AS p95_latency_ms,
-                avg(toFloat64(hasError)) AS error_rate
-            FROM {TRACES_TABLE}
-            WHERE {self._trace_scope_clause(start, end, service, namespace, cluster, use_resource_scope=True)}
-            """
-        ).first_row
-        if canonical and int(canonical[0] or 0) > 0:
-            return canonical
-        return client.query(
-            f"""
-            SELECT
-                count() AS request_count,
-                avg(durationNano) / 1000000 AS avg_latency_ms,
-                quantile(0.95)(durationNano) / 1000000 AS p95_latency_ms,
-                avg(toFloat64(hasError)) AS error_rate
-            FROM {TRACES_TABLE}
-            WHERE {self._trace_scope_clause(start, end, service, namespace, cluster, use_resource_scope=False)}
-            """
-        ).first_row
+        for index, (scoped_namespace, scoped_cluster) in enumerate(self._scope_variants(namespace, cluster)):
+            scope_level = "incident" if index == 0 else "contextual"
+            canonical = client.query(
+                f"""
+                SELECT
+                    count() AS request_count,
+                    avg(durationNano) / 1000000 AS avg_latency_ms,
+                    quantile(0.95)(durationNano) / 1000000 AS p95_latency_ms,
+                    avg(toFloat64(hasError)) AS error_rate
+                FROM {TRACES_TABLE}
+                WHERE {self._trace_scope_clause(start, end, service, scoped_namespace, scoped_cluster, use_resource_scope=True)}
+                """
+            ).first_row
+            if canonical and int(canonical[0] or 0) > 0:
+                return {
+                    "request_count": int(canonical[0] or 0),
+                    "avg_latency_ms": float(canonical[1] or 0),
+                    "p95_latency_ms": float(canonical[2] or 0),
+                    "error_rate": float(canonical[3] or 0),
+                    "scope_level": scope_level,
+                }
+            fallback = client.query(
+                f"""
+                SELECT
+                    count() AS request_count,
+                    avg(durationNano) / 1000000 AS avg_latency_ms,
+                    quantile(0.95)(durationNano) / 1000000 AS p95_latency_ms,
+                    avg(toFloat64(hasError)) AS error_rate
+                FROM {TRACES_TABLE}
+                WHERE {self._trace_scope_clause(start, end, service, scoped_namespace, scoped_cluster, use_resource_scope=False)}
+                """
+            ).first_row
+            if fallback and int(fallback[0] or 0) > 0:
+                return {
+                    "request_count": int(fallback[0] or 0),
+                    "avg_latency_ms": float(fallback[1] or 0),
+                    "p95_latency_ms": float(fallback[2] or 0),
+                    "error_rate": float(fallback[3] or 0),
+                    "scope_level": scope_level,
+                }
+        return {"request_count": 0, "avg_latency_ms": 0, "p95_latency_ms": 0, "error_rate": 0, "scope_level": "missing"}
 
     def _fetch_logs_summary(self, client, service: str, namespace: str, cluster: str, start: datetime, end: datetime):
-        signal_filter = self._log_signal_filter()
-        canonical = client.query(
-            f"""
-            SELECT
-                count() AS log_count,
-                countIf(trace_id != '' AND span_id != '') AS context_log_count,
-                groupArray(8)(substring(toString(body), 1, 240)) AS examples
-            FROM {LOGS_TABLE}
-            WHERE {self._log_scope_clause(start, end, service, namespace, cluster, use_resource_scope=True)}
-              AND ({signal_filter})
-            """
-        ).first_row
-        if canonical and int(canonical[0] or 0) > 0:
-            return canonical
-        return client.query(
-            f"""
-            SELECT
-                count() AS log_count,
-                countIf(trace_id != '' AND span_id != '') AS context_log_count,
-                groupArray(8)(substring(toString(body), 1, 240)) AS examples
-            FROM {LOGS_TABLE}
-            WHERE {self._log_scope_clause(start, end, service, namespace, cluster, use_resource_scope=False)}
-              AND ({signal_filter})
-            """
-        ).first_row
+        for index, (scoped_namespace, scoped_cluster) in enumerate(self._scope_variants(namespace, cluster)):
+            scope_level = "incident" if index == 0 else "contextual"
+            canonical = client.query(
+                f"""
+                SELECT
+                    count() AS log_count,
+                    countIf(trace_id != '' AND span_id != '') AS context_log_count,
+                    countIf({self._log_signal_filter()}) AS anomaly_log_count,
+                    groupArrayIf(8)(substring(toString(body), 1, 240), {self._log_signal_filter()}) AS examples
+                FROM {LOGS_TABLE}
+                WHERE {self._log_scope_clause(start, end, service, scoped_namespace, scoped_cluster, use_resource_scope=True)}
+                """
+            ).first_row
+            if canonical and int(canonical[0] or 0) > 0:
+                return {
+                    "log_count": int(canonical[0] or 0),
+                    "context_log_count": int(canonical[1] or 0),
+                    "anomaly_log_count": int(canonical[2] or 0),
+                    "examples": self._normalize_array(canonical[3]),
+                    "scope_level": scope_level,
+                }
+            fallback = client.query(
+                f"""
+                SELECT
+                    count() AS log_count,
+                    countIf(trace_id != '' AND span_id != '') AS context_log_count,
+                    countIf({self._log_signal_filter()}) AS anomaly_log_count,
+                    groupArrayIf(8)(substring(toString(body), 1, 240), {self._log_signal_filter()}) AS examples
+                FROM {LOGS_TABLE}
+                WHERE {self._log_scope_clause(start, end, service, scoped_namespace, scoped_cluster, use_resource_scope=False)}
+                """
+            ).first_row
+            if fallback and int(fallback[0] or 0) > 0:
+                return {
+                    "log_count": int(fallback[0] or 0),
+                    "context_log_count": int(fallback[1] or 0),
+                    "anomaly_log_count": int(fallback[2] or 0),
+                    "examples": self._normalize_array(fallback[3]),
+                    "scope_level": scope_level,
+                }
+        return {"log_count": 0, "context_log_count": 0, "anomaly_log_count": 0, "examples": [], "scope_level": "missing"}
 
     def _fetch_database_evidence(self, client, service: str, namespace: str, cluster: str, start: datetime, end: datetime) -> dict:
-        rows = client.query(
-            f"""
-            SELECT
-                lowerUTF8(coalesce(nullIf(attributes_string['db.system'], ''), 'database')) AS db_system,
-                lowerUTF8(coalesce(
-                    nullIf(attributes_string['db.name'], ''),
-                    nullIf(attributes_string['db.namespace'], ''),
-                    nullIf(attributes_string['server.address'], ''),
-                    nullIf(attributes_string['net.peer.name'], ''),
-                    'database'
-                )) AS db_name,
-                count() AS calls,
-                avg(durationNano) / 1000000 AS avg_latency_ms,
-                avg(toFloat64(hasError)) AS error_rate,
-                groupArray(3)(substring(toString(attributes_string['db.statement']), 1, 180)) AS examples
-            FROM {TRACES_TABLE}
-            WHERE {self._trace_scope_clause(start, end, service, namespace, cluster, use_resource_scope=True)}
-              AND attributes_string['db.system'] != ''
-            GROUP BY db_system, db_name
-            ORDER BY calls DESC
-            LIMIT 10
-            """
-        ).result_rows
+        rows = []
+        scope_level = "missing"
+        for index, (scoped_namespace, scoped_cluster) in enumerate(self._scope_variants(namespace, cluster)):
+            scope_level = "incident" if index == 0 else "contextual"
+            rows = client.query(
+                f"""
+                SELECT
+                    lowerUTF8(coalesce(nullIf(attributes_string['db.system'], ''), 'database')) AS db_system,
+                    lowerUTF8(coalesce(
+                        nullIf(attributes_string['db.name'], ''),
+                        nullIf(attributes_string['db.namespace'], ''),
+                        nullIf(attributes_string['server.address'], ''),
+                        nullIf(attributes_string['net.peer.name'], ''),
+                        'database'
+                    )) AS db_name,
+                    count() AS calls,
+                    avg(durationNano) / 1000000 AS avg_latency_ms,
+                    avg(toFloat64(hasError)) AS error_rate,
+                    groupArray(3)(substring(toString(attributes_string['db.statement']), 1, 180)) AS examples
+                FROM {TRACES_TABLE}
+                WHERE {self._trace_scope_clause(start, end, service, scoped_namespace, scoped_cluster, use_resource_scope=True)}
+                  AND attributes_string['db.system'] != ''
+                GROUP BY db_system, db_name
+                ORDER BY calls DESC
+                LIMIT 10
+                """
+            ).result_rows
+            if rows:
+                break
         dependencies = []
         systems: set[str] = set()
         total_calls = 0
@@ -517,36 +595,43 @@ class TelemetryReader:
             "systems": sorted(systems),
             "total_calls": total_calls,
             "query_examples": examples[:5],
+            "scope_level": scope_level if total_calls > 0 else "missing",
         }
 
     def _fetch_messaging_evidence(self, client, service: str, namespace: str, cluster: str, start: datetime, end: datetime) -> dict:
-        rows = client.query(
-            f"""
-            SELECT
-                lowerUTF8(attributes_string['messaging.system']) AS messaging_system,
-                coalesce(
-                    nullIf(attributes_string['messaging.destination.name'], ''),
-                    nullIf(attributes_string['messaging.destination'], ''),
-                    nullIf(attributes_string['messaging.destination_name'], '')
-                ) AS destination,
-                lowerUTF8(coalesce(attributes_string['messaging.operation'], attributes_string['messaging.operation.type'], '')) AS operation,
-                coalesce(nullIf(attributes_string['messaging.kafka.consumer.group'], ''), '') AS consumer_group,
-                count() AS calls,
-                avg(durationNano) / 1000000 AS avg_latency_ms,
-                avg(toFloat64(hasError)) AS error_rate
-            FROM {TRACES_TABLE}
-            WHERE {self._trace_scope_clause(start, end, service, namespace, cluster, use_resource_scope=True)}
-              AND attributes_string['messaging.system'] != ''
-              AND coalesce(
-                    nullIf(attributes_string['messaging.destination.name'], ''),
-                    nullIf(attributes_string['messaging.destination'], ''),
-                    nullIf(attributes_string['messaging.destination_name'], '')
-                  ) != ''
-            GROUP BY messaging_system, destination, operation, consumer_group
-            ORDER BY calls DESC
-            LIMIT 20
-            """
-        ).result_rows
+        rows = []
+        scope_level = "missing"
+        for index, (scoped_namespace, scoped_cluster) in enumerate(self._scope_variants(namespace, cluster)):
+            scope_level = "incident" if index == 0 else "contextual"
+            rows = client.query(
+                f"""
+                SELECT
+                    lowerUTF8(attributes_string['messaging.system']) AS messaging_system,
+                    coalesce(
+                        nullIf(attributes_string['messaging.destination.name'], ''),
+                        nullIf(attributes_string['messaging.destination'], ''),
+                        nullIf(attributes_string['messaging.destination_name'], '')
+                    ) AS destination,
+                    lowerUTF8(coalesce(attributes_string['messaging.operation'], attributes_string['messaging.operation.type'], '')) AS operation,
+                    coalesce(nullIf(attributes_string['messaging.kafka.consumer.group'], ''), '') AS consumer_group,
+                    count() AS calls,
+                    avg(durationNano) / 1000000 AS avg_latency_ms,
+                    avg(toFloat64(hasError)) AS error_rate
+                FROM {TRACES_TABLE}
+                WHERE {self._trace_scope_clause(start, end, service, scoped_namespace, scoped_cluster, use_resource_scope=True)}
+                  AND attributes_string['messaging.system'] != ''
+                  AND coalesce(
+                        nullIf(attributes_string['messaging.destination.name'], ''),
+                        nullIf(attributes_string['messaging.destination'], ''),
+                        nullIf(attributes_string['messaging.destination_name'], '')
+                      ) != ''
+                GROUP BY messaging_system, destination, operation, consumer_group
+                ORDER BY calls DESC
+                LIMIT 20
+                """
+            ).result_rows
+            if rows:
+                break
         flows = []
         systems: set[str] = set()
         destinations: set[str] = set()
@@ -572,133 +657,152 @@ class TelemetryReader:
             "systems": sorted(systems),
             "destinations": sorted(destinations),
             "total_calls": total_calls,
+            "scope_level": scope_level if total_calls > 0 else "missing",
         }
 
     def _fetch_exception_evidence(self, client, service: str, namespace: str, cluster: str, start: datetime, end: datetime) -> dict:
-        log_rows = client.query(
-            f"""
-            SELECT
-                count() AS exception_count,
-                groupArray(6)(substring(toString(body), 1, 240)) AS examples,
-                groupUniqArray(6)(coalesce(
-                    nullIf(attributes_string['exception.type'], ''),
-                    nullIf(attributes_string['exception_type'], ''),
-                    nullIf(attributes_string['error.type'], ''),
-                    nullIf(attributes_string['error_type'], '')
-                )) AS exception_types
-            FROM {LOGS_TABLE}
-            WHERE {self._log_scope_clause(start, end, service, namespace, cluster, use_resource_scope=True)}
-              AND (
-                positionCaseInsensitive(body, 'exception') > 0 OR
-                positionCaseInsensitive(body, 'stacktrace') > 0 OR
-                positionCaseInsensitive(body, 'traceback') > 0 OR
-                attributes_string['exception.type'] != '' OR
-                attributes_string['exception_type'] != '' OR
-                attributes_string['error.type'] != '' OR
-                attributes_string['error_type'] != ''
-              )
-            """
-        ).first_row
-        trace_rows = client.query(
-            f"""
-            SELECT count()
-            FROM {TRACES_TABLE}
-            WHERE {self._trace_scope_clause(start, end, service, namespace, cluster, use_resource_scope=True)}
-              AND (
-                hasError = 1 OR
-                attributes_string['exception.type'] != '' OR
-                attributes_string['error.type'] != ''
-              )
-            """
-        ).first_row
+        log_rows = None
+        trace_rows = None
+        scope_level = "missing"
+        for index, (scoped_namespace, scoped_cluster) in enumerate(self._scope_variants(namespace, cluster)):
+            scope_level = "incident" if index == 0 else "contextual"
+            log_rows = client.query(
+                f"""
+                SELECT
+                    count() AS exception_count,
+                    groupArray(6)(substring(toString(body), 1, 240)) AS examples,
+                    groupUniqArray(6)(coalesce(
+                        nullIf(attributes_string['exception.type'], ''),
+                        nullIf(attributes_string['exception_type'], ''),
+                        nullIf(attributes_string['error.type'], ''),
+                        nullIf(attributes_string['error_type'], '')
+                    )) AS exception_types
+                FROM {LOGS_TABLE}
+                WHERE {self._log_scope_clause(start, end, service, scoped_namespace, scoped_cluster, use_resource_scope=True)}
+                  AND (
+                    positionCaseInsensitive(body, 'exception') > 0 OR
+                    positionCaseInsensitive(body, 'stacktrace') > 0 OR
+                    positionCaseInsensitive(body, 'traceback') > 0 OR
+                    attributes_string['exception.type'] != '' OR
+                    attributes_string['exception_type'] != '' OR
+                    attributes_string['error.type'] != '' OR
+                    attributes_string['error_type'] != ''
+                  )
+                """
+            ).first_row
+            trace_rows = client.query(
+                f"""
+                SELECT count()
+                FROM {TRACES_TABLE}
+                WHERE {self._trace_scope_clause(start, end, service, scoped_namespace, scoped_cluster, use_resource_scope=True)}
+                  AND (
+                    hasError = 1 OR
+                    attributes_string['exception.type'] != '' OR
+                    attributes_string['error.type'] != ''
+                  )
+                """
+            ).first_row
+            if (log_rows and int(log_rows[0] or 0) > 0) or (trace_rows and int(trace_rows[0] or 0) > 0):
+                break
         return {
             "exception_count": int(log_rows[0] or 0) if log_rows else 0,
             "error_span_count": int(trace_rows[0] or 0) if trace_rows else 0,
             "examples": [item for item in self._normalize_array(log_rows[1]) if item] if log_rows else [],
             "types": [item for item in self._normalize_array(log_rows[2]) if item] if log_rows else [],
+            "scope_level": scope_level if ((log_rows and int(log_rows[0] or 0) > 0) or (trace_rows and int(trace_rows[0] or 0) > 0)) else "missing",
         }
 
     def _fetch_infra_evidence(self, client, service: str, namespace: str, cluster: str, start: datetime, end: datetime) -> dict:
-        trace_rows = client.query(
-            f"""
-            SELECT
-                groupUniqArray(6)(nullIf(resources_string['k8s.pod.name'], '')) AS pods,
-                groupUniqArray(6)(coalesce(nullIf(resources_string['k8s.container.name'], ''), nullIf(resources_string['container.name'], ''))) AS containers,
-                groupUniqArray(6)(nullIf(resources_string['k8s.node.name'], '')) AS nodes,
-                groupUniqArray(6)(coalesce(nullIf(resources_string['host.name'], ''), nullIf(resources_string['host.id'], ''))) AS hosts,
-                groupUniqArray(4)(nullIf(resources_string['deployment.environment'], '')) AS environments
-            FROM {TRACES_TABLE}
-            WHERE {self._trace_scope_clause(start, end, service, namespace, cluster, use_resource_scope=True)}
-            """
-        ).first_row
+        trace_rows = None
+        scope_level = "missing"
+        for index, (scoped_namespace, scoped_cluster) in enumerate(self._scope_variants(namespace, cluster)):
+            scope_level = "incident" if index == 0 else "contextual"
+            trace_rows = client.query(
+                f"""
+                SELECT
+                    groupUniqArray(6)(nullIf(resources_string['k8s.pod.name'], '')) AS pods,
+                    groupUniqArray(6)(coalesce(nullIf(resources_string['k8s.container.name'], ''), nullIf(resources_string['container.name'], ''))) AS containers,
+                    groupUniqArray(6)(nullIf(resources_string['k8s.node.name'], '')) AS nodes,
+                    groupUniqArray(6)(coalesce(nullIf(resources_string['host.name'], ''), nullIf(resources_string['host.id'], ''))) AS hosts,
+                    groupUniqArray(4)(nullIf(resources_string['deployment.environment'], '')) AS environments
+                FROM {TRACES_TABLE}
+                WHERE {self._trace_scope_clause(start, end, service, scoped_namespace, scoped_cluster, use_resource_scope=True)}
+                """
+            ).first_row
+            if trace_rows and any(self._normalize_array(value) for value in trace_rows):
+                return {
+                    "pods": [item for item in self._normalize_array(trace_rows[0]) if item],
+                    "containers": [item for item in self._normalize_array(trace_rows[1]) if item],
+                    "nodes": [item for item in self._normalize_array(trace_rows[2]) if item],
+                    "hosts": [item for item in self._normalize_array(trace_rows[3]) if item],
+                    "environments": [item for item in self._normalize_array(trace_rows[4]) if item],
+                    "scope_level": scope_level,
+                }
+        metric_rows = None
+        for index, (scoped_namespace, scoped_cluster) in enumerate(self._scope_variants(namespace, cluster)):
+            scope_level = "incident" if index == 0 else "contextual"
+            metric_rows = client.query(
+                f"""
+                SELECT
+                    groupUniqArray(6)(nullIf(ts.resource_attrs['k8s.pod.name'], '')) AS pods,
+                    groupUniqArray(6)(coalesce(nullIf(ts.resource_attrs['k8s.container.name'], ''), nullIf(ts.resource_attrs['container.name'], ''))) AS containers,
+                    groupUniqArray(6)(nullIf(ts.resource_attrs['k8s.node.name'], '')) AS nodes,
+                    groupUniqArray(6)(coalesce(nullIf(ts.resource_attrs['host.name'], ''), nullIf(ts.resource_attrs['host.id'], ''))) AS hosts,
+                    groupUniqArray(4)(nullIf(ts.resource_attrs['deployment.environment'], '')) AS environments
+                FROM {SAMPLES_TABLE} AS samples
+                INNER JOIN {METRICS_TABLE} AS ts USING fingerprint
+                WHERE samples.unix_milli >= {int(start.timestamp() * 1000)}
+                  AND samples.unix_milli < {int(end.timestamp() * 1000)}
+                  AND {self._metric_service_expr('ts')} = '{service}'
+                  AND {self._eq_or_any("ts.resource_attrs['k8s.namespace.name']", scoped_namespace)}
+                  AND {self._eq_or_any("ts.resource_attrs['k8s.cluster.name']", scoped_cluster)}
+                """
+            ).first_row
+            if metric_rows and any(self._normalize_array(value) for value in metric_rows):
+                break
         if trace_rows and any(self._normalize_array(value) for value in trace_rows):
-            return {
-                "pods": [item for item in self._normalize_array(trace_rows[0]) if item],
-                "containers": [item for item in self._normalize_array(trace_rows[1]) if item],
-                "nodes": [item for item in self._normalize_array(trace_rows[2]) if item],
-                "hosts": [item for item in self._normalize_array(trace_rows[3]) if item],
-                "environments": [item for item in self._normalize_array(trace_rows[4]) if item],
-            }
-        metric_rows = client.query(
-            f"""
-            SELECT
-                groupUniqArray(6)(nullIf(ts.resource_attrs['k8s.pod.name'], '')) AS pods,
-                groupUniqArray(6)(coalesce(nullIf(ts.resource_attrs['k8s.container.name'], ''), nullIf(ts.resource_attrs['container.name'], ''))) AS containers,
-                groupUniqArray(6)(nullIf(ts.resource_attrs['k8s.node.name'], '')) AS nodes,
-                groupUniqArray(6)(coalesce(nullIf(ts.resource_attrs['host.name'], ''), nullIf(ts.resource_attrs['host.id'], ''))) AS hosts,
-                groupUniqArray(4)(nullIf(ts.resource_attrs['deployment.environment'], '')) AS environments
-            FROM {SAMPLES_TABLE} AS samples
-            INNER JOIN {METRICS_TABLE} AS ts USING fingerprint
-            WHERE samples.unix_milli >= {int(start.timestamp() * 1000)}
-              AND samples.unix_milli < {int(end.timestamp() * 1000)}
-              AND {self._metric_service_expr('ts')} = '{service}'
-              AND {self._eq_or_any("ts.resource_attrs['k8s.namespace.name']", namespace)}
-              AND {self._eq_or_any("ts.resource_attrs['k8s.cluster.name']", cluster)}
-            """
-        ).first_row
+            scope_level = "incident"
         return {
             "pods": [item for item in self._normalize_array(metric_rows[0]) if item] if metric_rows else [],
             "containers": [item for item in self._normalize_array(metric_rows[1]) if item] if metric_rows else [],
             "nodes": [item for item in self._normalize_array(metric_rows[2]) if item] if metric_rows else [],
             "hosts": [item for item in self._normalize_array(metric_rows[3]) if item] if metric_rows else [],
             "environments": [item for item in self._normalize_array(metric_rows[4]) if item] if metric_rows else [],
+            "scope_level": scope_level if metric_rows and any(self._normalize_array(value) for value in metric_rows) else "missing",
         }
 
     def _fetch_topology(self, client, service: str, namespace: str, cluster: str, start: datetime, end: datetime) -> dict:
-        rows = client.query(
-            f"""
-            SELECT
-                parent.source_service AS source,
-                child.target_service AS target,
-                count() AS calls
-            FROM (
+        service_rows = []
+        scope_level = "missing"
+        for index, (scoped_namespace, scoped_cluster) in enumerate(self._scope_variants(namespace, cluster)):
+            scope_level = "incident" if index == 0 else "contextual"
+            service_rows = client.query(
+                f"""
+                WITH
+                    quantilesMergeState(0.95)(duration_quantiles_state) AS duration_q_state,
+                    finalizeAggregation(duration_q_state) AS duration_q_result
                 SELECT
-                    trace_id,
-                    parent_span_id,
-                    {self._trace_service_expr()} AS target_service
-                FROM {TRACES_TABLE}
-                WHERE {self._trace_scope_clause(start, end, "", namespace, cluster, use_resource_scope=True)}
-            ) AS child
-            INNER JOIN (
-                SELECT
-                    trace_id,
-                    span_id,
-                    {self._trace_service_expr()} AS source_service
-                FROM {TRACES_TABLE}
-                WHERE {self._trace_scope_clause(start, end, "", namespace, cluster, use_resource_scope=True)}
-            ) AS parent
-                ON child.trace_id = parent.trace_id
-                AND child.parent_span_id = parent.span_id
-            WHERE child.target_service != ''
-              AND parent.source_service != ''
-              AND child.target_service != parent.source_service
-            GROUP BY source, target
-            ORDER BY calls DESC
-            LIMIT 30
-            """
-        ).result_rows
-        messaging_rows = client.query(
-            f"""
+                    src,
+                    dest,
+                    sum(total_count) AS calls,
+                    duration_q_result[1] AS p95_latency_ms,
+                    if(sum(total_count) = 0, 0, sum(error_count) / sum(total_count)) AS error_rate
+                FROM {DEPENDENCY_GRAPH_TABLE}
+                WHERE timestamp >= toDateTime({int(start.timestamp())})
+                  AND timestamp <= toDateTime({int(end.timestamp())})
+                  AND {self._eq_or_any('k8s_namespace_name', scoped_namespace)}
+                  AND {self._eq_or_any('k8s_cluster_name', scoped_cluster)}
+                GROUP BY src, dest
+                ORDER BY calls DESC
+                LIMIT 60
+                """
+            ).result_rows
+            if service_rows:
+                break
+        messaging_rows = []
+        for scoped_namespace, scoped_cluster in self._scope_variants(namespace, cluster):
+            messaging_rows = client.query(
+                f"""
             WITH publish AS (
                 SELECT
                     {self._trace_service_expr()} AS source,
@@ -710,7 +814,7 @@ class TelemetryReader:
                     ) AS destination,
                     count() AS publish_count
                 FROM {TRACES_TABLE}
-                WHERE {self._trace_scope_clause(start, end, "", namespace, cluster, use_resource_scope=True)}
+                WHERE {self._trace_scope_clause(start, end, "", scoped_namespace, scoped_cluster, use_resource_scope=True)}
                   AND attributes_string['messaging.system'] != ''
                   AND coalesce(nullIf(attributes_string['messaging.destination.name'], ''), nullIf(attributes_string['messaging.destination'], ''), nullIf(attributes_string['messaging.destination_name'], '')) != ''
                   AND lowerUTF8(coalesce(attributes_string['messaging.operation'], attributes_string['messaging.operation.type'], '')) IN ('publish', 'send')
@@ -727,35 +831,63 @@ class TelemetryReader:
                     ) AS destination,
                     count() AS process_count
                 FROM {TRACES_TABLE}
-                WHERE {self._trace_scope_clause(start, end, "", namespace, cluster, use_resource_scope=True)}
+                WHERE {self._trace_scope_clause(start, end, "", scoped_namespace, scoped_cluster, use_resource_scope=True)}
                   AND attributes_string['messaging.system'] != ''
                   AND coalesce(nullIf(attributes_string['messaging.destination.name'], ''), nullIf(attributes_string['messaging.destination'], ''), nullIf(attributes_string['messaging.destination_name'], '')) != ''
                   AND lowerUTF8(coalesce(attributes_string['messaging.operation'], attributes_string['messaging.operation.type'], '')) IN ('process', 'receive')
                 GROUP BY target, messaging_system, destination
             )
-            SELECT publish.source, publish.messaging_system, publish.destination, consume.target, least(publish.publish_count, consume.process_count) AS calls
+            SELECT
+                publish.source, publish.messaging_system, publish.destination, consume.target, least(publish.publish_count, consume.process_count) AS calls
             FROM publish
             INNER JOIN consume ON publish.destination = consume.destination AND publish.messaging_system = consume.messaging_system
             WHERE publish.source != ''
             ORDER BY calls DESC
             LIMIT 30
             """
-        ).result_rows
-        db_rows = client.query(
-            f"""
+            ).result_rows
+            if messaging_rows:
+                break
+        db_rows = []
+        for scoped_namespace, scoped_cluster in self._scope_variants(namespace, cluster):
+            db_rows = client.query(
+                f"""
             SELECT
                 {self._trace_service_expr()} AS source,
                 lowerUTF8(coalesce(nullIf(attributes_string['db.system'], ''), 'database')) AS db_system,
                 lowerUTF8(coalesce(nullIf(attributes_string['db.name'], ''), nullIf(attributes_string['db.namespace'], ''), nullIf(attributes_string['server.address'], ''), 'database')) AS db_name,
                 count() AS calls
             FROM {TRACES_TABLE}
-            WHERE {self._trace_scope_clause(start, end, "", namespace, cluster, use_resource_scope=True)}
+            WHERE {self._trace_scope_clause(start, end, "", scoped_namespace, scoped_cluster, use_resource_scope=True)}
               AND attributes_string['db.system'] != ''
             GROUP BY source, db_system, db_name
             ORDER BY calls DESC
             LIMIT 30
             """
-        ).result_rows
+            ).result_rows
+            if db_rows:
+                break
+        messaging_system_aliases = {self._canonicalize_name(system) for _source, system, _destination, _consumer, _calls in messaging_rows if system}
+        database_aliases = {
+            self._canonicalize_name(db_system)
+            for _source, db_system, _name, _calls in db_rows
+            if db_system
+        }
+        infra_aliases = messaging_system_aliases | database_aliases
+        rows = [
+            (self._canonicalize_name(source), self._canonicalize_name(target), calls)
+            for source, target, calls, _p95_latency_ms, _error_rate in service_rows
+            if self._canonicalize_name(source)
+            and self._canonicalize_name(target)
+            and self._canonicalize_name(source) not in infra_aliases
+            and self._canonicalize_name(target) not in infra_aliases
+        ]
+        if service:
+            rows = [
+                (source, target, calls)
+                for source, target, calls in rows
+                if source == service or target == service
+            ]
         nodes = sorted(
             {
                 service,
@@ -804,7 +936,50 @@ class TelemetryReader:
                 }
                 for source, db_system, db_name, calls in db_rows
             ],
+            "scope_level": scope_level if rows or messaging_rows or db_rows else "missing",
         }
+
+    def _scope_variants(self, namespace: str, cluster: str) -> list[tuple[str, str]]:
+        variants = [(namespace, cluster)]
+        if namespace or cluster:
+            variants.append(("", ""))
+        return variants
+
+    def _fetch_metrics_summary(self, client, service: str, namespace: str, cluster: str, start: datetime, end: datetime):
+        for scoped_namespace, scoped_cluster in self._scope_variants(namespace, cluster):
+            rows = client.query(
+                f"""
+                SELECT
+                    ts.metric_name,
+                    argMax(samples.value, samples.unix_milli) AS latest_value,
+                    max(samples.unix_milli) AS latest_unix_milli
+                FROM {SAMPLES_TABLE} AS samples
+                INNER JOIN {METRICS_TABLE} AS ts USING fingerprint
+                WHERE samples.unix_milli >= {int(start.timestamp() * 1000)}
+                  AND samples.unix_milli < {int(end.timestamp() * 1000)}
+                  AND {self._metric_service_expr('ts')} = '{service}'
+                  AND {self._eq_or_any("ts.resource_attrs['k8s.namespace.name']", scoped_namespace)}
+                  AND {self._eq_or_any("ts.resource_attrs['k8s.cluster.name']", scoped_cluster)}
+                  AND (
+                    positionCaseInsensitive(ts.metric_name, 'cpu') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'memory') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'latency') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'error') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'request') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'messag') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'queue') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'topic') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'db') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'database') > 0 OR
+                    positionCaseInsensitive(ts.metric_name, 'jvm') > 0
+                  )
+                GROUP BY ts.metric_name
+                LIMIT 40
+                """
+            ).result_rows
+            if rows:
+                return rows
+        return []
 
     def _fetch_timeline(self, client, service: str, namespace: str, cluster: str, center: datetime) -> list[dict]:
         start = center - timedelta(minutes=5)
@@ -921,24 +1096,32 @@ class TelemetryReader:
     def _build_coverage(self, service: str, metrics_rows, trace_summary, logs_summary, db_summary: dict, messaging_summary: dict, exception_summary: dict, infra_summary: dict, topology: dict, warnings: list[str]) -> dict:
         missing_signals: list[str] = []
         metrics_count = len(metrics_rows)
-        tracing_count = int(trace_summary[0] or 0) if trace_summary else 0
-        log_count = int(logs_summary[0] or 0) if logs_summary else 0
-        context_log_count = int(logs_summary[1] or 0) if logs_summary else 0
+        tracing_count = int((trace_summary or {}).get("request_count", 0) or 0)
+        log_count = int((logs_summary or {}).get("log_count", 0) or 0)
+        context_log_count = int((logs_summary or {}).get("context_log_count", 0) or 0)
+        anomaly_log_count = int((logs_summary or {}).get("anomaly_log_count", 0) or 0)
         logs_structured = context_log_count > 0
         metric_values = [float(value or 0) for _name, value, _observed_at in metrics_rows]
         db_calls = int(db_summary.get("total_calls", 0) or 0)
         messaging_calls = int(messaging_summary.get("total_calls", 0) or 0)
         exception_count = int(exception_summary.get("exception_count", 0) or 0) + int(exception_summary.get("error_span_count", 0) or 0)
         infra_entities = sum(len(infra_summary.get(key, []) or []) for key in ("pods", "containers", "nodes", "hosts"))
+        trace_scope = str((trace_summary or {}).get("scope_level", "missing") or "missing")
+        log_scope = str((logs_summary or {}).get("scope_level", "missing") or "missing")
+        db_scope = str(db_summary.get("scope_level", "missing") or "missing")
+        messaging_scope = str(messaging_summary.get("scope_level", "missing") or "missing")
+        exception_scope = str(exception_summary.get("scope_level", "missing") or "missing")
+        infra_scope = str(infra_summary.get("scope_level", "missing") or "missing")
+        topology_scope = str((topology or {}).get("scope_level", "missing") or "missing")
         quality_by_signal = {
-            "traces": self._quality_state(tracing_count, tracing_count == 0, False),
-            "logs": self._quality_state(log_count, log_count == 0, False),
+            "traces": self._coverage_state(tracing_count, trace_scope, tracing_count == 0, False),
+            "logs": self._coverage_state(log_count, log_scope, log_count == 0, False),
             "metrics": self._quality_state(metrics_count, all(value == 0 for value in metric_values) if metric_values else False, False),
-            "database": self._quality_state(db_calls, db_calls == 0, False),
-            "messaging": self._quality_state(messaging_calls, messaging_calls == 0, False),
-            "exceptions": self._quality_state(exception_count, exception_count == 0, False),
-            "infra": self._quality_state(infra_entities, infra_entities == 0, False),
-            "topology": "present" if topology["edges"] else "missing",
+            "database": self._coverage_state(db_calls, db_scope, db_calls == 0, False),
+            "messaging": self._coverage_state(messaging_calls, messaging_scope, messaging_calls == 0, False),
+            "exceptions": self._coverage_state(exception_count, exception_scope, exception_count == 0, False),
+            "infra": self._coverage_state(infra_entities, infra_scope, infra_entities == 0, False),
+            "topology": self._coverage_state(len(topology["edges"]) if topology else 0, topology_scope, not bool(topology["edges"]) if topology else True, False),
         }
 
         if tracing_count == 0:
@@ -947,8 +1130,12 @@ class TelemetryReader:
             missing_signals.append(f"No service-level metrics available for {service}")
         elif quality_by_signal["metrics"] == "zero":
             missing_signals.append(f"Metrics are present for {service}, but current values are zero across the incident window")
-        if not logs_structured:
-            missing_signals.append(f"Logs missing structured fields for {service}")
+        if log_count == 0:
+            missing_signals.append(f"No logs captured for {service} in the incident window")
+        elif not logs_structured:
+            missing_signals.append(f"Logs are present for {service}, but none are correlated with trace/span context")
+        if anomaly_log_count == 0 and log_count > 0:
+            missing_signals.append(f"No anomalous logs matched the selected incident window for {service}")
         if db_calls == 0:
             missing_signals.append(f"No database spans detected for {service} in the incident window")
         if messaging_calls == 0:
@@ -965,11 +1152,17 @@ class TelemetryReader:
             missing_signals.append(warning)
 
         metrics_score = 100 if metrics_count > 0 else 30
-        tracing_score = 100 if tracing_count > 0 else 20
-        logs_score = 100 if logs_structured else 45 if log_count > 0 else 20
-        correlation_score = 100 if topology["edges"] else 55
-        runtime_score = 100 if infra_entities > 0 else 45
-        dependency_score = 100 if db_calls > 0 or messaging_calls > 0 else 40
+        tracing_score = 100 if trace_scope == "incident" and tracing_count > 0 else 55 if tracing_count > 0 else 20
+        logs_score = 100 if log_scope == "incident" and logs_structured else 60 if log_count > 0 else 20
+        correlation_score = 100 if topology_scope == "incident" and topology["edges"] else 60 if topology["edges"] else 30
+        runtime_score = 100 if infra_scope == "incident" and infra_entities > 0 else 60 if infra_entities > 0 else 45
+        dependency_score = (
+            100
+            if ((db_scope == "incident" and db_calls > 0) or (messaging_scope == "incident" and messaging_calls > 0))
+            else 60
+            if (db_calls > 0 or messaging_calls > 0)
+            else 40
+        )
         observability_score = round((metrics_score + tracing_score + logs_score + correlation_score + runtime_score + dependency_score) / 6, 2)
 
         return {
@@ -1138,6 +1331,13 @@ class TelemetryReader:
         if count < 3:
             return "sparse"
         return "present"
+
+    @staticmethod
+    def _coverage_state(count: int, scope_level: str, zero_values: bool, stale: bool) -> str:
+        state = TelemetryReader._quality_state(count, zero_values, stale)
+        if state == "present" and scope_level == "contextual":
+            return "contextual"
+        return state
 
     @staticmethod
     def _canonicalize_name(value: str) -> str:

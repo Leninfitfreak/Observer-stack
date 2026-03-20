@@ -21,6 +21,7 @@ const (
 	logsResTable = "signoz_logs.distributed_logs_v2_resource"
 	tracesTable  = "signoz_traces.distributed_signoz_index_v3"
 	tracesResTable = "signoz_traces.distributed_traces_v3_resource"
+	dependencyGraphTable = "signoz_traces.distributed_dependency_graph_minutes_v2"
 )
 
 type Client struct {

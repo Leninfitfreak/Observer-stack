@@ -102,18 +102,11 @@ export default function IncidentDetailsPanel({
     correlations,
     incidentHistory,
   });
-  if (!currentIncident) {
-    return (
-      <section className="rounded-3xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-400">
-        {emptyHint || "No incidents found for the selected filters."}
-      </section>
-    );
-  }
-
-  const anomalyScore = formatScore(currentIncident.anomaly_score);
-  const derivedStatus = reasoningStatus || currentIncident.reasoning_status || (reasoning ? "completed" : "not_generated");
+  const anomalyScore = formatScore(currentIncident?.anomaly_score);
+  const derivedStatus = reasoningStatus || currentIncident?.reasoning_status || (reasoning ? "completed" : "not_generated");
   const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
   const canRunReasoning =
+    Boolean(currentIncident) &&
     canonicalEvidence.scope.scope_complete &&
     ["not_generated", "failed", "completed"].includes(derivedStatus) &&
     !reasoningBusy;
@@ -131,9 +124,10 @@ export default function IncidentDetailsPanel({
   const impactedServices = canonicalEvidence.impacted_services;
   const scope = canonicalEvidence.scope;
   const scopedRunbook = canonicalEvidence.runbook;
-  const workflowStatus = (currentIncident.workflow_status || "open").toLowerCase();
+  const workflowStatus = (currentIncident?.workflow_status || "open").toLowerCase();
 
   const refreshIncident = async () => {
+    if (!currentIncident?.incident_id) return null;
     const updated = await fetchIncident(currentIncident.incident_id);
     if (updated) {
       setActiveIncident(updated);
@@ -215,7 +209,12 @@ export default function IncidentDetailsPanel({
 
   return (
     <section className="space-y-4">
-      <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
+      {!currentIncident ? (
+        <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6 text-sm text-slate-400">
+          {emptyHint || "No incidents found for the selected filters."}
+        </div>
+      ) : (
+        <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-300">Incident Details Panel</p>
@@ -672,8 +671,10 @@ export default function IncidentDetailsPanel({
             </div>
           ) : null}
         </div>
-      </div>
+        </div>
+      )}
 
+      {currentIncident ? (
       <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
         <h3 className="text-lg font-semibold text-white">Incident History</h3>
         <div className="mt-4 space-y-3">
@@ -692,7 +693,9 @@ export default function IncidentDetailsPanel({
           )}
         </div>
       </div>
+      ) : null}
 
+      {currentIncident ? (
       <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
         <h3 className="text-lg font-semibold text-white">Incident Timeline</h3>
         <div className="mt-4 space-y-3">
@@ -710,6 +713,7 @@ export default function IncidentDetailsPanel({
           )}
         </div>
       </div>
+      ) : null}
     </section>
   );
 }
@@ -869,14 +873,14 @@ function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correla
   };
 
   const contextualEvidence = {
-    traces_present: qualityBySignal.traces === "present" || qualityBySignal.traces === "sparse",
-    logs_present: qualityBySignal.logs === "present" || qualityBySignal.logs === "sparse",
+    traces_present: qualityBySignal.traces === "present" || qualityBySignal.traces === "sparse" || qualityBySignal.traces === "contextual",
+    logs_present: qualityBySignal.logs === "present" || qualityBySignal.logs === "sparse" || qualityBySignal.logs === "contextual",
     metrics_present: qualityBySignal.metrics !== "missing",
-    database_present: qualityBySignal.database === "present" || qualityBySignal.database === "sparse",
-    messaging_present: qualityBySignal.messaging === "present" || qualityBySignal.messaging === "sparse",
-    exception_present: qualityBySignal.exceptions === "present" || qualityBySignal.exceptions === "sparse",
-    infra_present: qualityBySignal.infra === "present" || qualityBySignal.infra === "sparse",
-    topology_present: qualityBySignal.topology === "present",
+    database_present: qualityBySignal.database === "present" || qualityBySignal.database === "sparse" || qualityBySignal.database === "contextual",
+    messaging_present: qualityBySignal.messaging === "present" || qualityBySignal.messaging === "sparse" || qualityBySignal.messaging === "contextual",
+    exception_present: qualityBySignal.exceptions === "present" || qualityBySignal.exceptions === "sparse" || qualityBySignal.exceptions === "contextual",
+    infra_present: qualityBySignal.infra === "present" || qualityBySignal.infra === "sparse" || qualityBySignal.infra === "contextual",
+    topology_present: qualityBySignal.topology === "present" || qualityBySignal.topology === "contextual",
   };
 
   const directDependencyText = directEvidence.direct_dependency_nodes.join(" ").toLowerCase();
@@ -951,14 +955,14 @@ function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correla
 
 function buildCanonicalObservabilityScore(directEvidence, contextualEvidence, scope, qualityBySignal) {
   let score = 0;
-  score += directEvidence.request_count > 0 || directEvidence.trace_sample_count > 0 ? 24 : 6;
-  score += directEvidence.log_count > 0 ? 18 : contextualEvidence.logs_present ? 10 : 4;
+  score += directEvidence.request_count > 0 || directEvidence.trace_sample_count > 0 ? 24 : qualityBySignal.traces === "contextual" ? 10 : 6;
+  score += directEvidence.log_count > 0 ? 18 : qualityBySignal.logs === "contextual" ? 8 : contextualEvidence.logs_present ? 10 : 4;
   score += qualityBySignal.metrics === "present" ? 18 : qualityBySignal.metrics === "zero" ? 10 : 4;
-  score += contextualEvidence.database_present ? 10 : 4;
-  score += contextualEvidence.messaging_present ? 10 : 4;
-  score += contextualEvidence.exception_present ? 10 : 4;
-  score += contextualEvidence.infra_present ? 5 : 2;
-  score += contextualEvidence.topology_present ? 5 : 2;
+  score += qualityBySignal.database === "contextual" ? 6 : contextualEvidence.database_present ? 10 : 4;
+  score += qualityBySignal.messaging === "contextual" ? 6 : contextualEvidence.messaging_present ? 10 : 4;
+  score += qualityBySignal.exceptions === "contextual" ? 6 : contextualEvidence.exception_present ? 10 : 4;
+  score += qualityBySignal.infra === "contextual" ? 3 : contextualEvidence.infra_present ? 5 : 2;
+  score += qualityBySignal.topology === "contextual" ? 3 : contextualEvidence.topology_present ? 5 : 2;
   if (!scope.scope_complete) {
     score = Math.min(score, 45);
   }
@@ -1077,10 +1081,10 @@ function buildCanonicalSignalSummary(incident, reasoning, missingTelemetrySignal
       secondary.push(signal);
     }
   });
-  if (qualityBySignal.database === "present" || qualityBySignal.database === "sparse") {
+  if (qualityBySignal.database === "present" || qualityBySignal.database === "sparse" || qualityBySignal.database === "contextual") {
     secondary.push("database dependency evidence");
   }
-  if (qualityBySignal.messaging === "present" || qualityBySignal.messaging === "sparse") {
+  if (qualityBySignal.messaging === "present" || qualityBySignal.messaging === "sparse" || qualityBySignal.messaging === "contextual") {
     secondary.push("messaging dependency evidence");
   }
   return {

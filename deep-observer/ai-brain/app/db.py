@@ -168,6 +168,7 @@ def fetch_pending_incidents(conn: psycopg.Connection, settings: Settings) -> lis
         for key in ("telemetry_snapshot", "detector_signals", "timeline_summary"):
             if isinstance(row[key], str):
                 row[key] = json.loads(row[key])
+        normalize_incident_scope(conn, row)
     return rows
 
 
@@ -215,6 +216,7 @@ def fetch_reasoning_requests(conn: psycopg.Connection, settings: Settings, limit
         for key in ("telemetry_snapshot", "detector_signals", "timeline_summary"):
             if isinstance(row[key], str):
                 row[key] = json.loads(row[key])
+        normalize_incident_scope(conn, row)
     return rows
 
 
@@ -423,7 +425,26 @@ def fetch_historical_matches(conn: psycopg.Connection, incident: dict) -> list[d
                 incident["namespace"],
             ),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+    normalized: list[dict] = []
+    for row in rows:
+        normalize_incident_scope(conn, row)
+        normalized.append(
+            {
+                "incident_id": row.get("incident_id", ""),
+                "problem_id": row.get("problem_id", ""),
+                "service": row.get("service", ""),
+                "namespace": row.get("namespace", ""),
+                "cluster": row.get("cluster", ""),
+                "severity": row.get("severity", ""),
+                "anomaly_score": row.get("anomaly_score", 0),
+                "timestamp": row.get("timestamp"),
+                "root_cause_service": row.get("root_cause_service", ""),
+                "root_cause_signal": row.get("root_cause_signal", ""),
+                "root_cause": row.get("root_cause", ""),
+            }
+        )
+    return normalized
 
 
 def store_reasoning(conn: psycopg.Connection, incident: dict, reasoning: dict) -> None:
@@ -731,3 +752,168 @@ def update_reasoning_run(conn: psycopg.Connection, run_id: str, updates: dict) -
                 run_id,
             ),
         )
+
+
+def normalize_incident_scope(conn: psycopg.Connection, incident: dict) -> None:
+    if not isinstance(incident, dict):
+        return
+    scope = derive_incident_scope(incident)
+    if (not scope.get("scope_complete")) and incident.get("service") and (not scope.get("namespace") or not scope.get("cluster")):
+        resolved_cluster, resolved_namespace = lookup_incident_scope(
+            conn,
+            str(incident.get("service", "") or ""),
+            str(incident.get("cluster", "") or ""),
+        )
+        if not scope.get("cluster") and resolved_cluster:
+            scope["cluster"] = resolved_cluster
+        if not scope.get("namespace") and resolved_namespace:
+            scope["namespace"] = resolved_namespace
+        scope = finalize_incident_scope(incident, scope)
+    incident["cluster"] = scope.get("cluster", incident.get("cluster", ""))
+    incident["namespace"] = scope.get("namespace", incident.get("namespace", ""))
+    incident["service"] = scope.get("service", incident.get("service", ""))
+    incident["scope"] = scope
+
+
+def lookup_incident_scope(conn: psycopg.Connection, service: str, cluster: str) -> tuple[str, str]:
+    service = str(service or "").strip()
+    cluster = str(cluster or "").strip()
+    if not service:
+        return "", ""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH scoped AS (
+                SELECT cluster, namespace, max(timestamp) AS observed_at
+                FROM incidents
+                WHERE service = %s
+                  AND namespace <> ''
+                  AND (%s = '' OR cluster = %s)
+                GROUP BY cluster, namespace
+                UNION ALL
+                SELECT cluster, namespace, max(last_seen) AS observed_at
+                FROM services_registry
+                WHERE service_name = %s
+                  AND namespace <> ''
+                  AND (%s = '' OR cluster = %s)
+                GROUP BY cluster, namespace
+            )
+            SELECT cluster, namespace
+            FROM scoped
+            ORDER BY observed_at DESC
+            LIMIT 1
+            """,
+            (service, cluster, cluster, service, cluster, cluster),
+        )
+        row = cur.fetchone()
+    if not row:
+        return "", ""
+    return str(row[0] or "").strip(), str(row[1] or "").strip()
+
+
+def derive_incident_scope(incident: dict) -> dict:
+    snapshot = incident.get("telemetry_snapshot", {}) if isinstance(incident.get("telemetry_snapshot"), dict) else {}
+    filters = snapshot.get("filters", {}) if isinstance(snapshot.get("filters"), dict) else {}
+    scope = {
+        "incident_id": incident.get("incident_id", ""),
+        "cluster": first_non_empty(incident.get("cluster", ""), filters.get("Cluster"), filters.get("cluster")),
+        "namespace": first_non_empty(incident.get("namespace", ""), filters.get("Namespace"), filters.get("namespace")),
+        "service": first_non_empty(incident.get("service", ""), filters.get("Service"), filters.get("service"), incident.get("root_cause_entity", "")),
+        "incident_type": incident.get("incident_type", "observed") or "observed",
+        "signal_set": list(incident.get("detector_signals", []) or []),
+        "anomaly_score": incident.get("anomaly_score", 0),
+    }
+    if not scope["cluster"] or not scope["namespace"]:
+        problem_cluster, problem_namespace = parse_predictive_problem_scope(str(incident.get("problem_id", "") or ""))
+        scope["cluster"] = first_non_empty(scope["cluster"], problem_cluster)
+        scope["namespace"] = first_non_empty(scope["namespace"], problem_namespace)
+    return finalize_incident_scope(incident, scope)
+
+
+def finalize_incident_scope(incident: dict, scope: dict) -> dict:
+    snapshot = incident.get("telemetry_snapshot", {}) if isinstance(incident.get("telemetry_snapshot"), dict) else {}
+    warnings = list(snapshot.get("scope_warnings", []) or [])
+    start, end = derive_incident_window(incident)
+    scope["incident_window_start"] = start.isoformat() if start else ""
+    scope["incident_window_end"] = end.isoformat() if end else ""
+    if not str(scope.get("cluster", "") or "").strip():
+        warnings.append("cluster missing from incident scope")
+    if not str(scope.get("namespace", "") or "").strip():
+        warnings.append("namespace missing from incident scope")
+    if not str(scope.get("service", "") or "").strip():
+        warnings.append("service missing from incident scope")
+    if not start or not end:
+        warnings.append("incident window could not be derived")
+    scope["scope_warnings"] = unique_strings(warnings)
+    scope["scope_complete"] = len(scope["scope_warnings"]) == 0
+    return scope
+
+
+def derive_incident_window(incident: dict) -> tuple[datetime | None, datetime | None]:
+    snapshot = incident.get("telemetry_snapshot", {}) if isinstance(incident.get("telemetry_snapshot"), dict) else {}
+    filters = snapshot.get("filters", {}) if isinstance(snapshot.get("filters"), dict) else {}
+    start = parse_time(snapshot.get("incident_window_start") or filters.get("Start") or filters.get("start"))
+    end = parse_time(snapshot.get("incident_window_end") or filters.get("End") or filters.get("end"))
+    timestamp = incident.get("timestamp")
+    if timestamp and getattr(timestamp, "tzinfo", None) is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    if timestamp and not start:
+        start = timestamp.astimezone(timezone.utc) - timedelta(minutes=30)
+    if timestamp and not end:
+        horizon = int(snapshot.get("forecast_horizon_minutes", 0) or 0)
+        if str(incident.get("incident_type", "observed") or "observed").lower() == "predictive":
+            if horizon <= 0:
+                horizon = 10
+            end = timestamp.astimezone(timezone.utc) + timedelta(minutes=horizon)
+        else:
+            end = timestamp.astimezone(timezone.utc) + timedelta(minutes=5)
+    if start and end and end < start:
+        end = start + timedelta(minutes=5)
+    return start, end
+
+
+def parse_predictive_problem_scope(problem_id: str) -> tuple[str, str]:
+    parts = str(problem_id or "").strip().split(":")
+    if len(parts) < 2:
+        return "", ""
+    return str(parts[0] or "").strip(), str(parts[1] or "").strip()
+
+
+def first_non_empty(*values) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def unique_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    items: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        items.append(text)
+    return items
+
+
+def parse_time(value) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
