@@ -137,6 +137,11 @@ export default function IncidentDetailsPanel({
   const sloStatus = Array.isArray(canonicalEvidence.slo_status) ? canonicalEvidence.slo_status : [];
   const serviceHealthScore = canonicalEvidence.service_health_score ?? "Unavailable";
   const renderedReasoningSummary = reasoningView.summary || canonicalEvidence.reasoning_summary;
+  const sparsePredictiveState = Boolean(canonicalEvidence.sparse_predictive_state);
+  const sparsePredictiveContract =
+    canonicalEvidence.sparse_predictive_contract && typeof canonicalEvidence.sparse_predictive_contract === "object"
+      ? canonicalEvidence.sparse_predictive_contract
+      : {};
 
   const refreshIncident = async () => {
     if (!currentIncident?.incident_id) return null;
@@ -241,6 +246,16 @@ export default function IncidentDetailsPanel({
         </div>
       ) : (
         <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
+        {sparsePredictiveState ? (
+          <SparsePredictiveIncidentView
+            incident={currentIncident}
+            scope={scope}
+            anomalyScore={anomalyScore}
+            signalSummary={signalSummary}
+            sparseContract={sparsePredictiveContract}
+          />
+        ) : (
+        <>
         {evidenceError ? (
           <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
             Evidence API fallback in use: {evidenceError}
@@ -736,10 +751,12 @@ export default function IncidentDetailsPanel({
             </div>
           ) : null}
         </div>
+        </>
+        )}
         </div>
       )}
 
-      {currentIncident ? (
+      {currentIncident && !sparsePredictiveState ? (
       <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
         <h3 className="text-lg font-semibold text-white">Incident History</h3>
         <div className="mt-4 space-y-3">
@@ -760,7 +777,7 @@ export default function IncidentDetailsPanel({
       </div>
       ) : null}
 
-      {currentIncident ? (
+      {currentIncident && !sparsePredictiveState ? (
       <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
         <h3 className="text-lg font-semibold text-white">Incident Timeline</h3>
         <div className="mt-4 space-y-3">
@@ -780,6 +797,87 @@ export default function IncidentDetailsPanel({
       </div>
       ) : null}
     </section>
+  );
+}
+
+function SparsePredictiveIncidentView({ incident, scope, anomalyScore, signalSummary, sparseContract }) {
+  const counts = sparseContract.direct_evidence_counts || {};
+  const contextual = sparseContract.contextual_flags || {};
+  const guidance = toList(sparseContract.guidance);
+  const signals = toList(sparseContract.signals).length ? toList(sparseContract.signals) : toList(signalSummary?.critical_signals);
+  const relatedObserved = Array.isArray(sparseContract.related_observed_incidents)
+    ? sparseContract.related_observed_incidents
+    : [];
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.3em] text-amber-300">Predictive Incident (Sparse)</p>
+          <h2 className="mt-2 text-2xl font-semibold text-white">{scope.service || incident?.service || "Unknown service"}</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            {scope.cluster_label} / {scope.namespace_label} / {new Date(incident.timestamp).toLocaleString()}
+          </p>
+        </div>
+        <div className="rounded-3xl border border-white/10 bg-slate-950/80 px-4 py-3 text-right">
+          <div className="text-xs uppercase tracking-[0.3em] text-slate-400">Anomaly Score</div>
+          <div className="mt-1 text-2xl font-semibold text-white">{anomalyScore}</div>
+        </div>
+      </div>
+
+      <div className="rounded-3xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-100">
+        <p className="text-sm font-semibold">Insufficient incident-scoped telemetry for RCA</p>
+        <p className="mt-2 text-xs text-amber-200">
+          {toText(sparseContract.summary || "Direct incident-scoped telemetry is zero, so DeepObserver is showing a compact predictive view instead of full RCA panels.")}
+        </p>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Signal</h3>
+          <ul className="mt-3 space-y-2 text-sm text-slate-200">
+            {signals.length ? signals.map((item) => <li key={item}>- {toText(item)}</li>) : <li className="text-slate-500">No signal data.</li>}
+          </ul>
+        </div>
+        <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Evidence Availability</h3>
+          <ul className="mt-3 space-y-2 text-sm text-slate-200">
+            <li>Requests: {toText(counts.requests ?? 0)}</li>
+            <li>Logs: {toText(counts.logs ?? 0)}</li>
+            <li>Traces: {toText(counts.traces ?? 0)}</li>
+            <li>Metrics: {toText(counts.metrics ?? 0)}</li>
+            <li>Contextual database: {contextual.database ? "present" : "missing"}</li>
+            <li>Contextual messaging: {contextual.messaging ? "present" : "missing"}</li>
+            <li>Contextual topology: {contextual.topology ? "present" : "missing"}</li>
+          </ul>
+        </div>
+      </div>
+
+      <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Next Steps</h3>
+        <ul className="mt-3 space-y-2 text-sm text-slate-200">
+          {(guidance.length ? guidance : [
+            "Collect traces, logs, and service metrics for the selected incident scope.",
+            "Re-run reasoning after incident-scoped telemetry becomes available.",
+            "Review the nearest observed incident for concrete RCA evidence.",
+          ]).map((item) => (
+            <li key={item}>- {toText(item)}</li>
+          ))}
+        </ul>
+      </div>
+
+      {relatedObserved.length ? (
+        <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+          <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Nearest Observed Incidents</h3>
+          <ul className="mt-3 space-y-2 text-sm text-slate-200">
+            {relatedObserved.map((item) => (
+              <li key={item.incident_id}>
+                - {toText(item.service || scope.service)} at {formatTimestamp(item.timestamp)} ({toText(item.severity || "unknown")})
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

@@ -92,6 +92,29 @@ func reasoningView(item *incidents.Incident, quality map[string]string) map[stri
 	}
 }
 
+func isSparsePredictiveIncident(item *incidents.Incident, direct map[string]any, quality map[string]string) bool {
+	if !strings.EqualFold(firstNonEmpty(item.IncidentType, "observed"), "predictive") {
+		return false
+	}
+	requestCount, _ := direct["request_count"].(int64)
+	logCount, _ := direct["log_count"].(int64)
+	traceCount, _ := direct["trace_sample_count"].(int)
+	metricCount := 0
+	switch values := direct["metric_highlights"].(type) {
+	case map[string]any:
+		metricCount = len(values)
+	case map[string]float64:
+		metricCount = len(values)
+	}
+	metricsDirect := strings.EqualFold(quality["metrics"], "direct")
+	topologyDirect := strings.EqualFold(quality["topology"], "direct")
+	return requestCount == 0 &&
+		logCount == 0 &&
+		traceCount == 0 &&
+		(metricCount == 0 || !metricsDirect) &&
+		!topologyDirect
+}
+
 func confidenceLevel(score float64) string {
 	switch {
 	case score >= 0.75:

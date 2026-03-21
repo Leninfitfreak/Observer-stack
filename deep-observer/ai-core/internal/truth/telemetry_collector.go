@@ -43,6 +43,8 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		Start:     scope.Start.Add(-72 * time.Hour),
 		End:       scope.End,
 	}, 12)
+	sparsePredictiveState := isSparsePredictiveIncident(item, direct, quality)
+	sparsePredictiveContract := buildSparsePredictiveContract(item, scope, direct, quality, history)
 
 	return map[string]any{
 		"incident":                   item,
@@ -92,6 +94,60 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		"slo_status":                 []string{},
 		"service_health_score":       serviceHealthScore(item),
 		"missing_telemetry_signals":  missing,
+		"sparse_predictive_state":    sparsePredictiveState,
+		"sparse_predictive_contract": sparsePredictiveContract,
+	}
+}
+
+func buildSparsePredictiveContract(
+	item *incidents.Incident,
+	scope NormalizedScope,
+	direct map[string]any,
+	quality map[string]string,
+	history []incidents.Incident,
+) map[string]any {
+	metricCount := 0
+	switch values := direct["metric_highlights"].(type) {
+	case map[string]any:
+		metricCount = len(values)
+	case map[string]float64:
+		metricCount = len(values)
+	}
+	relatedObserved := []map[string]any{}
+	for _, candidate := range history {
+		if candidate.ID == item.ID || !strings.EqualFold(candidate.IncidentType, "observed") {
+			continue
+		}
+		relatedObserved = append(relatedObserved, map[string]any{
+			"incident_id": candidate.ID,
+			"timestamp":   candidate.Timestamp,
+			"service":     candidate.Service,
+			"severity":    candidate.Severity,
+		})
+		if len(relatedObserved) >= 3 {
+			break
+		}
+	}
+	contextualFlags := map[string]bool{
+		"database":  strings.EqualFold(quality["database"], "contextual") || strings.EqualFold(quality["database"], "direct"),
+		"messaging": strings.EqualFold(quality["messaging"], "contextual") || strings.EqualFold(quality["messaging"], "direct"),
+		"topology":  strings.EqualFold(quality["topology"], "contextual") || strings.EqualFold(quality["topology"], "direct"),
+	}
+	return map[string]any{
+		"incident_id":            item.ID,
+		"incident_type":          item.IncidentType,
+		"scope":                  buildIncidentScope(item, scope),
+		"anomaly_score":          item.AnomalyScore,
+		"signals":                item.Signals,
+		"direct_evidence_counts": map[string]any{"requests": direct["request_count"], "logs": direct["log_count"], "traces": direct["trace_sample_count"], "metrics": metricCount},
+		"contextual_flags":       contextualFlags,
+		"summary":                "Insufficient incident-scoped telemetry for RCA.",
+		"guidance": []string{
+			"Collect traces, logs, and service metrics for the selected incident scope.",
+			"Re-run reasoning after incident-scoped telemetry becomes available.",
+			"Review the nearest observed incident for concrete RCA evidence.",
+		},
+		"related_observed_incidents": relatedObserved,
 	}
 }
 
