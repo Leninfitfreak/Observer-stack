@@ -18,6 +18,7 @@ import (
 	"deep-observer/ai-core/internal/enterprise"
 	"deep-observer/ai-core/internal/incidents"
 	"deep-observer/ai-core/internal/truth"
+	"deep-observer/ai-core/internal/v2"
 )
 
 var serviceNodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,127}$`)
@@ -27,7 +28,9 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 	sloEngine := enterprise.NewSLOEngine(store)
 	coverageEngine := enterprise.NewObservabilityCoverageAnalyzer(store)
 	truthService := truth.NewService(store, chConfig, project)
+	v2Service := v2.NewService(store, project)
 	mux := http.NewServeMux()
+	v2.RegisterRoutes(mux, v2Service)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
