@@ -1,16 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  fetchChanges,
-  fetchClusterReport,
-  fetchFilters,
-  fetchIncidents,
-  fetchObservabilityReport,
-  fetchRunbooks,
-  fetchServiceHealth,
-  fetchSLOStatus,
-  fetchTopology,
-} from "../api";
+import { fetchDashboardScope } from "../api";
 import FilterBar from "../components/FilterBar";
 import Header from "../components/Header";
 import IncidentDetailsPanel from "../components/IncidentDetailsPanel";
@@ -33,27 +23,11 @@ export default function DashboardPage() {
   const [appliedCustomRange, setAppliedCustomRange] = useState({ start: "", end: "" });
   const [liveMode, setLiveMode] = useState(false);
   const [incidentHint, setIncidentHint] = useState("");
-  const [serviceHealth, setServiceHealth] = useState([]);
-  const [clusterReport, setClusterReport] = useState(null);
-  const [changes, setChanges] = useState([]);
-  const [sloStatus, setSloStatus] = useState([]);
-  const [runbooks, setRunbooks] = useState([]);
-  const [observabilityReport, setObservabilityReport] = useState(null);
 
   const selectedIncident =
     (Array.isArray(incidents) ? incidents : []).find((incident) => incident.incident_id === selectedIncidentId) ||
     (Array.isArray(incidents) ? incidents[0] : null) ||
     null;
-  const selectedServiceName = selectedIncident?.service || filters.service || "";
-  const selectedClusterReport =
-    selectedIncident && clusterReport && typeof clusterReport === "object"
-      ? {
-          ...clusterReport,
-          impacted_services: Array.isArray(clusterReport.impacted_services)
-            ? clusterReport.impacted_services.filter((item) => !selectedServiceName || item?.service_name === selectedServiceName)
-            : [],
-        }
-      : clusterReport;
 
   const range = useMemo(
     () => buildRange(appliedTimeRange, appliedCustomRange.start, appliedCustomRange.end),
@@ -106,77 +80,43 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    fetchFilters()
-      .then((payload) =>
-        setOptions({
-          clusters: Array.isArray(payload?.clusters) ? payload.clusters : [],
-          namespaces: Array.isArray(payload?.namespaces) ? payload.namespaces : [],
-          services: Array.isArray(payload?.services) ? payload.services : [],
-        }),
-      )
-      .catch(console.error);
-  }, []);
-
-  useEffect(() => {
     let cancelled = false;
 
     const load = async () => {
-      setTopology({ nodes: [], edges: [] });
-      setServiceHealth([]);
-      setClusterReport(null);
-      setChanges([]);
-      setSloStatus([]);
-      setObservabilityReport(null);
-
       try {
-        const incidentData = await fetchIncidents(query);
-        if (!cancelled) {
-          const safeIncidents = Array.isArray(incidentData) ? incidentData : [];
-          setIncidents(safeIncidents);
-          setIncidentHint(safeIncidents.length ? "" : "No incidents match the current filters.");
-          setSelectedIncidentId((current) => {
-            if (!safeIncidents.length) return "";
-            return safeIncidents.some((item) => item.incident_id === current) ? current : safeIncidents[0].incident_id;
-          });
-          console.info("[filters] query=", query);
-          console.info("[filters] incidents_count=", safeIncidents.length);
-          console.info("[filters] selected_incident=", safeIncidents[0]?.incident_id || "");
-        }
+        const payload = await fetchDashboardScope(query);
+        if (cancelled) return;
+
+        const safeIncidents = Array.isArray(payload?.incident_list) ? payload.incident_list : [];
+        const safeTopology =
+          payload?.scoped_topology && typeof payload.scoped_topology === "object"
+            ? {
+                ...payload.scoped_topology,
+                nodes: Array.isArray(payload.scoped_topology.nodes) ? payload.scoped_topology.nodes : [],
+                edges: Array.isArray(payload.scoped_topology.edges) ? payload.scoped_topology.edges : [],
+              }
+            : { nodes: [], edges: [] };
+
+        setIncidents(safeIncidents);
+        setTopology(safeTopology);
+        setOptions({
+          clusters: Array.isArray(payload?.filter_options?.clusters) ? payload.filter_options.clusters : [],
+          namespaces: Array.isArray(payload?.filter_options?.namespaces) ? payload.filter_options.namespaces : [],
+          services: Array.isArray(payload?.filter_options?.services) ? payload.filter_options.services : [],
+        });
+        setIncidentHint(safeIncidents.length ? "" : payload?.no_results_state?.message || "No incidents match the current filters.");
+        setSelectedIncidentId((current) => {
+          if (!safeIncidents.length) return "";
+          return safeIncidents.some((item) => item.incident_id === current) ? current : safeIncidents[0].incident_id;
+        });
       } catch (error) {
         console.error(error);
+        if (!cancelled) {
+          setIncidents([]);
+          setTopology({ nodes: [], edges: [] });
+          setIncidentHint("Unable to load dashboard scope.");
+        }
       }
-
-      const [topologyData, healthData, reportData, changesData, sloData, runbookData, observabilityData] = await Promise.allSettled([
-        fetchTopology(query),
-        fetchServiceHealth(query),
-        fetchClusterReport(query),
-        fetchChanges(query),
-        fetchSLOStatus(query),
-        fetchRunbooks({}),
-        fetchObservabilityReport(query),
-      ]);
-
-      if (cancelled) return;
-
-      const safeTopology =
-        topologyData.status === "fulfilled" && topologyData.value && typeof topologyData.value === "object"
-          ? {
-              ...topologyData.value,
-              nodes: Array.isArray(topologyData.value.nodes) ? topologyData.value.nodes : [],
-              edges: Array.isArray(topologyData.value.edges) ? topologyData.value.edges : [],
-            }
-          : { nodes: [], edges: [] };
-      setTopology(safeTopology);
-      setServiceHealth(healthData.status === "fulfilled" && Array.isArray(healthData.value) ? healthData.value : []);
-      setClusterReport(reportData.status === "fulfilled" && reportData.value && typeof reportData.value === "object" ? reportData.value : null);
-      setChanges(changesData.status === "fulfilled" && Array.isArray(changesData.value) ? changesData.value : []);
-      setSloStatus(sloData.status === "fulfilled" && Array.isArray(sloData.value) ? sloData.value : []);
-      setRunbooks(runbookData.status === "fulfilled" && Array.isArray(runbookData.value) ? runbookData.value : []);
-      setObservabilityReport(
-        observabilityData.status === "fulfilled" && observabilityData.value && typeof observabilityData.value === "object"
-          ? observabilityData.value
-          : null,
-      );
     };
 
     load();
@@ -215,15 +155,8 @@ export default function DashboardPage() {
       <section ref={detailsPanelRef}>
         <IncidentDetailsPanel
           incident={selectedIncident}
-          topology={topology}
           filterQuery={query}
           emptyHint={incidentHint || "No incidents found for the selected filters."}
-          serviceHealth={serviceHealth.find((item) => item.service_name === selectedServiceName)}
-          clusterReport={selectedClusterReport}
-          changes={filterChangesBySelectedService(changes, selectedServiceName)}
-          sloStatus={sloStatus.filter((item) => item.service_name === selectedServiceName)}
-          runbooks={runbooks}
-          observabilityReport={observabilityReport}
         />
       </section>
       <IncidentTable
@@ -235,15 +168,4 @@ export default function DashboardPage() {
       />
     </main>
   );
-}
-
-function filterChangesBySelectedService(changes, selectedServiceName) {
-  if (!Array.isArray(changes)) return [];
-  if (!selectedServiceName) return changes;
-  const selected = String(selectedServiceName).trim().toLowerCase();
-  return changes.filter((item) => {
-    const serviceName = String(item?.service_name || item?.service || "").trim().toLowerCase();
-    const resourceName = String(item?.resource_name || "").trim().toLowerCase();
-    return serviceName === selected || resourceName === selected;
-  });
 }

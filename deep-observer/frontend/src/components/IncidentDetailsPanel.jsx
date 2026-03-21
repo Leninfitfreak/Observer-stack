@@ -2,13 +2,10 @@ import { useEffect, useState } from "react";
 import {
   fetchIncident,
   fetchIncidentEvidence,
-  fetchTimeline,
   runReasoning,
   retryReasoning,
   fetchReasoningHistory,
   fetchReasoningRun,
-  fetchCorrelations,
-  fetchIncidents,
   updateIncidentWorkflow,
 } from "../api";
 
@@ -16,38 +13,17 @@ const MAX_REASONING_POLL_ATTEMPTS = 45;
 
 export default function IncidentDetailsPanel({
   incident,
-  topology,
   filterQuery,
   emptyHint,
-  serviceHealth,
-  clusterReport,
-  changes,
-  sloStatus,
-  runbooks,
-  observabilityReport,
 }) {
-  const [timeline, setTimeline] = useState([]);
   const [activeIncident, setActiveIncident] = useState(null);
   const [reasoningStatus, setReasoningStatus] = useState("");
   const [reasoningError, setReasoningError] = useState("");
   const [reasoningBusy, setReasoningBusy] = useState(false);
   const [reasoningHistory, setReasoningHistory] = useState([]);
   const [selectedRun, setSelectedRun] = useState(null);
-  const [correlations, setCorrelations] = useState([]);
   const [workflowUpdating, setWorkflowUpdating] = useState(false);
-  const [incidentCluster, setIncidentCluster] = useState(null);
-  const [incidentHistory, setIncidentHistory] = useState([]);
   const [serverEvidence, setServerEvidence] = useState(null);
-
-  useEffect(() => {
-    if (!incident) return;
-    fetchTimeline(incident.incident_id)
-      .then((payload) => {
-        const events = Array.isArray(payload.events) ? payload.events : [];
-        setTimeline(filterTimelineEvents(events, filterQuery));
-      })
-      .catch(console.error);
-  }, [incident, filterQuery]);
 
   useEffect(() => {
     if (!incident) {
@@ -57,7 +33,6 @@ export default function IncidentDetailsPanel({
       setReasoningBusy(false);
       setReasoningHistory([]);
       setSelectedRun(null);
-      setCorrelations([]);
       setServerEvidence(null);
       return;
     }
@@ -76,16 +51,6 @@ export default function IncidentDetailsPanel({
         setSelectedRun(items[0] || null);
       })
       .catch(console.error);
-    fetchCorrelations(incident.incident_id)
-      .then((payload) => setCorrelations(Array.isArray(payload) ? payload : []))
-      .catch(console.error);
-    fetchIncidents(filterQuery)
-      .then((payload) => {
-        const items = Array.isArray(payload) ? payload : [];
-        setIncidentCluster(buildIncidentCluster(incident, items));
-        setIncidentHistory(buildIncidentHistory(incident, items));
-      })
-      .catch(console.error);
   }, [incident, filterQuery]);
 
   useEffect(() => {
@@ -98,7 +63,7 @@ export default function IncidentDetailsPanel({
       .catch(() => setServerEvidence(null));
   }, [incident, filterQuery]);
 
-  const chartPoints = timeline
+  const chartPoints = (Array.isArray(serverEvidence?.telemetry_chart) ? serverEvidence.telemetry_chart : [])
     .filter((event) => Number.isFinite(Number(event?.value)))
     .slice(-8)
     .map((event) => ({
@@ -109,25 +74,7 @@ export default function IncidentDetailsPanel({
 
   const currentIncident = activeIncident || incident;
   const reasoning = currentIncident?.reasoning;
-  const localCanonicalEvidence = buildCanonicalIncidentEvidence({
-    incident: currentIncident,
-    topology,
-    timeline,
-    reasoning,
-    correlations,
-    incidentHistory,
-  });
-  const canonicalEvidence = serverEvidence
-    ? {
-        ...localCanonicalEvidence,
-        ...serverEvidence,
-        scope: serverEvidence.scope || localCanonicalEvidence.scope,
-        direct_evidence: serverEvidence.direct_evidence || localCanonicalEvidence.direct_evidence,
-        contextual_evidence: serverEvidence.contextual_evidence || localCanonicalEvidence.contextual_evidence,
-        telemetry_audit: serverEvidence.telemetry_audit || localCanonicalEvidence.telemetry_audit,
-        incident_topology: serverEvidence.incident_topology || localCanonicalEvidence.incident_topology,
-      }
-    : localCanonicalEvidence;
+  const canonicalEvidence = serverEvidence || buildPendingEvidenceSkeleton(currentIncident);
   const anomalyScore = formatScore(currentIncident?.anomaly_score);
   const derivedStatus = reasoningStatus || currentIncident?.reasoning_status || (reasoning ? "completed" : "not_generated");
   const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
@@ -148,10 +95,16 @@ export default function IncidentDetailsPanel({
   const telemetryAudit = canonicalEvidence.telemetry_audit;
   const telemetryEvidence = canonicalEvidence.telemetry_evidence;
   const impactedServices = canonicalEvidence.impacted_services;
-  const scope = canonicalEvidence.scope;
+  const scope = canonicalEvidence.scope || {};
   const scopedRunbook = canonicalEvidence.runbook;
   const workflowStatus = (currentIncident?.workflow_status || "open").toLowerCase();
   const reasoningReady = canonicalEvidence.reasoning_ready;
+  const incidentHistory = Array.isArray(canonicalEvidence.incident_history) ? canonicalEvidence.incident_history : [];
+  const correlations = Array.isArray(canonicalEvidence.related_incidents) ? canonicalEvidence.related_incidents : [];
+  const clusterContext = canonicalEvidence.cluster_context && typeof canonicalEvidence.cluster_context === "object" ? canonicalEvidence.cluster_context : {};
+  const changeTimelineItems = Array.isArray(canonicalEvidence.change_timeline) ? canonicalEvidence.change_timeline : [];
+  const sloStatus = Array.isArray(canonicalEvidence.slo_status) ? canonicalEvidence.slo_status : [];
+  const serviceHealthScore = canonicalEvidence.service_health_score ?? "Unavailable";
 
   const refreshIncident = async () => {
     if (!currentIncident?.incident_id) return null;
@@ -160,15 +113,15 @@ export default function IncidentDetailsPanel({
       setActiveIncident(updated);
       setReasoningStatus(updated.reasoning_status || derivedStatus);
       setReasoningError(updated.reasoning_error || "");
+      fetchIncidentEvidence(updated.incident_id, filterQuery)
+        .then((payload) => setServerEvidence(payload && typeof payload === "object" ? payload : null))
+        .catch(() => setServerEvidence(null));
       fetchReasoningHistory(updated.incident_id)
         .then((payload) => {
           const items = Array.isArray(payload) ? payload : [];
           setReasoningHistory(items);
           setSelectedRun(items[0] || null);
         })
-        .catch(console.error);
-      fetchCorrelations(updated.incident_id)
-        .then((payload) => setCorrelations(Array.isArray(payload) ? payload : []))
         .catch(console.error);
     }
     return updated;
@@ -266,7 +219,10 @@ export default function IncidentDetailsPanel({
           <InfoCard title="Root Cause Signal" value={reasoningReady ? (reasoning?.root_cause_signal || toList(currentIncident.signals).join(", ")) : "Not generated"} />
           <InfoCard title="Customer Impact" value={reasoningReady ? (reasoning?.customer_impact || reasoning?.impact_assessment || "Pending") : "Awaiting reasoning"} />
           <InfoCard title="Observability Score" value={`${canonicalEvidence.observability_score}%`} />
-          <InfoCard title="Service Health Score" value={`${formatScore(serviceHealth?.health_score ?? 0)} / 100`} />
+          <InfoCard
+            title="Service Health Score"
+            value={typeof serviceHealthScore === "number" ? `${formatScore(serviceHealthScore)} / 100` : serviceHealthScore}
+          />
           <InfoCard
             title="Root Cause Confidence"
             value={formatConfidenceLabel(reasoningReady ? reasoning?.confidence_score ?? 0 : 0, "Confidence pending")}
@@ -434,18 +390,18 @@ export default function IncidentDetailsPanel({
 
         <div className="mt-6 rounded-3xl border border-white/10 bg-slate-950/70 p-4">
           <h3 className="text-sm font-semibold uppercase tracking-[0.3em] text-slate-400">Incident Cluster</h3>
-          {incidentCluster ? (
+          {correlations.length || Number(clusterContext?.at_risk_services || 0) > 0 ? (
             <div className="mt-3 space-y-2 text-sm text-slate-200">
-              <p className="text-sm text-white">{incidentCluster.cluster_label}</p>
-              <p className="text-xs text-slate-400">{incidentCluster.cluster_reason}</p>
+              <p className="text-sm text-white">Selected incident context remains isolated from related incidents.</p>
+              <p className="text-xs text-slate-400">Related incidents are listed separately and are not blended into direct RCA evidence.</p>
               <p className="text-xs text-slate-500">
-                Recurring Pattern: {incidentCluster.recurring_pattern ? "Yes" : "No"}
+                At-risk services in scoped history: {toText(clusterContext?.at_risk_services ?? 0)}
               </p>
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.3em] text-slate-500">Related Incidents</p>
                 <ul className="mt-2 space-y-1 text-sm text-slate-200">
-                  {incidentCluster.related_incident_ids.length
-                    ? incidentCluster.related_incident_ids.map((item) => <li key={item}>- {item}</li>)
+                  {correlations.length
+                    ? correlations.map((item) => <li key={item.incident_id}>- {item.incident_id}</li>)
                     : <li className="text-slate-500">No related incidents detected.</li>}
                 </ul>
               </div>
@@ -635,22 +591,18 @@ export default function IncidentDetailsPanel({
         </div>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
-          <InfoCard title="Cluster At-Risk Services" value={clusterReport?.at_risk_services ?? 0} />
-          <InfoCard title="Missing Resource Limits" value={clusterReport?.missing_resource_limits ?? 0} />
+          <InfoCard title="Cluster At-Risk Services" value={clusterContext?.at_risk_services ?? 0} />
+          <InfoCard title="Missing Resource Limits" value={clusterContext?.missing_resource_limits ?? "Unsupported from telemetry"} />
         </div>
 
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
           <RichList
             title="Change Timeline"
-            items={(Array.isArray(changes) ? changes : [])
-              .slice(0, 5)
-              .map((item) => `${new Date(item.timestamp).toLocaleString()} - ${item.change_type} ${item.resource_type}/${item.resource_name}`)}
+            items={changeTimelineItems}
           />
           <RichList
             title="SLO Status"
-            items={(Array.isArray(sloStatus) ? sloStatus : [])
-              .map((item) => `${item.slo_type}: ${item.slo_status} (${Number(item.error_budget_remaining || 0).toFixed(1)}% budget)`)
-            }
+            items={sloStatus}
           />
           <RichList
             title="Incident Guidance"
@@ -1489,17 +1441,133 @@ function buildEvidenceCoverageScore(telemetryAudit, observabilityGaps) {
 
 function buildSelectedIncidentCoverageContent(canonicalEvidence) {
   const direct = canonicalEvidence.direct_evidence || {};
-  const quality = canonicalEvidence.telemetry_audit?.telemetryQuality || {};
-  const deps = Array.isArray(direct.direct_dependency_nodes) ? direct.direct_dependency_nodes.length : 0;
+  const coverage = canonicalEvidence.observability_coverage || {};
   return [
-    `Selected-incident score: ${canonicalEvidence.observability_score}%`,
-    `Requests: ${direct.request_count || 0}`,
-    `Logs: ${direct.log_count || 0}`,
-    `Trace samples: ${direct.trace_sample_count || 0}`,
+    `Selected-incident score: ${canonicalEvidence.observability_score ?? coverage.score ?? 0}%`,
+    `Requests: ${coverage.requests ?? direct.request_count ?? 0}`,
+    `Logs: ${coverage.log_count ?? direct.log_count ?? 0}`,
+    `Trace samples: ${coverage.trace_samples ?? direct.trace_sample_count ?? 0}`,
     `Metric highlights: ${Object.keys(direct.metric_highlights || {}).length}`,
-    `Dependencies: ${deps}`,
-    `Topology: ${quality.topology || "missing"}`,
+    `Traces: ${coverage.traces || "missing"}`,
+    `Logs quality: ${coverage.logs || "missing"}`,
+    `Metrics: ${coverage.metrics || "missing"}`,
+    `Database: ${coverage.database || "missing"}`,
+    `Messaging: ${coverage.messaging || "missing"}`,
+    `Topology: ${coverage.topology || "missing"}`,
   ].join(" | ");
+}
+
+function buildPendingEvidenceSkeleton(incident) {
+  const service = incident?.service || incident?.root_cause_entity || "";
+  const cluster = incident?.cluster || "";
+  const namespace = incident?.namespace || "";
+  return {
+    scope: {
+      incident_id: incident?.incident_id || "",
+      cluster,
+      namespace,
+      service,
+      incident_type: incident?.incident_type || "observed",
+      incident_window_start: incident?.timestamp || "",
+      incident_window_end: incident?.timestamp || "",
+      signal_set: Array.isArray(incident?.signals) ? incident.signals : [],
+      anomaly_score: Number(incident?.anomaly_score ?? 0),
+      scope_complete: Boolean(cluster && namespace && service),
+      scope_warnings: [],
+      cluster_label: cluster || "Unknown cluster",
+      namespace_label: namespace || "Unknown namespace",
+    },
+    normalized_scope: {
+      incident_id: incident?.incident_id || "",
+      cluster,
+      namespace,
+      service,
+      incident_type: incident?.incident_type || "observed",
+      incident_window_start: incident?.timestamp || "",
+      incident_window_end: incident?.timestamp || "",
+      signal_set: Array.isArray(incident?.signals) ? incident.signals : [],
+      anomaly_score: Number(incident?.anomaly_score ?? 0),
+      scope_complete: Boolean(cluster && namespace && service),
+      scope_warnings: [],
+      cluster_label: cluster || "Unknown cluster",
+      namespace_label: namespace || "Unknown namespace",
+    },
+    direct_evidence: {
+      request_count: 0,
+      log_count: 0,
+      trace_sample_count: 0,
+      metric_highlights: {},
+      direct_dependency_nodes: [],
+    },
+    contextual_evidence: {},
+    telemetry_audit: { isSparse: true, telemetryQuality: {} },
+    incident_topology: { available: false, nodes: [], edges: [] },
+    telemetry_evidence: ["Loading selected-incident evidence from the backend truth contract."],
+    missing_telemetry_signals: [],
+    confidence_details: {
+      score: 0,
+      level: "pending",
+      explanation_text: "Selected-incident evidence is loading.",
+      supporting_factors: [],
+      weakening_factors: [],
+    },
+    trust_score: { score: 0, level: "pending", summary: "Trust will be available after the backend evidence contract loads." },
+    observability_score: 0,
+    observability_coverage: {
+      score: 0,
+      traces: "missing",
+      logs: "missing",
+      metrics: "missing",
+      database: "missing",
+      messaging: "missing",
+      exceptions: "missing",
+      infra: "missing",
+      topology: "missing",
+      requests: 0,
+      log_count: 0,
+      trace_samples: 0,
+    },
+    impacted_services: [],
+    propagation_path: [],
+    causal_chain: [],
+    reasoning_ready: false,
+    reasoning_status: incident?.reasoning_status || "not_generated",
+    reasoning_summary: "Reasoning has not been generated for this incident yet. The page is currently showing evidence only.",
+    incident_summary: "Loading selected-incident evidence.",
+    signal_summary: { critical_signals: [], secondary_signals: [], missing_signals: [] },
+    log_summary: null,
+    impact_summary: {
+      primary_service: service || "Unknown service",
+      secondary_services: [],
+      summary_text: "Impact is unavailable until the backend evidence contract loads.",
+      estimated_user_impact: "Pending evidence load.",
+      severity_label: String(incident?.severity || "unknown").toUpperCase(),
+    },
+    decision_panel: {
+      root_cause: "Reasoning not generated",
+      impact_summary: "Selected-incident evidence is loading.",
+      immediate_action: "Wait for the backend-selected evidence contract to load.",
+      next_actions: [],
+      investigation_steps: [],
+      confidence_score: 0,
+    },
+    prioritized_actions: [],
+    runbook: { incident_steps: [], related_context_steps: [] },
+    observability_gaps: {
+      missing_critical_signals: [],
+      impact_on_confidence: "Evidence is still loading.",
+      recommended_instrumentation_steps: [],
+      summary: "Evidence is still loading.",
+    },
+    incident_timeline: [],
+    related_incidents: [],
+    incident_history: [],
+    cluster_context: { at_risk_services: 0, missing_resource_limits: "Unsupported from telemetry" },
+    change_timeline: [],
+    slo_status: [],
+    service_health_score: "Unavailable",
+    telemetry_chart: [],
+  };
 }
 
 function buildCanonicalIncidentSummary(incident, scope, telemetryAudit) {

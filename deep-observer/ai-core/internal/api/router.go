@@ -17,6 +17,7 @@ import (
 	"deep-observer/ai-core/internal/config"
 	"deep-observer/ai-core/internal/enterprise"
 	"deep-observer/ai-core/internal/incidents"
+	"deep-observer/ai-core/internal/truth"
 )
 
 var serviceNodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,127}$`)
@@ -25,6 +26,7 @@ var structuredTopologyNodePattern = regexp.MustCompile(`^(?:[a-z0-9][a-z0-9._/-]
 func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project config.ProjectConfig) http.Handler {
 	sloEngine := enterprise.NewSLOEngine(store)
 	coverageEngine := enterprise.NewObservabilityCoverageAnalyzer(store)
+	truthService := truth.NewService(store, chConfig, project)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -61,6 +63,24 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 		}
 		fmt.Printf("api incidents result_count=%d\n", len(filtered))
 		writeJSON(w, http.StatusOK, filtered)
+	})
+
+	mux.HandleFunc("/api/dashboard-scope", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		start, end := parseTimeRangeWithDefaults(r.URL.Query().Get("start"), r.URL.Query().Get("end"), 24*time.Hour)
+		contract, err := truthService.BuildDashboardContract(ctx, truth.ScopeRequest{
+			Cluster:   firstNonEmpty(r.URL.Query().Get("cluster"), project.ClusterID),
+			Namespace: firstNonEmpty(r.URL.Query().Get("namespace"), project.NamespaceFilter),
+			Service:   normalizeServiceName(firstNonEmpty(r.URL.Query().Get("service"), project.ServiceFilter)),
+			Start:     start,
+			End:       end,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, contract)
 	})
 
 	mux.HandleFunc("/api/incidents/", func(w http.ResponseWriter, r *http.Request) {
@@ -202,15 +222,18 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 		}
 
 		if len(parts) == 2 && parts[1] == "evidence" && r.Method == http.MethodGet {
-			fmt.Printf("api incident evidence incident=%s cluster=%q namespace=%q service=%q\n", item.ID, r.URL.Query().Get("cluster"), r.URL.Query().Get("namespace"), r.URL.Query().Get("service"))
 			start, end := parseTimeRangeWithDefaults(r.URL.Query().Get("start"), r.URL.Query().Get("end"), 24*time.Hour)
-			evidence := buildSelectedScopeEvidence(ctx, store, chConfig, project, item, clickhouse.Filters{
+			evidence, err := truthService.BuildSelectedIncidentContract(ctx, item.ID, truth.ScopeRequest{
 				Cluster:   firstNonEmpty(r.URL.Query().Get("cluster"), item.Cluster, item.Scope.Cluster),
 				Namespace: firstNonEmpty(r.URL.Query().Get("namespace"), item.Namespace, item.Scope.Namespace),
 				Service:   normalizeServiceName(firstNonEmpty(r.URL.Query().Get("service"), item.Service, item.Scope.Service)),
 				Start:     start,
 				End:       end,
 			})
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+				return
+			}
 			writeJSON(w, http.StatusOK, evidence)
 			return
 		}

@@ -1,0 +1,398 @@
+package truth
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"deep-observer/ai-core/internal/clickhouse"
+	"deep-observer/ai-core/internal/incidents"
+)
+
+func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident, scope NormalizedScope) map[string]any {
+	direct := buildDirectEvidence(item)
+	graph := s.ResolveTopology(ctx, scope)
+	scopedGraph := scopeTopology(graph, scope.Service)
+	missing := buildMissingEvidence(item, scope, direct, scopedGraph)
+	quality := classifyEvidence(item, direct, scopedGraph)
+	contextual := buildContextualEvidence(quality, scopedGraph)
+	coverage := buildCoverage(scope, direct, quality, scopedGraph)
+
+	related, _ := s.store.ListCorrelatedIncidents(ctx, item.ID, 24*time.Hour, 8)
+	history, _ := s.ListIncidents(ctx, NormalizedScope{
+		Cluster:   scope.Cluster,
+		Namespace: scope.Namespace,
+		Service:   scope.Service,
+		Start:     scope.Start.Add(-72 * time.Hour),
+		End:       scope.End,
+	}, 12)
+
+	return map[string]any{
+		"incident":                   item,
+		"scope":                      buildIncidentScope(item, scope),
+		"normalized_scope":           buildIncidentScope(item, scope),
+		"direct_evidence":            direct,
+		"contextual_evidence":        contextual,
+		"missing_evidence":           missing,
+		"telemetry_audit":            map[string]any{"telemetryQuality": quality, "isSparse": direct["request_count"].(int64) == 0 && direct["log_count"].(int64) == 0 && direct["trace_sample_count"].(int) == 0},
+		"incident_topology":          scopedGraph,
+		"telemetry_evidence":         buildTelemetryEvidence(scope, direct, quality, scopedGraph),
+		"observability_coverage":     coverage,
+		"observability_score":        coverage["score"],
+		"impacted_services":          impactedServices(item),
+		"propagation_path":           propagationPath(item, scopedGraph),
+		"causal_chain":               toAnyStrings(item.Reasoning, item.DependencyChain),
+		"confidence_details":         confidenceDetails(item, quality),
+		"trust_score":                trustScore(item, quality),
+		"reasoning_status":           firstNonEmpty(strings.ToLower(item.ReasoningStatus), "not_generated"),
+		"reasoning_ready":            item.Reasoning != nil && strings.EqualFold(item.ReasoningStatus, "completed"),
+		"incident_summary":           incidentSummary(item, direct),
+		"reasoning_summary":          reasoningSummary(item),
+		"signal_summary":             signalSummary(item, quality),
+		"log_summary":                logSummary(item),
+		"impact_summary":             impactSummary(item),
+		"decision_panel":             decisionPanel(item, quality),
+		"prioritized_actions":        prioritizedActions(item, quality),
+		"runbook":                    runbook(item, quality),
+		"observability_gaps":         observabilityGaps(scope, quality, missing),
+		"incident_timeline":          incidentTimeline(item),
+		"telemetry_chart":            telemetryChart(item),
+		"related_incidents":          related,
+		"incident_history":           normalizeHistory(item.ID, history),
+		"cluster_context":            clusterContext(history),
+		"change_timeline":            changeTimeline(item),
+		"slo_status":                 []string{},
+		"service_health_score":       serviceHealthScore(item),
+		"missing_telemetry_signals":  missing,
+	}
+}
+
+func telemetryChart(item *incidents.Incident) []map[string]any {
+	out := []map[string]any{}
+	for _, event := range item.TimelineSummary {
+		if event.Value == 0 {
+			continue
+		}
+		out = append(out, map[string]any{
+			"timestamp": event.Timestamp,
+			"kind":      firstNonEmpty(event.Kind, "telemetry"),
+			"value":     event.Value,
+		})
+	}
+	return out
+}
+
+func buildDirectEvidence(item *incidents.Incident) map[string]any {
+	snapshot := item.TelemetrySnapshot
+	return map[string]any{
+		"request_count":           snapshot.RequestCount,
+		"log_count":               snapshot.LogCount,
+		"trace_sample_count":      len(snapshot.TraceIDs),
+		"error_rate":              snapshot.ErrorRate,
+		"p95_latency_ms":          snapshot.P95LatencyMs,
+		"cpu_utilization":         snapshot.CPUUtilization,
+		"memory_utilization":      snapshot.MemoryUtilization,
+		"metric_highlights":       snapshot.MetricHighlights,
+		"timeline_event_count":    len(item.TimelineSummary),
+		"direct_dependency_nodes": append([]string{}, item.DependencyChain...),
+	}
+}
+
+func buildIncidentScope(item *incidents.Incident, scope NormalizedScope) map[string]any {
+	return map[string]any{
+		"incident_id":           item.ID,
+		"cluster":               firstNonEmpty(scope.Cluster, item.Cluster, item.Scope.Cluster),
+		"namespace":             firstNonEmpty(scope.Namespace, item.Namespace, item.Scope.Namespace),
+		"service":               firstNonEmpty(scope.Service, item.Service, item.Scope.Service),
+		"incident_type":         item.IncidentType,
+		"incident_window_start": incidentWindowStart(item, scope.Start),
+		"incident_window_end":   incidentWindowEnd(item, scope.End),
+		"signal_set":            item.Signals,
+		"anomaly_score":         item.AnomalyScore,
+		"scope_complete":        item.Scope.ScopeComplete,
+		"scope_warnings":        item.Scope.ScopeWarnings,
+		"cluster_label":         firstNonEmpty(scope.Cluster, item.Cluster, item.Scope.Cluster, "Unknown cluster"),
+		"namespace_label":       firstNonEmpty(scope.Namespace, item.Namespace, item.Scope.Namespace, "Unknown namespace"),
+	}
+}
+
+func incidentWindowStart(item *incidents.Incident, fallback time.Time) time.Time {
+	if item.Scope.IncidentWindowStart != nil {
+		return item.Scope.IncidentWindowStart.UTC()
+	}
+	return fallback
+}
+
+func incidentWindowEnd(item *incidents.Incident, fallback time.Time) time.Time {
+	if item.Scope.IncidentWindowEnd != nil {
+		return item.Scope.IncidentWindowEnd.UTC()
+	}
+	return fallback
+}
+
+func classifyEvidence(item *incidents.Incident, direct map[string]any, scopedGraph map[string]any) map[string]string {
+	quality := map[string]string{
+		"traces":     "missing",
+		"logs":       "missing",
+		"metrics":    "missing",
+		"database":   "missing",
+		"messaging":  "missing",
+		"exceptions": "missing",
+		"infra":      "missing",
+		"topology":   "missing",
+	}
+	if direct["request_count"].(int64) > 0 || direct["trace_sample_count"].(int) > 0 {
+		quality["traces"] = "direct"
+	}
+	if direct["log_count"].(int64) > 0 {
+		quality["logs"] = "direct"
+	}
+	if len(item.TelemetrySnapshot.MetricHighlights) > 0 || item.TelemetrySnapshot.P95LatencyMs > 0 || item.TelemetrySnapshot.ErrorRate > 0 {
+		quality["metrics"] = "direct"
+	}
+	deps := strings.ToLower(strings.Join(item.DependencyChain, " "))
+	if strings.Contains(deps, "db:") {
+		quality["database"] = "direct"
+	}
+	if strings.Contains(deps, "messaging:") {
+		quality["messaging"] = "direct"
+	}
+	if len(item.TelemetrySnapshot.ErrorLogs) > 0 {
+		quality["exceptions"] = "direct"
+	}
+	if item.TelemetrySnapshot.CPUUtilization > 0 || item.TelemetrySnapshot.MemoryUtilization > 0 {
+		quality["infra"] = "direct"
+	}
+	edgesText := fmt.Sprintf("%v", scopedGraph["edges"])
+	if quality["database"] == "missing" && strings.Contains(strings.ToLower(edgesText), "db:") {
+		quality["database"] = "contextual"
+	}
+	if quality["messaging"] == "missing" && strings.Contains(strings.ToLower(edgesText), "messaging:") {
+		quality["messaging"] = "contextual"
+	}
+	if len(item.DependencyChain) > 0 {
+		quality["topology"] = "direct"
+	} else if available, _ := scopedGraph["available"].(bool); available {
+		quality["topology"] = "contextual"
+	}
+	return quality
+}
+
+func buildContextualEvidence(quality map[string]string, scopedGraph map[string]any) map[string]any {
+	return map[string]any{
+		"traces":     evidenceBucket(quality["traces"]),
+		"logs":       evidenceBucket(quality["logs"]),
+		"metrics":    evidenceBucket(quality["metrics"]),
+		"database":   evidenceBucket(quality["database"]),
+		"messaging":  evidenceBucket(quality["messaging"]),
+		"exceptions": evidenceBucket(quality["exceptions"]),
+		"infra":      evidenceBucket(quality["infra"]),
+		"topology":   evidenceBucket(quality["topology"]),
+		"topology_available": scopedGraph["available"],
+	}
+}
+
+func evidenceBucket(value string) string {
+	switch value {
+	case "direct", "contextual":
+		return value
+	default:
+		return "missing"
+	}
+}
+
+func buildMissingEvidence(item *incidents.Incident, scope NormalizedScope, direct map[string]any, scopedGraph map[string]any) []string {
+	missing := []string{}
+	if direct["request_count"].(int64) == 0 && direct["trace_sample_count"].(int) == 0 {
+		missing = append(missing, "No incident-scoped traces were found.")
+	}
+	if direct["log_count"].(int64) == 0 {
+		missing = append(missing, "No incident-scoped logs were found.")
+	}
+	if len(item.TelemetrySnapshot.MetricHighlights) == 0 && item.TelemetrySnapshot.P95LatencyMs == 0 && item.TelemetrySnapshot.ErrorRate == 0 {
+		missing = append(missing, "No incident-scoped service metrics were found.")
+	}
+	if len(item.TelemetrySnapshot.ErrorLogs) == 0 {
+		missing = append(missing, "No exception evidence was found for the selected incident scope.")
+	}
+	if item.TelemetrySnapshot.CPUUtilization == 0 && item.TelemetrySnapshot.MemoryUtilization == 0 {
+		missing = append(missing, "No runtime host/container evidence was correlated for the selected incident scope.")
+	}
+	if available, _ := scopedGraph["available"].(bool); !available && len(item.DependencyChain) == 0 {
+		missing = append(missing, "No topology data is available for the selected scope.")
+	}
+	if firstNonEmpty(scope.Namespace, item.Namespace, item.Scope.Namespace) == "" {
+		missing = append(missing, "Incident scope is incomplete: namespace missing from incident scope.")
+	}
+	return uniqueStrings(missing)
+}
+
+func buildTelemetryEvidence(scope NormalizedScope, direct map[string]any, quality map[string]string, scopedGraph map[string]any) []string {
+	lines := []string{
+		fmt.Sprintf("Selected incident scope: %s / %s / %s", firstNonEmpty(scope.Service, "Unknown service"), firstNonEmpty(scope.Namespace, "Unknown namespace"), firstNonEmpty(scope.Cluster, "Unknown cluster")),
+		fmt.Sprintf("Incident-scoped requests: %d", direct["request_count"].(int64)),
+		fmt.Sprintf("Incident-scoped logs: %d", direct["log_count"].(int64)),
+		fmt.Sprintf("Incident-scoped trace samples: %d", direct["trace_sample_count"].(int)),
+	}
+	for _, key := range []string{"traces", "logs", "metrics", "database", "messaging", "exceptions", "infra", "topology"} {
+		lines = append(lines, fmt.Sprintf("%s evidence: %s", key, quality[key]))
+	}
+	if available, _ := scopedGraph["available"].(bool); available {
+		lines = append(lines, "Scoped topology is available for the selected incident.")
+	}
+	return lines
+}
+
+func buildCoverage(scope NormalizedScope, direct map[string]any, quality map[string]string, scopedGraph map[string]any) map[string]any {
+	score := 0.0
+	score += scoreForQuality(quality["traces"], 24, 8, 2)
+	score += scoreForQuality(quality["logs"], 18, 6, 2)
+	score += scoreForQuality(quality["metrics"], 18, 6, 2)
+	score += scoreForQuality(quality["database"], 10, 4, 2)
+	score += scoreForQuality(quality["messaging"], 10, 4, 2)
+	score += scoreForQuality(quality["exceptions"], 10, 4, 2)
+	score += scoreForQuality(quality["infra"], 5, 3, 1)
+	score += scoreForQuality(quality["topology"], 5, 3, 1)
+	if firstNonEmpty(scope.Namespace) == "" && score > 45 {
+		score = 45
+	}
+	return map[string]any{
+		"score": score,
+		"traces":     quality["traces"],
+		"logs":       quality["logs"],
+		"metrics":    quality["metrics"],
+		"database":   quality["database"],
+		"messaging":  quality["messaging"],
+		"exceptions": quality["exceptions"],
+		"infra":      quality["infra"],
+		"topology":   quality["topology"],
+		"requests":   direct["request_count"],
+		"log_count":  direct["log_count"],
+		"trace_samples": direct["trace_sample_count"],
+		"topology_available": scopedGraph["available"],
+	}
+}
+
+func scoreForQuality(value string, direct, contextual, missing float64) float64 {
+	switch value {
+	case "direct":
+		return direct
+	case "contextual":
+		return contextual
+	default:
+		return missing
+	}
+}
+
+func impactedServices(item *incidents.Incident) []string {
+	values := []string{}
+	for _, impact := range item.Impacts {
+		if strings.EqualFold(impact.ImpactType, "root") {
+			continue
+		}
+		if strings.TrimSpace(impact.Service) != "" {
+			values = append(values, impact.Service)
+		}
+	}
+	return uniqueStrings(values)
+}
+
+func propagationPath(item *incidents.Incident, scopedGraph map[string]any) []string {
+	if item.Reasoning != nil && len(item.Reasoning.PropagationPath) > 0 {
+		return uniqueStrings(item.Reasoning.PropagationPath)
+	}
+	if len(item.DependencyChain) > 0 {
+		return uniqueStrings(item.DependencyChain)
+	}
+	edges, _ := scopedGraph["edges"].([]clickhouse.TopologyEdge)
+	values := []string{}
+	for _, edge := range edges {
+		values = append(values, edge.Source+" -> "+edge.Target)
+	}
+	return uniqueStrings(values)
+}
+
+func toAnyStrings(reasoning *incidents.Reasoning, fallback []string) []string {
+	if reasoning != nil && len(reasoning.CausalChain) > 0 {
+		return uniqueStrings(reasoning.CausalChain)
+	}
+	return uniqueStrings(fallback)
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func normalizeHistory(currentID string, items []incidents.Incident) []map[string]any {
+	out := []map[string]any{}
+	for _, item := range items {
+		if item.ID == currentID {
+			continue
+		}
+		out = append(out, map[string]any{
+			"incident_id":         item.ID,
+			"timestamp":           item.Timestamp,
+			"service":             item.Service,
+			"severity":            item.Severity,
+			"anomaly_score":       item.AnomalyScore,
+			"root_cause_summary":  firstNonEmpty(item.RootCauseEntity, item.Service),
+		})
+		if len(out) >= 6 {
+			break
+		}
+	}
+	return out
+}
+
+func clusterContext(items []incidents.Incident) map[string]any {
+	serviceSet := map[string]struct{}{}
+	for _, item := range items {
+		if item.Service != "" {
+			serviceSet[item.Service] = struct{}{}
+		}
+	}
+	return map[string]any{
+		"at_risk_services":       len(serviceSet),
+		"missing_resource_limits": "Unsupported from telemetry",
+	}
+}
+
+func changeTimeline(item *incidents.Incident) []string {
+	values := []string{}
+	for _, event := range item.TimelineSummary {
+		values = append(values, fmt.Sprintf("%s - %s", event.Timestamp.UTC().Format(time.RFC3339), firstNonEmpty(event.Title, event.Kind)))
+	}
+	return values
+}
+
+func serviceHealthScore(item *incidents.Incident) any {
+	if item.TelemetrySnapshot.RequestCount == 0 && item.TelemetrySnapshot.ErrorRate == 0 && item.TelemetrySnapshot.P95LatencyMs == 0 {
+		return "Unavailable"
+	}
+	score := 100.0
+	score -= item.TelemetrySnapshot.ErrorRate * 100
+	if item.TelemetrySnapshot.P95LatencyMs > item.TelemetrySnapshot.BaselineLatencyMs && item.TelemetrySnapshot.BaselineLatencyMs > 0 {
+		score -= 15
+	}
+	if item.AnomalyScore > 1.5 {
+		score -= 10
+	}
+	if score < 0 {
+		score = 0
+	}
+	return score
+}

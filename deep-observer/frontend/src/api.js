@@ -38,6 +38,10 @@ export function fetchIncidents(filters) {
   return request("/api/incidents", { ...filters, limit: 200 });
 }
 
+export function fetchDashboardScope(filters) {
+  return request("/api/dashboard-scope", filters);
+}
+
 export function fetchIncident(incidentId) {
   return request(`/api/incidents/${incidentId}`);
 }
