@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { fetchIncident } from "../api";
 import IncidentDetailsPanel from "../components/IncidentDetailsPanel";
@@ -6,16 +6,36 @@ import IncidentDetailsPanel from "../components/IncidentDetailsPanel";
 export default function IncidentDetailsPage() {
   const { incidentId } = useParams();
   const [incident, setIncident] = useState(null);
+  const incidentRequestSeqRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
+    const requestId = ++incidentRequestSeqRef.current;
+    console.debug("IncidentDetailsPage: incident fetch started", {
+      requestId,
+      incidentId,
+    });
+    setIncident(null);
     fetchIncident(incidentId)
       .then((payload) => {
-        if (!cancelled) {
+        if (!cancelled && requestId === incidentRequestSeqRef.current) {
           setIncident(payload && typeof payload === "object" ? payload : null);
+          console.debug("IncidentDetailsPage: incident fetch completed", {
+            requestId,
+            incidentId,
+          });
         }
       })
-      .catch(console.error);
+      .catch((error) => {
+        if (!cancelled && requestId === incidentRequestSeqRef.current) {
+          console.error(error);
+          console.debug("IncidentDetailsPage: incident fetch failed", {
+            requestId,
+            incidentId,
+            error: error?.message || "unknown_error",
+          });
+        }
+      });
     return () => {
       cancelled = true;
     };

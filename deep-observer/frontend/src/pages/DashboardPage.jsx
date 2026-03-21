@@ -23,6 +23,7 @@ export default function DashboardPage() {
   const [appliedCustomRange, setAppliedCustomRange] = useState({ start: "", end: "" });
   const [liveMode, setLiveMode] = useState(false);
   const [incidentHint, setIncidentHint] = useState("");
+  const dashboardRequestSeqRef = useRef(0);
 
   const selectedIncident =
     (Array.isArray(incidents) ? incidents : []).find((incident) => incident.incident_id === selectedIncidentId) ||
@@ -81,11 +82,23 @@ export default function DashboardPage() {
 
   useEffect(() => {
     let cancelled = false;
+    setIncidentHint("Loading incidents for selected scope...");
+    setSelectedIncidentId("");
 
     const load = async () => {
+      const requestId = ++dashboardRequestSeqRef.current;
+      console.debug("DashboardPage: dashboard scope fetch started", {
+        requestId,
+        query,
+      });
       try {
         const payload = await fetchDashboardScope(query);
-        if (cancelled) return;
+        if (cancelled || requestId !== dashboardRequestSeqRef.current) {
+          console.debug("DashboardPage: dashboard scope fetch ignored (stale)", {
+            requestId,
+          });
+          return;
+        }
 
         const safeIncidents = Array.isArray(payload?.incident_list) ? payload.incident_list : [];
         const safeTopology =
@@ -109,12 +122,23 @@ export default function DashboardPage() {
           if (!safeIncidents.length) return "";
           return safeIncidents.some((item) => item.incident_id === current) ? current : safeIncidents[0].incident_id;
         });
+        console.debug("DashboardPage: dashboard scope fetch completed", {
+          requestId,
+          incidents: safeIncidents.length,
+          selectedIncidentId: safeIncidents[0]?.incident_id || "",
+          topologyNodes: safeTopology.nodes.length,
+          topologyEdges: safeTopology.edges.length,
+        });
       } catch (error) {
         console.error(error);
-        if (!cancelled) {
+        if (!cancelled && requestId === dashboardRequestSeqRef.current) {
           setIncidents([]);
           setTopology({ nodes: [], edges: [] });
           setIncidentHint("Unable to load dashboard scope.");
+          console.debug("DashboardPage: dashboard scope fetch failed", {
+            requestId,
+            error: error?.message || "unknown_error",
+          });
         }
       }
     };
@@ -132,6 +156,15 @@ export default function DashboardPage() {
       clearInterval(timer);
     };
   }, [query, liveMode]);
+
+  useEffect(() => {
+    console.debug("DashboardPage: filters updated", {
+      filters,
+      appliedTimeRange,
+      range,
+      selectedIncidentId,
+    });
+  }, [filters, appliedTimeRange, range, selectedIncidentId]);
 
   return (
     <main className="mx-auto min-h-screen w-full max-w-[1600px] space-y-6 px-6 py-8">

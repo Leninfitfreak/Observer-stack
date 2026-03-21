@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   fetchIncident,
   fetchIncidentEvidence,
@@ -26,6 +26,8 @@ export default function IncidentDetailsPanel({
   const [serverEvidence, setServerEvidence] = useState(null);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [evidenceError, setEvidenceError] = useState("");
+  const evidenceRequestSeqRef = useRef(0);
+  const historyRequestSeqRef = useRef(0);
 
   useEffect(() => {
     if (!incident) {
@@ -44,17 +46,46 @@ export default function IncidentDetailsPanel({
     setReasoningStatus(incident.reasoning_status || "");
     setReasoningError(incident.reasoning_error || "");
     setReasoningBusy(false);
+    setReasoningHistory([]);
+    setSelectedRun(null);
+    setServerEvidence(null);
+    setEvidenceLoading(true);
+    setEvidenceError("");
   }, [incident]);
 
   useEffect(() => {
     if (!incident) return;
+    const requestId = ++historyRequestSeqRef.current;
+    console.debug("IncidentDetailsPanel: reasoning history fetch started", {
+      requestId,
+      incidentId: incident.incident_id,
+      filterQuery,
+    });
     fetchReasoningHistory(incident.incident_id)
       .then((payload) => {
+        if (requestId !== historyRequestSeqRef.current) {
+          return;
+        }
         const items = Array.isArray(payload) ? payload : [];
         setReasoningHistory(items);
         setSelectedRun(items[0] || null);
+        console.debug("IncidentDetailsPanel: reasoning history fetch completed", {
+          requestId,
+          incidentId: incident.incident_id,
+          runs: items.length,
+        });
       })
-      .catch(console.error);
+      .catch((error) => {
+        if (requestId !== historyRequestSeqRef.current) {
+          return;
+        }
+        console.error(error);
+        console.debug("IncidentDetailsPanel: reasoning history fetch failed", {
+          requestId,
+          incidentId: incident.incident_id,
+          error: error?.message || "unknown_error",
+        });
+      });
   }, [incident, filterQuery]);
 
   useEffect(() => {
@@ -64,14 +95,33 @@ export default function IncidentDetailsPanel({
       setEvidenceError("");
       return;
     }
+    const requestId = ++evidenceRequestSeqRef.current;
     setEvidenceLoading(true);
     setEvidenceError("");
+    setServerEvidence(null);
+    console.debug("IncidentDetailsPanel: evidence fetch started", {
+      requestId,
+      incidentId: incident.incident_id,
+      filterQuery,
+    });
     fetchIncidentEvidence(incident.incident_id, filterQuery)
       .then((payload) => {
+        if (requestId !== evidenceRequestSeqRef.current) {
+          return;
+        }
         setServerEvidence(payload && typeof payload === "object" ? payload : null);
         setEvidenceLoading(false);
+        console.debug("IncidentDetailsPanel: evidence fetch completed", {
+          requestId,
+          incidentId: incident.incident_id,
+          sparse: Boolean(payload?.sparse_predictive_state),
+          observabilityScore: payload?.observability_score ?? 0,
+        });
       })
       .catch((error) => {
+        if (requestId !== evidenceRequestSeqRef.current) {
+          return;
+        }
         console.error("IncidentDetailsPanel: evidence request failed", {
           incidentId: incident.incident_id,
           scope: filterQuery,
@@ -80,6 +130,11 @@ export default function IncidentDetailsPanel({
         setServerEvidence(null);
         setEvidenceError(error?.message || "Unable to load selected-incident evidence.");
         setEvidenceLoading(false);
+        console.debug("IncidentDetailsPanel: evidence fetch failed", {
+          requestId,
+          incidentId: incident.incident_id,
+          error: error?.message || "unknown_error",
+        });
       });
   }, [incident, filterQuery]);
 
@@ -165,10 +220,19 @@ export default function IncidentDetailsPanel({
     level: trustScoreRaw.level || "pending",
     summary: trustScoreRaw.summary || "",
   };
-  const telemetryAudit = renderedEvidence.telemetry_audit;
-  const telemetryEvidence = renderedEvidence.telemetry_evidence;
+  const telemetryAudit = renderedEvidence.telemetry_audit && typeof renderedEvidence.telemetry_audit === "object"
+    ? renderedEvidence.telemetry_audit
+    : {};
+  const telemetryEvidence = Array.isArray(renderedEvidence.telemetry_evidence) ? renderedEvidence.telemetry_evidence : [];
   const impactedServices = Array.isArray(renderedEvidence.impacted_services) ? renderedEvidence.impacted_services : [];
-  const scope = renderedEvidence.scope || {};
+  const scopeRaw = renderedEvidence.scope && typeof renderedEvidence.scope === "object" ? renderedEvidence.scope : {};
+  const scope = {
+    ...scopeRaw,
+    scope_complete: scopeRaw.scope_complete === true,
+    scope_warnings: Array.isArray(scopeRaw.scope_warnings) ? scopeRaw.scope_warnings : [],
+    cluster_label: scopeRaw.cluster_label || scopeRaw.cluster || "Unknown cluster",
+    namespace_label: scopeRaw.namespace_label || scopeRaw.namespace || "Unknown namespace",
+  };
   const scopedRunbookRaw = renderedEvidence.runbook || {};
   const scopedRunbook = {
     incident_steps: Array.isArray(scopedRunbookRaw.incident_steps) ? scopedRunbookRaw.incident_steps : [],
@@ -195,6 +259,30 @@ export default function IncidentDetailsPanel({
     renderedEvidence.sparse_predictive_contract && typeof renderedEvidence.sparse_predictive_contract === "object"
       ? renderedEvidence.sparse_predictive_contract
       : {};
+  const renderMode = !currentIncident
+    ? "empty"
+    : evidenceLoading && !serverEvidence
+    ? "loading"
+    : evidenceError && !serverEvidence
+    ? "error"
+    : sparsePredictiveState
+    ? "sparse"
+    : serverEvidence
+    ? "full"
+    : "empty";
+
+  useEffect(() => {
+    console.debug("IncidentDetailsPanel: render mode", {
+      renderMode,
+      incidentId: currentIncident?.incident_id || "",
+      selectedRunId: selectedRun?.reasoning_run_id || "",
+      filterQuery,
+      evidenceLoading,
+      hasServerEvidence: Boolean(serverEvidence),
+      evidenceError: evidenceError || "",
+      sparsePredictiveState,
+    });
+  }, [renderMode, currentIncident, selectedRun, filterQuery, evidenceLoading, serverEvidence, evidenceError, sparsePredictiveState]);
 
   const refreshIncident = async () => {
     if (!currentIncident?.incident_id) return null;
@@ -203,14 +291,32 @@ export default function IncidentDetailsPanel({
       setActiveIncident(updated);
       setReasoningStatus(updated.reasoning_status || derivedStatus);
       setReasoningError(updated.reasoning_error || "");
+      const evidenceRequestId = ++evidenceRequestSeqRef.current;
       setEvidenceLoading(true);
       setEvidenceError("");
+      setServerEvidence(null);
+      console.debug("IncidentDetailsPanel: refreshed evidence fetch started", {
+        requestId: evidenceRequestId,
+        incidentId: updated.incident_id,
+        filterQuery,
+      });
       fetchIncidentEvidence(updated.incident_id, filterQuery)
         .then((payload) => {
+          if (evidenceRequestId !== evidenceRequestSeqRef.current) {
+            return;
+          }
           setServerEvidence(payload && typeof payload === "object" ? payload : null);
           setEvidenceLoading(false);
+          console.debug("IncidentDetailsPanel: refreshed evidence fetch completed", {
+            requestId: evidenceRequestId,
+            incidentId: updated.incident_id,
+            sparse: Boolean(payload?.sparse_predictive_state),
+          });
         })
         .catch((error) => {
+          if (evidenceRequestId !== evidenceRequestSeqRef.current) {
+            return;
+          }
           console.error("IncidentDetailsPanel: refreshed evidence request failed", {
             incidentId: updated.incident_id,
             scope: filterQuery,
@@ -220,8 +326,12 @@ export default function IncidentDetailsPanel({
           setEvidenceError(error?.message || "Unable to refresh selected-incident evidence.");
           setEvidenceLoading(false);
         });
+      const historyRequestId = ++historyRequestSeqRef.current;
       fetchReasoningHistory(updated.incident_id)
         .then((payload) => {
+          if (historyRequestId !== historyRequestSeqRef.current) {
+            return;
+          }
           const items = Array.isArray(payload) ? payload : [];
           setReasoningHistory(items);
           setSelectedRun(items[0] || null);
