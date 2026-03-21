@@ -692,6 +692,27 @@ func dedupeGraph(graph clickhouse.TopologyGraph) clickhouse.TopologyGraph {
 }
 
 func sanitizeApplicationGraph(graph clickhouse.TopologyGraph) clickhouse.TopologyGraph {
+	infraAliasSet := map[string]struct{}{}
+	for _, node := range graph.Nodes {
+		id := strings.TrimSpace(node.ID)
+		if id == "" {
+			continue
+		}
+		nodeType := strings.ToLower(strings.TrimSpace(node.NodeType))
+		if nodeType == "" {
+			nodeType = inferNodeTypeFromID(id)
+		}
+		switch nodeType {
+		case "database":
+			if alias := infraSystemAlias(id, "db:"); alias != "" {
+				infraAliasSet[alias] = struct{}{}
+			}
+		case "messaging":
+			if alias := infraSystemAlias(id, "messaging:"); alias != "" {
+				infraAliasSet[alias] = struct{}{}
+			}
+		}
+	}
 	keepNodes := make([]clickhouse.TopologyNode, 0, len(graph.Nodes))
 	allowed := map[string]clickhouse.TopologyNode{}
 	for _, node := range graph.Nodes {
@@ -707,6 +728,9 @@ func sanitizeApplicationGraph(graph clickhouse.TopologyGraph) clickhouse.Topolog
 		if nodeType == "service" {
 			normalizedID := normalizeServiceName(id)
 			if normalizedID == "" || !serviceNodePattern.MatchString(normalizedID) || clickhouse.IsIgnoredService(normalizedID) {
+				continue
+			}
+			if _, aliasConflict := infraAliasSet[normalizedID]; aliasConflict {
 				continue
 			}
 			node.ID = normalizedID
@@ -753,6 +777,15 @@ func sanitizeApplicationGraph(graph clickhouse.TopologyGraph) clickhouse.Topolog
 	graph.Nodes = keepNodes
 	graph.Edges = keepEdges
 	return graph
+}
+
+func infraSystemAlias(id, prefix string) string {
+	value := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(id), prefix))
+	if value == "" {
+		return ""
+	}
+	parts := strings.SplitN(value, "/", 2)
+	return normalizeServiceName(parts[0])
 }
 
 func normalizeServiceName(value string) string {
@@ -828,7 +861,7 @@ func buildGraphFromIncidentChains(ctx context.Context, store *incidents.Store, p
 		Cluster:   cluster,
 		Namespace: namespace,
 		Service:   service,
-		Limit:     120,
+		Limit:     400,
 	})
 	if err != nil {
 		return clickhouse.TopologyGraph{}, err
@@ -841,6 +874,10 @@ func buildGraphFromIncidentChains(ctx context.Context, store *incidents.Store, p
 	nodeSet := map[string]clickhouse.TopologyNode{}
 	edgeSet := map[string]struct{}{}
 	for _, incident := range items {
+		incidentService := canonicalNodeID(incident.Service)
+		if incidentService == "" {
+			incidentService = canonicalNodeID(incident.RootCauseEntity)
+		}
 		for _, chain := range incident.DependencyChain {
 			parts := splitChainParts(chain)
 			if len(parts) < 2 {
@@ -884,6 +921,43 @@ func buildGraphFromIncidentChains(ctx context.Context, store *incidents.Store, p
 						Cluster:   incident.Cluster,
 						Namespace: incident.Namespace,
 					}
+				}
+			}
+		}
+		if incidentService == "" || len(incident.Impacts) == 0 {
+			continue
+		}
+		if _, ok := nodeSet[incidentService]; !ok {
+			nodeSet[incidentService] = clickhouse.TopologyNode{
+				ID:        incidentService,
+				Label:     incidentService,
+				NodeType:  inferNodeTypeFromID(incidentService),
+				Cluster:   incident.Cluster,
+				Namespace: incident.Namespace,
+			}
+		}
+		for _, impact := range incident.Impacts {
+			targetNode := canonicalNodeID(impact.Service)
+			if targetNode == "" || targetNode == incidentService {
+				continue
+			}
+			key := incidentService + "|" + targetNode
+			if _, exists := edgeSet[key]; !exists {
+				graph.Edges = append(graph.Edges, clickhouse.TopologyEdge{
+					Source:         incidentService,
+					Target:         targetNode,
+					DependencyType: inferDependencyType(incidentService, targetNode),
+					CallCount:      1,
+				})
+				edgeSet[key] = struct{}{}
+			}
+			if _, ok := nodeSet[targetNode]; !ok {
+				nodeSet[targetNode] = clickhouse.TopologyNode{
+					ID:        targetNode,
+					Label:     targetNode,
+					NodeType:  inferNodeTypeFromID(targetNode),
+					Cluster:   incident.Cluster,
+					Namespace: incident.Namespace,
 				}
 			}
 		}

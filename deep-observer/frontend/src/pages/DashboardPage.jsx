@@ -215,6 +215,7 @@ export default function DashboardPage() {
       <section ref={detailsPanelRef}>
         <IncidentDetailsPanel
           incident={selectedIncident}
+          topology={topology}
           filterQuery={query}
           emptyHint={incidentHint || "No incidents found for the selected filters."}
           serviceHealth={serviceHealth.find((item) => item.service_name === selectedServiceName)}

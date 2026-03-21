@@ -627,7 +627,7 @@ func (s *Store) ListIncidents(ctx context.Context, filters QueryFilters) ([]Inci
 		LEFT JOIN reasoning_requests rr ON rr.incident_id = i.incident_id
 		WHERE ($1 = '' OR i.project_id = $1)
 		  AND ($2 = '' OR i.cluster = $2)
-		  AND ($3 = '' OR i.namespace = $3)
+		  AND ($3 = '' OR i.namespace = $3 OR coalesce(i.namespace, '') = '')
 		  AND (
 		    $4 = '' OR
 		    i.service = $4 OR
@@ -658,7 +658,14 @@ func (s *Store) ListIncidents(ctx context.Context, filters QueryFilters) ([]Inci
 	if err := s.attachIncidentImpacts(ctx, items); err != nil {
 		return nil, err
 	}
-	return items, rows.Err()
+	filtered := make([]Incident, 0, len(items))
+	for _, item := range items {
+		if !matchesIncidentFilters(item, filters) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered, rows.Err()
 }
 
 func (s *Store) GetIncident(ctx context.Context, incidentID string) (*Incident, error) {
@@ -1426,6 +1433,36 @@ func sanitizeDependencyChain(service string, chain []string, impacts []IncidentI
 		out = append(out, trimmed)
 	}
 	return out
+}
+
+func matchesIncidentFilters(item Incident, filters QueryFilters) bool {
+	if filters.ProjectID != "" && item.ProjectID != filters.ProjectID {
+		return false
+	}
+	if filters.Cluster != "" && !strings.EqualFold(strings.TrimSpace(item.Cluster), strings.TrimSpace(filters.Cluster)) {
+		return false
+	}
+	if filters.Namespace != "" && !strings.EqualFold(strings.TrimSpace(item.Namespace), strings.TrimSpace(filters.Namespace)) {
+		return false
+	}
+	if filters.Service != "" {
+		target := normalizeIncidentEntity(filters.Service)
+		service := normalizeIncidentEntity(item.Service)
+		root := normalizeIncidentEntity(item.RootCauseEntity)
+		if target != service && target != root {
+			return false
+		}
+	}
+	if filters.ProblemID != "" && item.ProblemID != filters.ProblemID {
+		return false
+	}
+	if filters.Start != nil && item.Timestamp.Before(*filters.Start) {
+		return false
+	}
+	if filters.End != nil && item.Timestamp.After(*filters.End) {
+		return false
+	}
+	return true
 }
 
 func trimLegacyInfraServiceSuffix(value string, services []string) string {

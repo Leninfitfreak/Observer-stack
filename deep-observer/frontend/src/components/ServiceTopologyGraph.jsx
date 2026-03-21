@@ -1,6 +1,5 @@
 export default function ServiceTopologyGraph({ topology, selectedService }) {
-  const nodes = topology?.nodes || [];
-  const edges = topology?.edges || [];
+  const { nodes, edges } = buildRenderableTopology(topology);
 
   if (!nodes.length) {
     return (
@@ -59,4 +58,34 @@ export default function ServiceTopologyGraph({ topology, selectedService }) {
       </svg>
     </section>
   );
+}
+
+function buildRenderableTopology(topology) {
+  const rawNodes = Array.isArray(topology?.nodes) ? topology.nodes : [];
+  const rawEdges = Array.isArray(topology?.edges) ? topology.edges : [];
+  const infraAliases = new Set();
+
+  rawNodes.forEach((node) => {
+    const id = String(node?.id || "").trim().toLowerCase();
+    if (id.startsWith("db:") || id.startsWith("messaging:")) {
+      const alias = id.split(":", 2)[1]?.split("/", 1)[0]?.trim();
+      if (alias) {
+        infraAliases.add(alias);
+      }
+    }
+  });
+
+  const nodes = rawNodes.filter((node) => {
+    const id = String(node?.id || "").trim().toLowerCase();
+    const type = String(node?.node_type || "").trim().toLowerCase();
+    if (type === "service" && infraAliases.has(id)) {
+      return false;
+    }
+    return true;
+  });
+
+  const allowedIds = new Set(nodes.map((node) => String(node?.id || "").trim()));
+  const edges = rawEdges.filter((edge) => allowedIds.has(String(edge?.source || "").trim()) && allowedIds.has(String(edge?.target || "").trim()));
+
+  return { nodes, edges };
 }

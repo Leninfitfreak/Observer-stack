@@ -15,6 +15,7 @@ const MAX_REASONING_POLL_ATTEMPTS = 45;
 
 export default function IncidentDetailsPanel({
   incident,
+  topology,
   filterQuery,
   emptyHint,
   serviceHealth,
@@ -97,6 +98,7 @@ export default function IncidentDetailsPanel({
   const reasoning = currentIncident?.reasoning;
   const canonicalEvidence = buildCanonicalIncidentEvidence({
     incident: currentIncident,
+    topology,
     timeline,
     reasoning,
     correlations,
@@ -631,8 +633,8 @@ export default function IncidentDetailsPanel({
             items={scopedRunbook.incident_steps}
           />
           <RichSection
-            title="Stack Observability Coverage"
-            content={`Stack-wide score: ${Number(observabilityReport?.observability_coverage_score ?? 0).toFixed(2)} | Traces: ${observabilityReport?.services_with_traces ?? 0}/${observabilityReport?.services_discovered ?? 0} | Metrics: ${observabilityReport?.services_with_metrics ?? 0}/${observabilityReport?.services_discovered ?? 0} | Logs: ${observabilityReport?.services_with_logs ?? 0}/${observabilityReport?.services_discovered ?? 0}`}
+            title="Selected-Incident Coverage"
+            content={buildSelectedIncidentCoverageContent(canonicalEvidence)}
           />
         </div>
 
@@ -855,12 +857,11 @@ function priorityColor(priority) {
   }
 }
 
-function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correlations, incidentHistory }) {
+function buildCanonicalIncidentEvidence({ incident, topology, timeline, reasoning, correlations, incidentHistory }) {
   const snapshot = incident?.telemetry_snapshot || {};
   const scope = normalizeIncidentScope(incident);
   const reasoningStatus = String(incident?.reasoning_status || "").toLowerCase();
   const hasCompletedReasoning = Boolean(reasoning) && reasoningStatus === "completed";
-  const qualityBySignal = extractQualityBySignal(reasoning, snapshot);
   const impactedServices = formatImpactedServices(incident?.impacts);
   const directEvidence = {
     request_count: Number(snapshot.request_count || 0),
@@ -874,6 +875,8 @@ function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correla
     timeline_event_count: Array.isArray(timeline) ? timeline.length : 0,
     direct_dependency_nodes: toList(incident?.dependency_chain),
   };
+  const incidentTopology = buildIncidentScopedTopology(topology, scope.service);
+  const qualityBySignal = harmonizeQualityBySignal(extractQualityBySignal(reasoning, snapshot), snapshot, directEvidence, incidentTopology);
 
   const contextualEvidence = {
     traces_present: qualityBySignal.traces === "present" || qualityBySignal.traces === "sparse" || qualityBySignal.traces === "contextual",
@@ -905,7 +908,8 @@ function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correla
       Number(directEvidence.trace_sample_count > 0) +
       Number(Object.keys(directEvidence.metric_highlights).length > 0) +
       Number(directDatabasePresent || contextualEvidence.database_present) +
-      Number(directMessagingPresent || contextualEvidence.messaging_present),
+      Number(directMessagingPresent || contextualEvidence.messaging_present) +
+      Number(incidentTopology.available),
     telemetryQuality: qualityBySignal,
   };
 
@@ -936,6 +940,7 @@ function buildCanonicalIncidentEvidence({ incident, timeline, reasoning, correla
     direct_evidence: directEvidence,
     contextual_evidence: contextualEvidence,
     telemetry_audit: telemetryAudit,
+    incident_topology: incidentTopology,
     telemetry_evidence: buildCanonicalTelemetryEvidence(scope, directEvidence, contextualEvidence, qualityBySignal),
     missing_telemetry_signals: missingTelemetrySignals,
     signal_summary: signalSummary,
@@ -995,6 +1000,48 @@ function normalizeIncidentScope(incident) {
   };
 }
 
+function buildIncidentScopedTopology(topology, selectedService) {
+  const { nodes, edges } = filterRenderableTopology(topology);
+  const service = toText(selectedService).trim().toLowerCase();
+  const scopedEdges = edges.filter((edge) => {
+    const source = toText(edge?.source).trim().toLowerCase();
+    const target = toText(edge?.target).trim().toLowerCase();
+    return !service || source === service || target === service;
+  });
+  const nodeIds = new Set();
+  scopedEdges.forEach((edge) => {
+    nodeIds.add(toText(edge?.source));
+    nodeIds.add(toText(edge?.target));
+  });
+  const scopedNodes = nodes.filter((node) => nodeIds.has(toText(node?.id)));
+  return {
+    available: scopedEdges.length > 0 || scopedNodes.length > 0,
+    nodes: scopedNodes,
+    edges: scopedEdges,
+  };
+}
+
+function filterRenderableTopology(topology) {
+  const rawNodes = Array.isArray(topology?.nodes) ? topology.nodes : [];
+  const rawEdges = Array.isArray(topology?.edges) ? topology.edges : [];
+  const infraAliases = new Set();
+  rawNodes.forEach((node) => {
+    const id = toText(node?.id).trim().toLowerCase();
+    if (id.startsWith("db:") || id.startsWith("messaging:")) {
+      const alias = id.split(":", 2)[1]?.split("/", 1)[0]?.trim();
+      if (alias) infraAliases.add(alias);
+    }
+  });
+  const nodes = rawNodes.filter((node) => {
+    const id = toText(node?.id).trim().toLowerCase();
+    const type = toText(node?.node_type).trim().toLowerCase();
+    return !(type === "service" && infraAliases.has(id));
+  });
+  const allowed = new Set(nodes.map((node) => toText(node?.id).trim()));
+  const edges = rawEdges.filter((edge) => allowed.has(toText(edge?.source).trim()) && allowed.has(toText(edge?.target).trim()));
+  return { nodes, edges };
+}
+
 function extractQualityBySignal(reasoning, snapshot) {
   const summary = reasoning?.observability_summary || {};
   const raw = summary.quality_by_signal;
@@ -1010,6 +1057,52 @@ function extractQualityBySignal(reasoning, snapshot) {
     return snapshot.telemetry_quality;
   }
   return {};
+}
+
+function harmonizeQualityBySignal(baseQuality, snapshot, directEvidence, incidentTopology) {
+  const quality = { ...(baseQuality || {}) };
+  const directDependencyText = toList(directEvidence.direct_dependency_nodes).join(" ").toLowerCase();
+  const directDatabasePresent =
+    /\bdb:|database\b/.test(directDependencyText) ||
+    Object.keys(directEvidence.metric_highlights || {}).some((name) => String(name).toLowerCase().includes("db."));
+  const directMessagingPresent =
+    /\bmessaging:|queue|topic|messag/.test(directDependencyText) ||
+    Object.keys(directEvidence.metric_highlights || {}).some((name) => String(name).toLowerCase().includes("kafka") || String(name).toLowerCase().includes("messag"));
+  const topologyText = (incidentTopology.edges || [])
+    .map((edge) => `${toText(edge?.source)} ${toText(edge?.target)} ${toText(edge?.dependency_type)}`.toLowerCase())
+    .join(" ");
+  const contextualDatabasePresent = !directDatabasePresent && /\bdb:|database\b/.test(topologyText);
+  const contextualMessagingPresent = !directMessagingPresent && /\bmessaging:|queue|topic|messag/.test(topologyText);
+
+  quality.traces =
+    directEvidence.request_count > 0 || directEvidence.trace_sample_count > 0
+      ? "present"
+      : quality.traces || snapshot?.telemetry_quality?.traces || "missing";
+  quality.logs =
+    directEvidence.log_count > 0
+      ? "present"
+      : quality.logs || snapshot?.telemetry_quality?.logs || "missing";
+  quality.metrics =
+    Object.keys(directEvidence.metric_highlights || {}).length > 0
+      ? "present"
+      : quality.metrics || snapshot?.telemetry_quality?.metrics || "missing";
+  quality.database = directDatabasePresent ? "present" : contextualDatabasePresent ? "contextual" : quality.database || "missing";
+  quality.messaging = directMessagingPresent ? "present" : contextualMessagingPresent ? "contextual" : quality.messaging || "missing";
+  quality.exceptions =
+    Array.isArray(snapshot?.error_logs) && snapshot.error_logs.length > 0
+      ? "present"
+      : quality.exceptions || "missing";
+  quality.infra =
+    Number(directEvidence.cpu_utilization || 0) > 0 || Number(directEvidence.memory_utilization || 0) > 0
+      ? "present"
+      : quality.infra || "missing";
+  quality.topology =
+    directEvidence.direct_dependency_nodes.length > 0
+      ? "present"
+      : incidentTopology.available
+      ? "contextual"
+      : quality.topology || "missing";
+  return quality;
 }
 
 function buildCanonicalTelemetryEvidence(scope, directEvidence, contextualEvidence, qualityBySignal) {
@@ -1036,7 +1129,11 @@ function buildCanonicalTelemetryEvidence(scope, directEvidence, contextualEviden
     lines.push("Contextual messaging evidence is present in the scoped service window.");
   }
   if (contextualEvidence.topology_present) {
-    lines.push("Contextual dependency topology is available for this incident scope.");
+    lines.push(
+      qualityBySignal.topology === "present"
+        ? "Dependency topology is available for this incident scope."
+        : "Contextual dependency topology is available for this incident scope.",
+    );
   }
   return lines;
 }
@@ -1364,6 +1461,21 @@ function buildEvidenceCoverageScore(telemetryAudit, observabilityGaps) {
   let score = telemetryAudit.isSparse ? 0.35 : 0.65;
   score -= Math.min(0.2, observabilityGaps.missing_critical_signals.length * 0.03);
   return Math.max(0, Math.min(1, score));
+}
+
+function buildSelectedIncidentCoverageContent(canonicalEvidence) {
+  const direct = canonicalEvidence.direct_evidence || {};
+  const quality = canonicalEvidence.telemetry_audit?.telemetryQuality || {};
+  const deps = Array.isArray(direct.direct_dependency_nodes) ? direct.direct_dependency_nodes.length : 0;
+  return [
+    `Selected-incident score: ${canonicalEvidence.observability_score}%`,
+    `Requests: ${direct.request_count || 0}`,
+    `Logs: ${direct.log_count || 0}`,
+    `Trace samples: ${direct.trace_sample_count || 0}`,
+    `Metric highlights: ${Object.keys(direct.metric_highlights || {}).length}`,
+    `Dependencies: ${deps}`,
+    `Topology: ${quality.topology || "missing"}`,
+  ].join(" | ");
 }
 
 function buildCanonicalIncidentSummary(incident, scope, telemetryAudit) {

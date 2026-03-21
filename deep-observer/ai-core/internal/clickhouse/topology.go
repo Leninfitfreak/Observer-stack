@@ -45,6 +45,10 @@ type TimelineEvent struct {
 }
 
 func (c *Client) BuildTopology(ctx context.Context, filters Filters) (TopologyGraph, error) {
+	return c.buildTopologyWithFallback(ctx, filters, true)
+}
+
+func (c *Client) buildTopologyWithFallback(ctx context.Context, filters Filters, allowNamespaceFallback bool) (TopologyGraph, error) {
 	graph := TopologyGraph{
 		GeneratedAt: time.Now().UTC(),
 		Nodes:       []TopologyNode{},
@@ -155,6 +159,13 @@ func (c *Client) BuildTopology(ctx context.Context, filters Filters) (TopologyGr
 	sort.Slice(graph.Nodes, func(i, j int) bool {
 		return graph.Nodes[i].ID < graph.Nodes[j].ID
 	})
+
+	if allowNamespaceFallback && filters.Namespace != "" && len(graph.Nodes) == 0 && len(graph.Edges) == 0 {
+		relaxed := filters
+		relaxed.Namespace = ""
+		return c.buildTopologyWithFallback(ctx, relaxed, false)
+	}
+
 	return graph, nil
 }
 
