@@ -1,5 +1,4 @@
 import { RocketOutlined } from '@ant-design/icons';
-import { DEEP_OBSERVER_URL } from 'constants/app';
 import ROUTES from 'constants/routes';
 import {
 	ArrowUpRight,
@@ -31,7 +30,6 @@ import {
 	Settings,
 	Shield,
 	Slack,
-	Sparkles,
 	Unplug,
 	User,
 	UserPlus,
@@ -105,14 +103,6 @@ const menuItems: SidebarItem[] = [
 		label: 'Services',
 		icon: <HardDrive size={16} />,
 		itemKey: 'services',
-	},
-	{
-		key: ROUTES.DEEP_OBSERVER,
-		label: 'Deep Observer',
-		icon: <Sparkles size={16} />,
-		isExternal: true,
-		url: DEEP_OBSERVER_URL,
-		itemKey: 'ai-observer',
 	},
 	{
 		key: ROUTES.LOGS,
@@ -226,16 +216,6 @@ export const defaultMoreMenuItems: SidebarItem[] = [
 		isPinned: true,
 		isEnabled: true,
 		itemKey: 'services',
-	},
-	{
-		key: ROUTES.DEEP_OBSERVER,
-		label: 'Deep Observer',
-		icon: <Sparkles size={16} />,
-		isExternal: true,
-		url: DEEP_OBSERVER_URL,
-		isPinned: true,
-		isEnabled: true,
-		itemKey: 'ai-observer',
 	},
 	{
 		key: ROUTES.LOGS,

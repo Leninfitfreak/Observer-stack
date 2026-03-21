@@ -1,9 +1,0 @@
-.env
-.env.local
-node_modules/
-dist/
-.venv/
-__pycache__/
-*.pyc
-coverage/
-bin/

@@ -241,27 +241,11 @@ function SideNav({ isPinned }: { isPinned: boolean }): JSX.Element {
 
 		// If preference exists with non-empty array, use stored shortcuts
 		if (isArray(navShortcuts) && navShortcuts.length > 0) {
-			const resolvedShortcuts = navShortcuts
+			return navShortcuts
 				.map((shortcut) =>
 					defaultMoreMenuItems.find((item) => item.itemKey === shortcut),
 				)
 				.filter((item): item is SidebarItem => item !== undefined);
-
-			const hasAiObserver = resolvedShortcuts.some(
-				(item) => item.itemKey === 'ai-observer',
-			);
-			const servicesIndex = resolvedShortcuts.findIndex(
-				(item) => item.itemKey === 'services',
-			);
-			const aiObserverItem = defaultMoreMenuItems.find(
-				(item) => item.itemKey === 'ai-observer',
-			);
-
-			if (!hasAiObserver && servicesIndex !== -1 && aiObserverItem) {
-				resolvedShortcuts.splice(servicesIndex + 1, 0, aiObserverItem);
-			}
-
-			return resolvedShortcuts;
 		}
 
 		// No preference, or empty array → use defaults
