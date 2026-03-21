@@ -5,7 +5,7 @@ import re
 
 from .llm.provider import LLMProvider
 from .remediation_engine import build_remediation_steps
-from .telemetry import TelemetryContext
+from .telemetry import TelemetryContext, TelemetryReader
 
 
 OUTPUT_SCHEMA = {
@@ -319,6 +319,46 @@ def _normalize_root_cause_service(candidate: str, incident: dict, context: Telem
         if service_lower in lowered or lowered in service_lower:
             return service_name
     return fallback
+
+
+def _normalize_entity_reference(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if " -> " in text:
+        parts = [part.strip() for part in text.split("->")]
+        normalized = [_normalize_entity_reference(part) or part for part in parts]
+        normalized = [part for part in normalized if part]
+        return " -> ".join(normalized)
+    lowered = text.lower()
+    if lowered in {"kafka", "messaging_kafka", "messaging-kafka"}:
+        return "messaging:kafka"
+    if lowered in {"postgres", "postgresql", "db_postgres", "database_postgresql"}:
+        return "db:postgresql"
+    if lowered.startswith("db:") or lowered.startswith("messaging:"):
+        return lowered
+    database_match = re.match(r"^(?:db|database)[:/_-]+([a-z0-9._/-]+)$", lowered)
+    if database_match:
+        return f"db:{database_match.group(1).strip('/')}"
+    messaging_match = re.match(r"^(?:messaging|queue|topic|broker)[:/_-]+([a-z0-9._/-]+)$", lowered)
+    if messaging_match:
+        return f"messaging:{messaging_match.group(1).strip('/')}"
+    if re.search(r"\s", text):
+        return text
+    canonical_service = TelemetryReader._canonicalize_name(text)
+    return canonical_service or text
+
+
+def _normalize_reasoning_path(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = _normalize_entity_reference(value)
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        normalized.append(item)
+    return normalized
 
 
 def _infer_root_from_topology(incident: dict, context: TelemetryContext) -> str:
@@ -643,9 +683,9 @@ def fallback_reasoning(incident: dict, context: TelemetryContext, historical_mat
         "root_cause_service": inferred_service,
         "root_cause_signal": signal,
         "confidence_score": confidence,
-        "causal_chain": [] if insufficient else [root_cause],
+        "causal_chain": [] if insufficient else _normalize_reasoning_path([root_cause]),
         "correlated_signals": _as_string_list(incident.get("detector_signals", [])) if not insufficient else [],
-        "propagation_path": propagation_path,
+        "propagation_path": _normalize_reasoning_path(propagation_path),
         "impact_assessment": impact_assessment,
         "customer_impact": customer_impact,
         "recommended_actions": (
@@ -701,9 +741,9 @@ def generate_reasoning(llm: LLMProvider, incident: dict, context: TelemetryConte
         "root_cause_service": fallback_service,
         "root_cause_signal": _as_string(parsed.get("root_cause_signal"), fallback["root_cause_signal"]),
         "confidence_score": _as_float(parsed.get("confidence_score"), fallback["confidence_score"]),
-        "causal_chain": _as_string_list(parsed.get("causal_chain"), fallback["causal_chain"]),
+        "causal_chain": _normalize_reasoning_path(_as_string_list(parsed.get("causal_chain"), fallback["causal_chain"])),
         "correlated_signals": _as_string_list(parsed.get("correlated_signals"), fallback["correlated_signals"]),
-        "propagation_path": _as_string_list(parsed.get("propagation_path"), fallback["propagation_path"]),
+        "propagation_path": _normalize_reasoning_path(_as_string_list(parsed.get("propagation_path"), fallback["propagation_path"])),
         "impact_assessment": _as_string(parsed.get("impact_assessment"), fallback["impact_assessment"]),
         "customer_impact": _as_string(parsed.get("customer_impact"), fallback["customer_impact"]),
         "recommended_actions": dedupe_list(_as_string_list(parsed.get("recommended_actions"), fallback["recommended_actions"]) + remediation),
@@ -722,6 +762,7 @@ def generate_reasoning(llm: LLMProvider, incident: dict, context: TelemetryConte
         result["root_cause_signal"],
         context,
     )
+    result["root_cause_service"] = _normalize_entity_reference(result["root_cause_service"])
     result["confidence_score"] = max(0.1, min(result["confidence_score"], max(fallback["confidence_score"], _evidence_score(incident, context))))
     result["missing_telemetry_signals"] = dedupe_list(
         _as_string_list(result.get("missing_telemetry_signals"), []) + _missing_telemetry(context, incident)

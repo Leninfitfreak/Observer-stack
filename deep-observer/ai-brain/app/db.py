@@ -239,7 +239,7 @@ def claim_reasoning_request(conn: psycopg.Connection, incident_id: str) -> bool:
 
 
 def update_reasoning_request_status(conn: psycopg.Connection, incident_id: str, status: str, error: str = "") -> None:
-    completed_at = "NOW()" if status in {"completed", "failed"} else "NULL"
+    completed_at = "NOW()" if status in {"completed", "completed_with_fallback", "failed"} else "NULL"
     with conn.cursor() as cur:
         cur.execute(
             f"""

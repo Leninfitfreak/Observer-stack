@@ -60,7 +60,9 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		"confidence_details":         confidenceDetails(item, quality),
 		"trust_score":                trustScore(item, quality),
 		"reasoning_status":           firstNonEmpty(strings.ToLower(item.ReasoningStatus), "not_generated"),
-		"reasoning_ready":            item.Reasoning != nil && strings.EqualFold(item.ReasoningStatus, "completed"),
+		"reasoning_ready":            item.Reasoning != nil && isCompletedReasoningStatus(item.ReasoningStatus),
+		"reasoning_execution_mode":   reasoningExecutionMode(item),
+		"reasoning_failure_summary":  reasoningFailureSummary(item),
 		"incident_summary":           incidentSummary(item, direct),
 		"reasoning_summary":          reasoningSummary(item),
 		"signal_summary":             signalSummary(item, quality),
@@ -516,32 +518,38 @@ func impactedServices(item *incidents.Incident) []string {
 			continue
 		}
 		if strings.TrimSpace(impact.Service) != "" {
-			values = append(values, impact.Service)
+			values = append(values, canonicalNarrativeValue(impact.Service))
 		}
 	}
 	return uniqueStrings(values)
 }
 
 func propagationPath(item *incidents.Incident, scopedGraph map[string]any) []string {
+	edges, _ := scopedGraph["edges"].([]clickhouse.TopologyEdge)
+	graphValues := []string{}
+	for _, edge := range edges {
+		graphValues = append(graphValues, edge.Source+" -> "+edge.Target)
+	}
 	if item.Reasoning != nil && len(item.Reasoning.PropagationPath) > 0 {
-		return uniqueStrings(item.Reasoning.PropagationPath)
+		reasoningPath := normalizeNarrativeValues(item.Reasoning.PropagationPath)
+		if len(reasoningPath) > 0 && hasRenderablePropagationPath(reasoningPath) {
+			return reasoningPath
+		}
+		if len(graphValues) > 0 {
+			return normalizeNarrativeValues(graphValues)
+		}
 	}
 	if len(item.DependencyChain) > 0 {
-		return uniqueStrings(item.DependencyChain)
+		return normalizeNarrativeValues(item.DependencyChain)
 	}
-	edges, _ := scopedGraph["edges"].([]clickhouse.TopologyEdge)
-	values := []string{}
-	for _, edge := range edges {
-		values = append(values, edge.Source+" -> "+edge.Target)
-	}
-	return uniqueStrings(values)
+	return normalizeNarrativeValues(graphValues)
 }
 
 func toAnyStrings(reasoning *incidents.Reasoning, fallback []string) []string {
 	if reasoning != nil && len(reasoning.CausalChain) > 0 {
-		return uniqueStrings(reasoning.CausalChain)
+		return normalizeNarrativeValues(reasoning.CausalChain)
 	}
-	return uniqueStrings(fallback)
+	return normalizeNarrativeValues(fallback)
 }
 
 func uniqueStrings(values []string) []string {
@@ -559,6 +567,84 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func hasRenderablePropagationPath(values []string) bool {
+	for _, value := range values {
+		if strings.Contains(value, " -> ") {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalNarrativeValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(trimmed, "->") {
+		parts := strings.Split(trimmed, "->")
+		normalized := make([]string, 0, len(parts))
+		for _, part := range parts {
+			canonical := canonicalNarrativeValue(part)
+			if canonical == "" {
+				continue
+			}
+			normalized = append(normalized, canonical)
+		}
+		if len(normalized) == 0 {
+			return ""
+		}
+		return strings.Join(normalized, " -> ")
+	}
+	canonical := clickhouse.CanonicalTopologyNodeID(trimmed)
+	if canonical != "" {
+		return canonical
+	}
+	return trimmed
+}
+
+func normalizeNarrativeValues(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		canonical := canonicalNarrativeValue(value)
+		if canonical == "" {
+			canonical = strings.TrimSpace(value)
+		}
+		if canonical == "" {
+			continue
+		}
+		out = append(out, canonical)
+	}
+	return uniqueStrings(out)
+}
+
+func isCompletedReasoningStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "completed", "completed_with_fallback":
+		return true
+	default:
+		return false
+	}
+}
+
+func reasoningExecutionMode(item *incidents.Incident) string {
+	status := strings.ToLower(strings.TrimSpace(item.ReasoningStatus))
+	if status == "completed_with_fallback" {
+		return "fallback"
+	}
+	if item.Reasoning != nil {
+		return "model"
+	}
+	return "pending"
+}
+
+func reasoningFailureSummary(item *incidents.Incident) string {
+	if item == nil {
+		return ""
+	}
+	return strings.TrimSpace(item.ReasoningError)
 }
 
 func normalizeHistory(currentID string, items []incidents.Incident) []map[string]any {

@@ -858,6 +858,7 @@ func scanIncident(scanner rowScanner) (Incident, error) {
 		_ = json.Unmarshal(observabilitySummaryJSON, &reasoning.ObservabilitySummary)
 		_ = json.Unmarshal(historicalMatchesJSON, &reasoning.HistoricalMatches)
 		reasoning.RootCauseService = normalizeIncidentEntity(reasoning.RootCauseService)
+		reasoning.PropagationPath = normalizeNarrativePathValues(reasoning.PropagationPath)
 		item.Reasoning = &reasoning
 	}
 	if reasoningStatus != nil {
@@ -1185,6 +1186,8 @@ func (s *Store) ListReasoningRuns(ctx context.Context, incidentID string, limit 
 		_ = json.Unmarshal(propagationJSON, &item.PropagationPath)
 		_ = json.Unmarshal(evidenceJSON, &item.EvidenceSnapshot)
 		_ = json.Unmarshal(confidenceJSON, &item.ConfidenceExplanation)
+		item.RootCauseService = normalizeIncidentEntity(item.RootCauseService)
+		item.PropagationPath = normalizeNarrativePathValues(item.PropagationPath)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -1242,6 +1245,8 @@ func (s *Store) GetReasoningRun(ctx context.Context, incidentID, runID string) (
 	_ = json.Unmarshal(propagationJSON, &item.PropagationPath)
 	_ = json.Unmarshal(evidenceJSON, &item.EvidenceSnapshot)
 	_ = json.Unmarshal(confidenceJSON, &item.ConfidenceExplanation)
+	item.RootCauseService = normalizeIncidentEntity(item.RootCauseService)
+	item.PropagationPath = normalizeNarrativePathValues(item.PropagationPath)
 	return &item, nil
 }
 
@@ -1393,6 +1398,49 @@ func normalizeIncidentEntities(values []string) []string {
 			continue
 		}
 		out = append(out, normalized)
+	}
+	return out
+}
+
+func normalizeNarrativePathValues(values []string) []string {
+	if len(values) == 0 {
+		return values
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if strings.Contains(trimmed, "->") {
+			parts := strings.Split(trimmed, "->")
+			normalized := make([]string, 0, len(parts))
+			for _, part := range parts {
+				canonical := normalizeIncidentEntity(part)
+				if canonical == "" {
+					canonical = strings.TrimSpace(part)
+				}
+				if canonical == "" {
+					continue
+				}
+				normalized = append(normalized, canonical)
+			}
+			if len(normalized) == 0 {
+				continue
+			}
+			trimmed = strings.Join(normalized, " -> ")
+		} else {
+			canonical := normalizeIncidentEntity(trimmed)
+			if canonical != "" {
+				trimmed = canonical
+			}
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
 	}
 	return out
 }

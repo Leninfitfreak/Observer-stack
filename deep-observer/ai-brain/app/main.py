@@ -124,11 +124,19 @@ def main() -> None:
                     logging.info("no pending incidents" if auto_reasoning else "no reasoning requests")
                 for incident in incidents:
                     run_id = None
+                    fallback_used = False
+                    model_failure = ""
                     try:
                         with reasoning_deadline(timeout_seconds):
                             if not auto_reasoning and not claim_reasoning_request(conn, incident["incident_id"]):
                                 continue
                             trigger_type = incident.get("trigger_type") or "manual"
+                            logging.info(
+                                "reasoning_event=request_claimed incident_id=%s trigger_type=%s mode=%s",
+                                incident["incident_id"],
+                                trigger_type,
+                                "auto" if auto_reasoning else "manual",
+                            )
                             run_id = str(uuid.uuid4())
                             provider = settings.llm_provider
                             model = settings.openai_model if provider.startswith("openai") else settings.ollama_model
@@ -145,21 +153,45 @@ def main() -> None:
                                     "completed_at": None,
                                 },
                             )
+                            logging.info(
+                                "reasoning_event=worker_pickup incident_id=%s run_id=%s provider=%s model=%s",
+                                incident["incident_id"],
+                                run_id,
+                                provider,
+                                model,
+                            )
                             context = telemetry.fetch_context(incident)
                             historical_matches = fetch_historical_matches(conn, incident)
                             try:
+                                logging.info(
+                                    "reasoning_event=model_invocation_dispatch incident_id=%s run_id=%s provider=%s model=%s",
+                                    incident["incident_id"],
+                                    run_id,
+                                    provider,
+                                    model,
+                                )
                                 reasoning = generate_reasoning(llm, incident, context, historical_matches)
                             except Exception as exc:  # noqa: BLE001
+                                fallback_used = True
+                                model_failure = str(exc).strip() or exc.__class__.__name__
                                 logging.warning(
-                                    "llm reasoning generation unavailable for incident %s, using deterministic fallback: %s",
+                                    "reasoning_event=fallback_selected incident_id=%s run_id=%s provider=%s model=%s error=%s",
                                     incident["incident_id"],
-                                    exc,
+                                    run_id,
+                                    provider,
+                                    model,
+                                    model_failure,
                                 )
                                 reasoning = fallback_reasoning(incident, context, historical_matches)
                                 reasoning["impact_assessment"] = (
                                     f"{reasoning.get('impact_assessment', '')} "
                                     "LLM generation was unavailable, so this summary is based on deterministic telemetry evidence."
                                 ).strip()
+                                reasoning["execution_mode"] = "fallback"
+                                reasoning["model_failure_summary"] = model_failure
+                            else:
+                                reasoning["execution_mode"] = "model"
+                                reasoning["model_failure_summary"] = ""
                             validation = validate_reasoning(incident, context, reasoning, fetch_known_services(conn))
                             store_reasoning_validation(conn, validation)
                             if validation.validation_result == "unsupported":
@@ -173,6 +205,13 @@ def main() -> None:
                                     f"{regenerated.get('impact_assessment', '')} "
                                     f"Validation warning: unsupported claims were removed ({unsupported})."
                                 ).strip()
+                                regenerated["execution_mode"] = "fallback"
+                                regenerated["model_failure_summary"] = (
+                                    f"Validation removed unsupported model output ({unsupported})."
+                                )
+                                fallback_used = True
+                                if not model_failure:
+                                    model_failure = regenerated["model_failure_summary"]
                                 reasoning = regenerated
                             store_reasoning(conn, incident, reasoning)
                             store_runbook(conn, generate_runbook(incident, reasoning, historical_matches))
@@ -180,7 +219,8 @@ def main() -> None:
                                 conn,
                                 run_id,
                                 {
-                                    "status": "completed",
+                                    "status": "completed_with_fallback" if fallback_used else "completed",
+                                    "error_message": model_failure if fallback_used else "",
                                     "summary": reasoning.get("root_cause", ""),
                                     "root_cause_service": reasoning.get("root_cause_service", ""),
                                     "root_cause_signal": reasoning.get("root_cause_signal", ""),
@@ -190,18 +230,34 @@ def main() -> None:
                                     "evidence_snapshot": {
                                         "signals": incident.get("detector_signals", []),
                                         "telemetry_summary": incident.get("timeline_summary", []),
+                                        "execution_mode": reasoning.get("execution_mode", "model"),
+                                        "model_failure_summary": reasoning.get("model_failure_summary", ""),
                                     },
                                     "confidence_explanation": reasoning.get("confidence_explanation", {}),
                                     "correlation_summary": reasoning.get("correlation_summary", ""),
                                     "completed_at": datetime.now(timezone.utc),
                                 },
                             )
-                            logging.info("stored reasoning for incident %s run=%s", incident["incident_id"], run_id)
+                            logging.info(
+                                "reasoning_event=persisted incident_id=%s run_id=%s status=%s root_cause_service=%s root_cause_signal=%s confidence=%s execution_mode=%s",
+                                incident["incident_id"],
+                                run_id,
+                                "completed_with_fallback" if fallback_used else "completed",
+                                reasoning.get("root_cause_service", ""),
+                                reasoning.get("root_cause_signal", ""),
+                                reasoning.get("confidence_score", 0.0),
+                                reasoning.get("execution_mode", "model"),
+                            )
                             if not auto_reasoning:
-                                update_reasoning_request_status(conn, incident["incident_id"], "completed")
+                                update_reasoning_request_status(
+                                    conn,
+                                    incident["incident_id"],
+                                    "completed_with_fallback" if fallback_used else "completed",
+                                    model_failure if fallback_used else "",
+                                )
                     except ReasoningTimeoutError as exc:
                         error_message = str(exc)
-                        logging.exception("reasoning timed out for incident %s: %s", incident["incident_id"], error_message)
+                        logging.exception("reasoning_event=timeout incident_id=%s run_id=%s error=%s", incident["incident_id"], run_id, error_message)
                         if run_id:
                             try:
                                 update_reasoning_run(
@@ -219,7 +275,7 @@ def main() -> None:
                             update_reasoning_request_status(conn, incident["incident_id"], "failed", error_message)
                     except Exception as exc:  # noqa: BLE001
                         error_message = backend_failure_message(exc)
-                        logging.exception("reasoning failed for incident %s: %s", incident["incident_id"], error_message)
+                        logging.exception("reasoning_event=failed incident_id=%s run_id=%s error=%s", incident["incident_id"], run_id, error_message)
                         try:
                             if run_id:
                                 update_reasoning_run(

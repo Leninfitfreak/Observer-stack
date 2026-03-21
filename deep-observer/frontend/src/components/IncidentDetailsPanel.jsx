@@ -102,7 +102,7 @@ export default function IncidentDetailsPanel({
   const canRunReasoning =
     Boolean(currentIncident) &&
     canonicalEvidence.scope.scope_complete &&
-    ["not_generated", "failed", "completed"].includes(derivedStatus) &&
+    ["not_generated", "failed", "completed", "completed_with_fallback"].includes(derivedStatus) &&
     !reasoningBusy;
   const confidenceDetails = canonicalEvidence.confidence_details;
   const prioritizedActions = canonicalEvidence.prioritized_actions;
@@ -120,6 +120,8 @@ export default function IncidentDetailsPanel({
   const scopedRunbook = canonicalEvidence.runbook;
   const workflowStatus = (currentIncident?.workflow_status || "open").toLowerCase();
   const reasoningReady = canonicalEvidence.reasoning_ready;
+  const reasoningExecutionMode = canonicalEvidence.reasoning_execution_mode || (derivedStatus === "completed_with_fallback" ? "fallback" : reasoningReady ? "model" : "pending");
+  const reasoningFailureSummary = canonicalEvidence.reasoning_failure_summary || reasoningError || selectedRun?.error_message || "";
   const incidentHistory = Array.isArray(canonicalEvidence.incident_history) ? canonicalEvidence.incident_history : [];
   const correlations = Array.isArray(canonicalEvidence.related_incidents) ? canonicalEvidence.related_incidents : [];
   const clusterContext = canonicalEvidence.cluster_context && typeof canonicalEvidence.cluster_context === "object" ? canonicalEvidence.cluster_context : {};
@@ -166,7 +168,7 @@ export default function IncidentDetailsPanel({
     if (attempt > MAX_REASONING_POLL_ATTEMPTS) return;
     const updated = await refreshIncident();
     const status = updated?.reasoning_status || derivedStatus;
-    if (status === "completed" || status === "failed") return;
+    if (status === "completed" || status === "completed_with_fallback" || status === "failed") return;
     setTimeout(() => {
       pollForReasoning(attempt + 1).catch(() => {});
     }, 3000);
@@ -523,14 +525,21 @@ export default function IncidentDetailsPanel({
                 canRunReasoning ? "bg-cyan-500 text-slate-950 hover:bg-cyan-400" : "bg-slate-700 text-slate-300"
               }`}
             >
-              {derivedStatus === "failed" ? "Retry Reasoning" : derivedStatus === "completed" ? "Re-run Reasoning" : "Run Reasoning"}
+              {derivedStatus === "failed" ? "Retry Reasoning" : ["completed", "completed_with_fallback"].includes(derivedStatus) ? "Re-run Reasoning" : "Run Reasoning"}
             </button>
           </div>
           <div className="mt-3 text-sm text-slate-300">
             Status: <span className="font-semibold text-white">{formatReasoningStatus(derivedStatus, reasoningBusy)}</span>
           </div>
-          {reasoningError ? (
-            <p className="mt-2 text-xs text-rose-300">Last error: {reasoningError}</p>
+          {reasoningExecutionMode !== "pending" ? (
+            <p className="mt-2 text-xs text-slate-400">
+              Execution mode: <span className="font-semibold text-white">{formatExecutionMode(reasoningExecutionMode)}</span>
+            </p>
+          ) : null}
+          {reasoningFailureSummary ? (
+            <p className={`mt-2 text-xs ${derivedStatus === "failed" ? "text-rose-300" : "text-amber-300"}`}>
+              {derivedStatus === "completed_with_fallback" ? "Model failure summary" : "Last error"}: {reasoningFailureSummary}
+            </p>
           ) : null}
         </div>
 
@@ -576,11 +585,11 @@ export default function IncidentDetailsPanel({
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs text-slate-400">{new Date(run.started_at).toLocaleString()}</span>
-                    <span className="text-xs uppercase tracking-[0.2em] text-cyan-300">{toText(run.status)}</span>
+                    <span className="text-xs uppercase tracking-[0.2em] text-cyan-300">{formatReasoningStatus(run.status, false)}</span>
                   </div>
                   <div className="mt-1 text-sm text-white">{toText(run.summary || "No summary")}</div>
                   <div className="mt-1 text-xs text-slate-400">
-                    {toText(run.provider)} / {toText(run.model)} / {toText(run.trigger_type)}
+                    {toText(run.provider)} / {toText(run.model)} / {toText(run.trigger_type)} / {formatExecutionMode(run.status === "completed_with_fallback" ? "fallback" : run.status === "completed" ? "model" : "pending")}
                   </div>
                 </button>
               )) : (
@@ -592,6 +601,11 @@ export default function IncidentDetailsPanel({
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Selected Run</p>
                 <p className="mt-2">{toText(runDetail.summary || "No summary")}</p>
                 <p className="mt-2 text-xs text-slate-400">Confidence: {formatScore(runDetail.root_cause_confidence ?? 0)}</p>
+                {runDetail.error_message ? (
+                  <p className={`mt-2 text-xs ${runDetail.status === "completed_with_fallback" ? "text-amber-300" : "text-rose-300"}`}>
+                    {runDetail.status === "completed_with_fallback" ? "Fallback reason" : "Failure reason"}: {toText(runDetail.error_message)}
+                  </p>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -819,9 +833,11 @@ function formatReasoningStatus(status, busy) {
   if (busy) return "Running...";
   switch (status) {
     case "pending":
-      return "Pending";
+      return "Queued";
     case "running":
       return "Running...";
+    case "completed_with_fallback":
+      return "Completed with fallback";
     case "completed":
       return "Completed";
     case "failed":
@@ -846,6 +862,17 @@ function toText(value) {
     return JSON.stringify(value);
   } catch {
     return String(value);
+  }
+}
+
+function formatExecutionMode(mode) {
+  switch (mode) {
+    case "fallback":
+      return "Deterministic fallback";
+    case "model":
+      return "Model-generated";
+    default:
+      return "Pending";
   }
 }
 
@@ -877,7 +904,7 @@ function buildCanonicalIncidentEvidence({ incident, topology, timeline, reasonin
   const snapshot = incident?.telemetry_snapshot || {};
   const scope = normalizeIncidentScope(incident);
   const reasoningStatus = String(incident?.reasoning_status || "").toLowerCase();
-  const hasCompletedReasoning = Boolean(reasoning) && reasoningStatus === "completed";
+  const hasCompletedReasoning = Boolean(reasoning) && ["completed", "completed_with_fallback"].includes(reasoningStatus);
   const impactedServices = formatImpactedServices(incident?.impacts);
   const directEvidence = {
     request_count: Number(snapshot.request_count || 0),
@@ -977,6 +1004,8 @@ function buildCanonicalIncidentEvidence({ incident, topology, timeline, reasonin
     runbook,
     reasoning_ready: hasCompletedReasoning,
     reasoning_status: reasoningStatus || "not_generated",
+    reasoning_execution_mode: reasoningStatus === "completed_with_fallback" ? "fallback" : hasCompletedReasoning ? "model" : "pending",
+    reasoning_failure_summary: incident?.reasoning_error || "",
   };
 }
 

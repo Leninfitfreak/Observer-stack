@@ -106,6 +106,7 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 					return
 				}
+				fmt.Printf("api reasoning request created incident_id=%s trigger=manual status=%s attempts=%d\n", incidentID, request.Status, request.Attempts)
 				writeJSON(w, http.StatusAccepted, request)
 				return
 			}
@@ -119,6 +120,7 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 					writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 					return
 				}
+				fmt.Printf("api reasoning request created incident_id=%s trigger=retry status=%s attempts=%d\n", incidentID, request.Status, request.Attempts)
 				writeJSON(w, http.StatusAccepted, request)
 				return
 			}

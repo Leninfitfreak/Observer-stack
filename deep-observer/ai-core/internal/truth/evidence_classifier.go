@@ -8,7 +8,7 @@ import (
 )
 
 func confidenceDetails(item *incidents.Incident, quality map[string]string) map[string]any {
-	ready := item.Reasoning != nil && strings.EqualFold(item.ReasoningStatus, "completed")
+	ready := item.Reasoning != nil && isCompletedReasoningStatus(item.ReasoningStatus)
 	score := item.PredictiveConfidence
 	if ready {
 		score = item.Reasoning.ConfidenceScore
@@ -42,7 +42,7 @@ func confidenceDetails(item *incidents.Incident, quality map[string]string) map[
 
 func trustScore(item *incidents.Incident, quality map[string]string) map[string]any {
 	score := item.PredictiveConfidence
-	if item.Reasoning != nil && strings.EqualFold(item.ReasoningStatus, "completed") {
+	if item.Reasoning != nil && isCompletedReasoningStatus(item.ReasoningStatus) {
 		score = item.Reasoning.ConfidenceScore
 	}
 	if score <= 0 {
@@ -81,10 +81,13 @@ func incidentSummary(item *incidents.Incident, direct map[string]any) string {
 }
 
 func reasoningSummary(item *incidents.Incident) string {
-	if item.Reasoning == nil || !strings.EqualFold(item.ReasoningStatus, "completed") {
+	if item.Reasoning == nil || !isCompletedReasoningStatus(item.ReasoningStatus) {
 		return "Reasoning has not been generated for this incident yet. The page is currently showing evidence only, not a completed RCA."
 	}
 	if strings.TrimSpace(item.Reasoning.RootCause) != "" {
+		if strings.EqualFold(item.ReasoningStatus, "completed_with_fallback") {
+			return item.Reasoning.RootCause + " This result was produced by deterministic fallback because model generation failed."
+		}
 		return item.Reasoning.RootCause
 	}
 	return "Reasoning completed."
@@ -138,7 +141,7 @@ func impactSummary(item *incidents.Incident) map[string]any {
 }
 
 func decisionPanel(item *incidents.Incident, quality map[string]string) map[string]any {
-	if item.Reasoning == nil || !strings.EqualFold(item.ReasoningStatus, "completed") {
+	if item.Reasoning == nil || !isCompletedReasoningStatus(item.ReasoningStatus) {
 		return map[string]any{
 			"root_cause":          "Reasoning not generated",
 			"impact_summary":      "Selected-incident evidence is available, but a completed RCA has not been generated yet.",
@@ -159,7 +162,7 @@ func decisionPanel(item *incidents.Incident, quality map[string]string) map[stri
 }
 
 func prioritizedActions(item *incidents.Incident, quality map[string]string) []map[string]any {
-	if item.Reasoning == nil || !strings.EqualFold(item.ReasoningStatus, "completed") {
+	if item.Reasoning == nil || !isCompletedReasoningStatus(item.ReasoningStatus) {
 		return []map[string]any{
 			{
 				"label":            "Review selected-incident telemetry evidence.",
@@ -194,7 +197,7 @@ func prioritizedActions(item *incidents.Incident, quality map[string]string) []m
 
 func runbook(item *incidents.Incident, quality map[string]string) map[string]any {
 	steps := []string{}
-	if item.Reasoning != nil && strings.EqualFold(item.ReasoningStatus, "completed") {
+	if item.Reasoning != nil && isCompletedReasoningStatus(item.ReasoningStatus) {
 		steps = uniqueStrings(item.Reasoning.RecommendedActions)
 	}
 	if len(steps) == 0 {
