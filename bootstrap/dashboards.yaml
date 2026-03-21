@@ -1,0 +1,113 @@
+{
+  "dashboards": [
+    {
+      "title": "LeninKart Frontend HTTP Monitoring",
+      "description": "Official SigNoz HTTP dashboard tuned for the LeninKart frontend service selection.",
+      "tags": ["leninkart", "frontend", "http"],
+      "source": {
+        "type": "official-template",
+        "url": "https://raw.githubusercontent.com/SigNoz/dashboards/main/apm/http-api-monitoring.json"
+      },
+      "variable_defaults": {
+        "service.name": "frontend"
+      }
+    },
+    {
+      "title": "LeninKart Auth Service APM",
+      "description": "Official SigNoz APM dashboard prepared for the future auth-service boundary.",
+      "tags": ["leninkart", "auth-service", "apm"],
+      "source": {
+        "type": "official-template",
+        "url": "https://raw.githubusercontent.com/SigNoz/dashboards/main/apm/apm-metrics.json"
+      },
+      "variable_defaults": {
+        "deployment.environment": "dev",
+        "service.name": "auth-service"
+      }
+    },
+    {
+      "title": "LeninKart Product Service APM",
+      "description": "Official SigNoz APM dashboard for product-service.",
+      "tags": ["leninkart", "product-service", "apm"],
+      "source": {
+        "type": "official-template",
+        "url": "https://raw.githubusercontent.com/SigNoz/dashboards/main/apm/apm-metrics.json"
+      },
+      "variable_defaults": {
+        "deployment.environment": "dev",
+        "service.name": "product-service"
+      }
+    },
+    {
+      "title": "LeninKart Order Service APM",
+      "description": "Official SigNoz APM dashboard for order-service.",
+      "tags": ["leninkart", "order-service", "apm"],
+      "source": {
+        "type": "official-template",
+        "url": "https://raw.githubusercontent.com/SigNoz/dashboards/main/apm/apm-metrics.json"
+      },
+      "variable_defaults": {
+        "deployment.environment": "dev",
+        "service.name": "order-service"
+      }
+    },
+    {
+      "title": "LeninKart Product Service JVM",
+      "description": "Official SigNoz JVM dashboard for product-service.",
+      "tags": ["leninkart", "product-service", "jvm"],
+      "source": {
+        "type": "official-template",
+        "url": "https://raw.githubusercontent.com/SigNoz/dashboards/main/jvm/jvm-metrics-by-service.json"
+      },
+      "variable_defaults": {
+        "deployment.environment": "dev",
+        "service.name": "product-service"
+      }
+    },
+    {
+      "title": "LeninKart Order Service JVM",
+      "description": "Official SigNoz JVM dashboard for order-service.",
+      "tags": ["leninkart", "order-service", "jvm"],
+      "source": {
+        "type": "official-template",
+        "url": "https://raw.githubusercontent.com/SigNoz/dashboards/main/jvm/jvm-metrics-by-service.json"
+      },
+      "variable_defaults": {
+        "deployment.environment": "dev",
+        "service.name": "order-service"
+      }
+    },
+    {
+      "title": "LeninKart Database Visibility",
+      "description": "Official PostgreSQL dashboard imported for local LeninKart database visibility.",
+      "tags": ["leninkart", "postgres", "database"],
+      "source": {
+        "type": "official-template",
+        "url": "https://raw.githubusercontent.com/SigNoz/dashboards/main/postgresql/postgresql.json"
+      },
+      "variable_defaults": {}
+    },
+    {
+      "title": "LeninKart otel-collector Pod Metrics",
+      "description": "Official Kubernetes pod metrics dashboard used to inspect the in-cluster otel-collector pod.",
+      "tags": ["leninkart", "otel-collector", "k8s"],
+      "source": {
+        "type": "official-template",
+        "url": "https://raw.githubusercontent.com/SigNoz/dashboards/main/k8s-infra-metrics/kubernetes-pod-metrics-overall.json"
+      },
+      "variable_defaults": {
+        "k8s.namespace.name": "dev"
+      }
+    },
+    {
+      "title": "LeninKart Kafka Overview",
+      "description": "Generated Kafka dashboard using SigNoz Kafka metrics visible in the messaging queue feature set.",
+      "tags": ["leninkart", "kafka", "messaging"],
+      "source": {
+        "type": "generated",
+        "generator": "kafka_overview"
+      },
+      "variable_defaults": {}
+    }
+  ]
+}

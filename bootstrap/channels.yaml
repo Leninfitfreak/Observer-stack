@@ -1,0 +1,27 @@
+{
+  "channels": [
+    {
+      "ref": "email_primary",
+      "name": "LeninKart Email Alerts",
+      "type": "email",
+      "enabled_var": "ENABLE_EMAIL_ALERTS",
+      "to_var": "ALERT_EMAIL",
+      "send_resolved": true,
+      "html": "<b>{{ .CommonLabels.alertname }}</b><br/>Status: {{ .Status }}<br/>Summary: {{ index .CommonAnnotations \"summary\" }}",
+      "headers": {
+        "subject": "[LeninKart][{{ .Status | upper }}] {{ .CommonLabels.alertname }}"
+      }
+    },
+    {
+      "ref": "slack_primary",
+      "name": "LeninKart Slack Alerts",
+      "type": "slack",
+      "enabled_var": "ENABLE_SLACK_ALERTS",
+      "webhook_var": "SLACK_WEBHOOK",
+      "channel_var": "SLACK_CHANNEL",
+      "send_resolved": true,
+      "title": "[LeninKart] {{ .CommonLabels.alertname }}",
+      "text": "Status: {{ .Status }}\nSummary: {{ index .CommonAnnotations \"summary\" }}"
+    }
+  ]
+}
