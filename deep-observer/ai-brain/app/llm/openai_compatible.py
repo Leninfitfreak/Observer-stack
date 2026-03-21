@@ -11,7 +11,7 @@ class OpenAICompatibleProvider(LLMProvider):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def generate_reasoning(self, prompt: str) -> str:
+    def generate_reasoning(self, prompt: str, metadata: dict | None = None) -> str:
         last_error: Exception | None = None
         for attempt in range(max(1, self.settings.llm_max_retries)):
             try:

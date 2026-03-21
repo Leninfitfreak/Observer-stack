@@ -27,7 +27,7 @@ from .db import (
     update_reasoning_run,
 )
 from .llm.client import build_llm_client
-from .reasoner import fallback_reasoning, generate_reasoning
+from .reasoner import build_prompt_package, fallback_reasoning, generate_reasoning
 from .runbook_generator import generate_runbook
 from .telemetry import TelemetryReader
 from .validation_engine import validate_reasoning
@@ -162,15 +162,24 @@ def main() -> None:
                             )
                             context = telemetry.fetch_context(incident)
                             historical_matches = fetch_historical_matches(conn, incident)
+                            prompt_package = build_prompt_package(incident, context, historical_matches)
+                            prompt_diagnostics = prompt_package.get("diagnostics", {})
                             try:
                                 logging.info(
-                                    "reasoning_event=model_invocation_dispatch incident_id=%s run_id=%s provider=%s model=%s",
+                                    "reasoning_event=model_invocation_dispatch incident_id=%s run_id=%s provider=%s model=%s prompt_chars=%s estimated_tokens=%s compaction_level=%s largest_component=%s original_component_lengths=%s compacted_component_lengths=%s evidence_counts=%s",
                                     incident["incident_id"],
                                     run_id,
                                     provider,
                                     model,
+                                    prompt_diagnostics.get("prompt_chars", 0),
+                                    prompt_diagnostics.get("estimated_tokens", 0),
+                                    prompt_diagnostics.get("compaction_level", "none"),
+                                    prompt_diagnostics.get("largest_original_component", ""),
+                                    prompt_diagnostics.get("original_component_lengths", {}),
+                                    prompt_diagnostics.get("compacted_component_lengths", {}),
+                                    prompt_diagnostics.get("evidence_counts", {}),
                                 )
-                                reasoning = generate_reasoning(llm, incident, context, historical_matches)
+                                reasoning = generate_reasoning(llm, incident, context, historical_matches, prompt_package=prompt_package)
                             except Exception as exc:  # noqa: BLE001
                                 fallback_used = True
                                 model_failure = str(exc).strip() or exc.__class__.__name__
@@ -232,6 +241,7 @@ def main() -> None:
                                         "telemetry_summary": incident.get("timeline_summary", []),
                                         "execution_mode": reasoning.get("execution_mode", "model"),
                                         "model_failure_summary": reasoning.get("model_failure_summary", ""),
+                                        "prompt_diagnostics": prompt_diagnostics,
                                     },
                                     "confidence_explanation": reasoning.get("confidence_explanation", {}),
                                     "correlation_summary": reasoning.get("correlation_summary", ""),

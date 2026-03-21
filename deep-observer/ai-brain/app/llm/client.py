@@ -12,16 +12,16 @@ class MultiProviderClient(LLMProvider):
         self.ollama = ollama
         self.openai = openai
 
-    def generate_reasoning(self, prompt: str) -> str:
+    def generate_reasoning(self, prompt: str, metadata: dict | None = None) -> str:
         if self.settings.llm_provider in {"openai", "openai_api"} and self.openai is not None:
-            return self.openai.generate_reasoning(prompt)
+            return self.openai.generate_reasoning(prompt, metadata=metadata)
         if self.settings.llm_provider in {"ollama", "ollama_cloud"}:
-            return self.ollama.generate_reasoning(prompt)
+            return self.ollama.generate_reasoning(prompt, metadata=metadata)
         if self.settings.llm_provider in {"auto", "multi"} and self.openai is not None:
             if len(prompt) >= self.settings.llm_auto_large_context_chars:
-                return self.openai.generate_reasoning(prompt)
-            return self.ollama.generate_reasoning(prompt)
-        return self.ollama.generate_reasoning(prompt)
+                return self.openai.generate_reasoning(prompt, metadata=metadata)
+            return self.ollama.generate_reasoning(prompt, metadata=metadata)
+        return self.ollama.generate_reasoning(prompt, metadata=metadata)
 
 
 def build_llm_client(settings: Settings) -> LLMProvider:

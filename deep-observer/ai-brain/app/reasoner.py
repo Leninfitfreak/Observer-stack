@@ -28,6 +28,9 @@ OUTPUT_SCHEMA = {
     "severity": "",
 }
 
+SAFE_PROMPT_CHAR_BUDGET = 3600
+AGGRESSIVE_PROMPT_CHAR_BUDGET = 5200
+
 
 def _trim_text(value: str, limit: int = 220) -> str:
     text = str(value or "").strip()
@@ -63,12 +66,34 @@ def _compact_incident(incident: dict) -> dict:
     }
 
 
-def _compact_context(context: TelemetryContext) -> dict:
-    edges = context.topology.get("edges", [])[:8]
-    timeline = context.timeline[:8]
+def _metric_highlight_entries(highlights: dict, limit: int) -> list[dict]:
+    entries = []
+    if not isinstance(highlights, dict):
+        return entries
+    for key, value in highlights.items():
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        entries.append({"metric": str(key), "value": round(numeric, 4)})
+    entries.sort(key=lambda item: (abs(item["value"]), item["metric"]), reverse=True)
+    return entries[:limit]
+
+
+def _compact_context(context: TelemetryContext, aggressive: bool = False) -> dict:
+    edge_limit = 3 if aggressive else 6
+    node_limit = 4 if aggressive else 8
+    timeline_limit = 4 if aggressive else 6
+    metric_limit = 4 if aggressive else 8
+    log_example_limit = 2 if aggressive else 4
+    dependency_limit = 2 if aggressive else 4
+    flow_limit = 2 if aggressive else 4
+    edges = context.topology.get("edges", [])[:edge_limit]
+    timeline = context.timeline[:timeline_limit]
     detector_snapshot = context.metrics_summary.get("detector_snapshot", {})
-    db_dependencies = context.db_summary.get("dependencies", [])[:6]
-    messaging_flows = context.messaging_summary.get("flows", [])[:8]
+    db_dependencies = context.db_summary.get("dependencies", [])[:dependency_limit]
+    messaging_flows = context.messaging_summary.get("flows", [])[:flow_limit]
+    metric_highlights = _metric_highlight_entries(context.metrics_summary.get("highlights", {}), metric_limit)
     return {
         "scope": {
             "service": context.service_context.get("service", ""),
@@ -76,7 +101,8 @@ def _compact_context(context: TelemetryContext) -> dict:
             "cluster": context.cluster_context.get("cluster", ""),
         },
         "metrics_summary": {
-            "highlights": context.metrics_summary.get("highlights", {}),
+            "highlight_count": len(context.metrics_summary.get("highlights", {}) or {}),
+            "highlights": metric_highlights,
             "detector_snapshot": {
                 "request_count": detector_snapshot.get("request_count", 0),
                 "error_rate": detector_snapshot.get("error_rate", 0),
@@ -90,14 +116,21 @@ def _compact_context(context: TelemetryContext) -> dict:
         "logs_summary": {
             "log_count": context.logs_summary.get("log_count", 0),
             "context_log_count": context.logs_summary.get("context_log_count", 0),
-            "examples": context.logs_summary.get("examples", [])[:5],
+            "examples": context.logs_summary.get("examples", [])[:log_example_limit],
         },
-        "trace_summary": context.trace_summary,
+        "trace_summary": {
+            "request_count": context.trace_summary.get("request_count", 0),
+            "trace_sample_count": context.trace_summary.get("trace_sample_count", 0),
+            "error_count": context.trace_summary.get("error_count", 0),
+            "avg_duration_ms": context.trace_summary.get("avg_duration_ms", 0),
+            "p95_duration_ms": context.trace_summary.get("p95_duration_ms", 0),
+            "scope_level": context.trace_summary.get("scope_level", ""),
+        },
         "database_evidence": {
             "systems": context.db_summary.get("systems", []),
             "total_calls": context.db_summary.get("total_calls", 0),
             "dependencies": db_dependencies,
-            "query_examples": context.db_summary.get("query_examples", [])[:3],
+            "query_examples": [_trim_text(item, 140) for item in context.db_summary.get("query_examples", [])[: (1 if aggressive else 2)]],
         },
         "messaging_evidence": {
             "systems": context.messaging_summary.get("systems", []),
@@ -108,21 +141,18 @@ def _compact_context(context: TelemetryContext) -> dict:
         "exception_evidence": {
             "exception_count": context.exception_summary.get("exception_count", 0),
             "error_span_count": context.exception_summary.get("error_span_count", 0),
-            "types": context.exception_summary.get("types", []),
-            "examples": context.exception_summary.get("examples", [])[:5],
+            "types": context.exception_summary.get("types", [])[: (2 if aggressive else 4)],
+            "examples": [_trim_text(item, 140) for item in context.exception_summary.get("examples", [])[: (1 if aggressive else 2)]],
         },
         "infra_evidence": {
-            "pods": context.infra_summary.get("pods", []),
-            "containers": context.infra_summary.get("containers", []),
-            "nodes": context.infra_summary.get("nodes", []),
-            "hosts": context.infra_summary.get("hosts", []),
-            "environments": context.infra_summary.get("environments", []),
+            "pod_count": len(context.infra_summary.get("pods", []) or []),
+            "container_count": len(context.infra_summary.get("containers", []) or []),
+            "node_count": len(context.infra_summary.get("nodes", []) or []),
+            "host_count": len(context.infra_summary.get("hosts", []) or []),
+            "environments": context.infra_summary.get("environments", [])[: (1 if aggressive else 2)],
         },
-        "service_context": context.service_context,
-        "namespace_context": context.namespace_context,
-        "cluster_context": context.cluster_context,
         "topology": {
-            "nodes": [node.get("id") for node in context.topology.get("nodes", [])[:10]],
+            "nodes": [node.get("id") for node in context.topology.get("nodes", [])[:node_limit]],
             "edges": [
                 {
                     "source": edge.get("source"),
@@ -137,8 +167,8 @@ def _compact_context(context: TelemetryContext) -> dict:
                 "timestamp": event.get("timestamp"),
                 "kind": event.get("kind"),
                 "entity": event.get("entity"),
-                "severity": event.get("severity"),
-                "value": event.get("value"),
+                "severity": event.get("severity") if not aggressive else None,
+                "value": event.get("value") if (not aggressive and isinstance(event.get("value"), (int, float))) else None,
             }
             for event in timeline
         ],
@@ -160,7 +190,7 @@ def _compact_context(context: TelemetryContext) -> dict:
     }
 
 
-def _compact_history(historical_matches: list[dict]) -> list[dict]:
+def _compact_history(historical_matches: list[dict], limit: int = 3) -> list[dict]:
     return [
         {
             "incident_id": match.get("incident_id"),
@@ -172,11 +202,11 @@ def _compact_history(historical_matches: list[dict]) -> list[dict]:
             "root_cause_signal": match.get("root_cause_signal", ""),
             "root_cause": _trim_text(match.get("root_cause", ""), 180),
         }
-        for match in historical_matches[:3]
+        for match in historical_matches[:limit]
     ]
 
 
-def _reasoning_layers(incident: dict, context: TelemetryContext) -> dict:
+def _reasoning_layers(incident: dict, context: TelemetryContext, aggressive: bool = False) -> dict:
     service = incident.get("service", "")
     namespace = incident.get("namespace", "")
     cluster = incident.get("cluster", "")
@@ -201,17 +231,47 @@ def _reasoning_layers(incident: dict, context: TelemetryContext) -> dict:
     )
     domain_worker = {
         "domain": f"{cluster}/{namespace}",
-        "services": domain_nodes[:20],
-        "edges": context.topology.get("edges", [])[:20],
+        "service_count": len(domain_nodes),
+        "services": domain_nodes[: (4 if aggressive else 8)],
+        "edge_count": len(context.topology.get("edges", [])),
+        "edges": [
+            {
+                "source": edge.get("source"),
+                "target": edge.get("target"),
+                "call_count": edge.get("call_count"),
+            }
+            for edge in context.topology.get("edges", [])[: (3 if aggressive else 6)]
+            if isinstance(edge, dict)
+        ],
     }
     system_worker = {
         "cluster": cluster,
-        "telemetry_coverage": context.telemetry_coverage,
-        "recent_deployments": context.deployment_correlation.get("events", [])[:5],
-        "database_evidence": context.db_summary,
-        "messaging_evidence": context.messaging_summary,
-        "exception_evidence": context.exception_summary,
-        "infra_evidence": context.infra_summary,
+        "coverage_score": context.telemetry_coverage.get("observability_score", 0),
+        "missing_signals": _as_string_list(context.telemetry_coverage.get("missing_signals", [])),
+        "recent_deployments": [
+            {
+                "timestamp": event.get("timestamp"),
+                "service": event.get("service"),
+            }
+            for event in context.deployment_correlation.get("events", [])[: (2 if aggressive else 3)]
+        ],
+        "database_summary": {
+            "systems": context.db_summary.get("systems", []),
+            "total_calls": context.db_summary.get("total_calls", 0),
+        },
+        "messaging_summary": {
+            "systems": context.messaging_summary.get("systems", []),
+            "total_calls": context.messaging_summary.get("total_calls", 0),
+            "destinations": context.messaging_summary.get("destinations", [])[: (2 if aggressive else 4)],
+        },
+        "exception_summary": {
+            "exception_count": context.exception_summary.get("exception_count", 0),
+            "types": context.exception_summary.get("types", [])[: (2 if aggressive else 4)],
+        },
+        "infra_summary": {
+            "host_count": len(context.infra_summary.get("hosts", []) or []),
+            "pod_count": len(context.infra_summary.get("pods", []) or []),
+        },
     }
     return {
         "service_reasoning_worker": service_worker,
@@ -220,14 +280,92 @@ def _reasoning_layers(incident: dict, context: TelemetryContext) -> dict:
     }
 
 
-def build_prompt(incident: dict, context: TelemetryContext, historical_matches: list[dict]) -> str:
-    payload = {
-        "incident": _compact_incident(incident),
-        **_compact_context(context),
-        "reasoning_layers": _reasoning_layers(incident, context),
-        "historical_matches": _compact_history(historical_matches),
+def _minimal_prompt_payload(incident: dict, context: TelemetryContext, historical_matches: list[dict]) -> dict:
+    incident_payload = _compact_incident(incident)
+    detector_snapshot = context.metrics_summary.get("detector_snapshot", {})
+    topology_edges = [
+        " -> ".join(
+            [
+                str(edge.get("source", "")).strip(),
+                str(edge.get("target", "")).strip(),
+            ]
+        ).strip(" ->")
+        for edge in (context.topology.get("edges", []) or [])[:3]
+        if isinstance(edge, dict) and edge.get("source") and edge.get("target")
+    ]
+    db_dependencies = [
+        {
+            "name": dep.get("name") or dep.get("system") or dep.get("target") or "",
+            "calls": dep.get("calls", 0),
+        }
+        for dep in (context.db_summary.get("dependencies", []) or [])[:2]
+        if isinstance(dep, dict)
+    ]
+    messaging_flows = [
+        {
+            "destination": flow.get("destination") or flow.get("target") or "",
+            "calls": flow.get("calls", 0),
+        }
+        for flow in (context.messaging_summary.get("flows", []) or [])[:2]
+        if isinstance(flow, dict)
+    ]
+    metric_highlights = _metric_highlight_entries(context.metrics_summary.get("highlights", {}), 4)
+    timeline = [
+        {
+            "timestamp": event.get("timestamp"),
+            "kind": event.get("kind"),
+            "entity": event.get("entity"),
+        }
+        for event in (context.timeline or [])[:3]
+    ]
+    history = [
+        {
+            "service": match.get("service"),
+            "signal": match.get("root_cause_signal", ""),
+            "severity": match.get("severity"),
+            "timestamp": str(match.get("timestamp", "")),
+        }
+        for match in historical_matches[:2]
+    ]
+    return {
+        "incident": incident_payload,
+        "scope": {
+            "service": context.service_context.get("service", ""),
+            "namespace": context.namespace_context.get("namespace", ""),
+            "cluster": context.cluster_context.get("cluster", ""),
+        },
+        "direct_signal_facts": {
+            "request_count": context.trace_summary.get("request_count", 0),
+            "trace_sample_count": context.trace_summary.get("trace_sample_count", 0),
+            "error_count": context.trace_summary.get("error_count", 0),
+            "avg_duration_ms": context.trace_summary.get("avg_duration_ms", 0),
+            "p95_duration_ms": context.trace_summary.get("p95_duration_ms", 0),
+            "log_count": context.logs_summary.get("log_count", 0),
+            "context_log_count": context.logs_summary.get("context_log_count", 0),
+            "metric_highlights": metric_highlights,
+            "snapshot_request_count": detector_snapshot.get("request_count", 0),
+            "snapshot_error_rate": detector_snapshot.get("error_rate", 0),
+            "snapshot_p95_latency_ms": detector_snapshot.get("p95_latency_ms", 0),
+        },
+        "dependency_facts": {
+            "topology_edges": topology_edges,
+            "database_dependencies": db_dependencies,
+            "messaging_flows": messaging_flows,
+        },
+        "evidence_quality": {
+            "observability_score": context.telemetry_coverage.get("observability_score", 0),
+            "quality_by_signal": _quality_by_signal(context),
+            "missing_signals": _as_string_list(context.telemetry_coverage.get("missing_signals", []))[:6],
+            "exception_count": context.exception_summary.get("exception_count", 0) + context.exception_summary.get("error_span_count", 0),
+            "infra_host_count": len(context.infra_summary.get("hosts", []) or []),
+        },
+        "timeline_highlights": timeline,
+        "historical_matches": history,
         "required_json_schema": OUTPUT_SCHEMA,
     }
+
+
+def _prompt_instruction() -> str:
     return (
         "You are Deep Observer, an AIOps root cause analysis engine. "
         "Use the provided structured scope, metrics, logs, traces, database evidence, messaging evidence, exception evidence, infra evidence, topology, telemetry coverage, deployment evidence, and historical incidents "
@@ -242,8 +380,81 @@ def build_prompt(incident: dict, context: TelemetryContext, historical_matches: 
         "Correlate anomalies into a single problem, describe the propagation path, customer impact, missing telemetry, "
         "observability maturity, and specific remediation actions. "
         "Respond with valid JSON matching required_json_schema exactly.\n"
-        f"{json.dumps(payload, default=str)}"
     )
+
+
+def build_prompt_package(incident: dict, context: TelemetryContext, historical_matches: list[dict]) -> dict:
+    incident_payload = _compact_incident(incident)
+    expanded_context = _compact_context(context, aggressive=False)
+    expanded_layers = _reasoning_layers(incident, context, aggressive=False)
+    expanded_history = _compact_history(historical_matches, limit=3)
+    prompt_instruction = _prompt_instruction()
+    payload = {
+        "incident": incident_payload,
+        **expanded_context,
+        "reasoning_layers": expanded_layers,
+        "historical_matches": expanded_history,
+        "required_json_schema": OUTPUT_SCHEMA,
+    }
+    prompt = prompt_instruction + json.dumps(payload, default=str)
+    compaction_level = "none"
+    if len(prompt) > AGGRESSIVE_PROMPT_CHAR_BUDGET:
+        compaction_level = "aggressive"
+        compact_context = _compact_context(context, aggressive=True)
+        compact_layers = _reasoning_layers(incident, context, aggressive=True)
+        compact_history = _compact_history(historical_matches, limit=2)
+        payload = {
+            "incident": incident_payload,
+            **compact_context,
+            "reasoning_layers": compact_layers,
+            "historical_matches": compact_history,
+            "required_json_schema": OUTPUT_SCHEMA,
+        }
+        prompt = prompt_instruction + json.dumps(payload, default=str)
+    if len(prompt) > SAFE_PROMPT_CHAR_BUDGET:
+        compaction_level = "minimal"
+        payload = _minimal_prompt_payload(incident, context, historical_matches)
+        prompt = prompt_instruction + json.dumps(payload, default=str)
+    original_component_lengths = {
+        "incident": len(json.dumps(incident_payload, default=str)),
+        "context": len(json.dumps(expanded_context, default=str)),
+        "reasoning_layers": len(json.dumps(expanded_layers, default=str)),
+        "historical_matches": len(json.dumps(expanded_history, default=str)),
+        "schema": len(json.dumps(OUTPUT_SCHEMA, default=str)),
+    }
+    compacted_context = {k: v for k, v in payload.items() if k not in {"incident", "reasoning_layers", "historical_matches", "required_json_schema"}}
+    diagnostics = {
+        "prompt_chars": len(prompt),
+        "estimated_tokens": max(1, len(prompt) // 4),
+        "compaction_level": compaction_level,
+        "compaction_applied": compaction_level != "none",
+        "safe_prompt_char_budget": SAFE_PROMPT_CHAR_BUDGET,
+        "aggressive_prompt_char_budget": AGGRESSIVE_PROMPT_CHAR_BUDGET,
+        "original_component_lengths": original_component_lengths,
+        "compacted_component_lengths": {
+            "incident": len(json.dumps(payload["incident"], default=str)),
+            "context": len(json.dumps(compacted_context, default=str)),
+            "reasoning_layers": len(json.dumps(payload.get("reasoning_layers", {}), default=str)),
+            "historical_matches": len(json.dumps(payload["historical_matches"], default=str)),
+            "schema": len(json.dumps(OUTPUT_SCHEMA, default=str)),
+        },
+        "evidence_counts": {
+            "incident_timeline_count": len(context.timeline),
+            "historical_matches_count": len(historical_matches),
+            "topology_node_count": len(context.topology.get("nodes", []) or []),
+            "topology_edge_count": len(context.topology.get("edges", []) or []),
+            "metrics_highlight_count": len(context.metrics_summary.get("highlights", {}) or {}),
+            "log_example_count": len(context.logs_summary.get("examples", []) or []),
+            "db_dependency_count": len(context.db_summary.get("dependencies", []) or []),
+            "messaging_flow_count": len(context.messaging_summary.get("flows", []) or []),
+        },
+        "largest_original_component": max(original_component_lengths.items(), key=lambda item: item[1])[0],
+    }
+    return {"prompt": prompt, "payload": payload, "diagnostics": diagnostics}
+
+
+def build_prompt(incident: dict, context: TelemetryContext, historical_matches: list[dict]) -> str:
+    return build_prompt_package(incident, context, historical_matches)["prompt"]
 
 
 def _as_string(value, default: str = "") -> str:
@@ -713,12 +924,19 @@ def fallback_reasoning(incident: dict, context: TelemetryContext, historical_mat
     }
 
 
-def generate_reasoning(llm: LLMProvider, incident: dict, context: TelemetryContext, historical_matches: list[dict]) -> dict:
+def generate_reasoning(
+    llm: LLMProvider,
+    incident: dict,
+    context: TelemetryContext,
+    historical_matches: list[dict],
+    prompt_package: dict | None = None,
+) -> dict:
     fallback = fallback_reasoning(incident, context, historical_matches)
     if _insufficient_telemetry(incident, context):
         return fallback
 
-    raw = llm.generate_reasoning(build_prompt(incident, context, historical_matches))
+    prompt_package = prompt_package or build_prompt_package(incident, context, historical_matches)
+    raw = llm.generate_reasoning(prompt_package["prompt"], metadata={"prompt_diagnostics": prompt_package["diagnostics"]})
     try:
         parsed = json.loads(extract_json(raw))
         if not isinstance(parsed, dict):
