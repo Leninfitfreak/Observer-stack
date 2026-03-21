@@ -24,6 +24,8 @@ export default function IncidentDetailsPanel({
   const [selectedRun, setSelectedRun] = useState(null);
   const [workflowUpdating, setWorkflowUpdating] = useState(false);
   const [serverEvidence, setServerEvidence] = useState(null);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [evidenceError, setEvidenceError] = useState("");
 
   useEffect(() => {
     if (!incident) {
@@ -34,6 +36,8 @@ export default function IncidentDetailsPanel({
       setReasoningHistory([]);
       setSelectedRun(null);
       setServerEvidence(null);
+      setEvidenceLoading(false);
+      setEvidenceError("");
       return;
     }
     setActiveIncident(incident);
@@ -56,11 +60,27 @@ export default function IncidentDetailsPanel({
   useEffect(() => {
     if (!incident) {
       setServerEvidence(null);
+      setEvidenceLoading(false);
+      setEvidenceError("");
       return;
     }
+    setEvidenceLoading(true);
+    setEvidenceError("");
     fetchIncidentEvidence(incident.incident_id, filterQuery)
-      .then((payload) => setServerEvidence(payload && typeof payload === "object" ? payload : null))
-      .catch(() => setServerEvidence(null));
+      .then((payload) => {
+        setServerEvidence(payload && typeof payload === "object" ? payload : null);
+        setEvidenceLoading(false);
+      })
+      .catch((error) => {
+        console.error("IncidentDetailsPanel: evidence request failed", {
+          incidentId: incident.incident_id,
+          scope: filterQuery,
+          error,
+        });
+        setServerEvidence(null);
+        setEvidenceError(error?.message || "Unable to load selected-incident evidence.");
+        setEvidenceLoading(false);
+      });
   }, [incident, filterQuery]);
 
   const chartPoints = (Array.isArray(serverEvidence?.telemetry_chart) ? serverEvidence.telemetry_chart : [])
@@ -74,7 +94,8 @@ export default function IncidentDetailsPanel({
 
   const currentIncident = activeIncident || incident;
   const reasoning = currentIncident?.reasoning;
-  const canonicalEvidence = serverEvidence || buildPendingEvidenceSkeleton(currentIncident);
+  const canonicalEvidence = serverEvidence
+    || (evidenceLoading ? buildPendingEvidenceSkeleton(currentIncident) : buildFallbackEvidenceContract(currentIncident, evidenceError));
   const anomalyScore = formatScore(currentIncident?.anomaly_score);
   const derivedStatus = reasoningStatus || currentIncident?.reasoning_status || (reasoning ? "completed" : "not_generated");
   const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
@@ -113,9 +134,23 @@ export default function IncidentDetailsPanel({
       setActiveIncident(updated);
       setReasoningStatus(updated.reasoning_status || derivedStatus);
       setReasoningError(updated.reasoning_error || "");
+      setEvidenceLoading(true);
+      setEvidenceError("");
       fetchIncidentEvidence(updated.incident_id, filterQuery)
-        .then((payload) => setServerEvidence(payload && typeof payload === "object" ? payload : null))
-        .catch(() => setServerEvidence(null));
+        .then((payload) => {
+          setServerEvidence(payload && typeof payload === "object" ? payload : null);
+          setEvidenceLoading(false);
+        })
+        .catch((error) => {
+          console.error("IncidentDetailsPanel: refreshed evidence request failed", {
+            incidentId: updated.incident_id,
+            scope: filterQuery,
+            error,
+          });
+          setServerEvidence(null);
+          setEvidenceError(error?.message || "Unable to refresh selected-incident evidence.");
+          setEvidenceLoading(false);
+        });
       fetchReasoningHistory(updated.incident_id)
         .then((payload) => {
           const items = Array.isArray(payload) ? payload : [];
@@ -195,6 +230,11 @@ export default function IncidentDetailsPanel({
         </div>
       ) : (
         <div className="rounded-3xl border border-white/10 bg-slate-900/60 p-6">
+        {evidenceError ? (
+          <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            Evidence API fallback in use: {evidenceError}
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-300">Incident Details Panel</p>
@@ -1567,6 +1607,41 @@ function buildPendingEvidenceSkeleton(incident) {
     slo_status: [],
     service_health_score: "Unavailable",
     telemetry_chart: [],
+  };
+}
+
+function buildFallbackEvidenceContract(incident, errorMessage = "") {
+  if (!incident) {
+    return buildPendingEvidenceSkeleton(null);
+  }
+  const fallback = buildCanonicalIncidentEvidence({
+    incident,
+    topology: { nodes: [], edges: [] },
+    timeline: incident.timeline_summary,
+    reasoning: incident.reasoning,
+    correlations: [],
+    incidentHistory: [],
+  });
+  const skeleton = buildPendingEvidenceSkeleton(incident);
+  return {
+    ...skeleton,
+    ...fallback,
+    missing_telemetry_signals: errorMessage
+      ? [`Backend evidence contract unavailable: ${errorMessage}`]
+      : fallback.missing_telemetry_signals,
+    observability_gaps: {
+      ...skeleton.observability_gaps,
+      ...(fallback.observability_gaps || {}),
+      summary: errorMessage
+        ? `Backend evidence contract failed, so the panel is using incident snapshot evidence only. ${errorMessage}`
+        : fallback.observability_gaps?.summary,
+    },
+    reasoning_summary: errorMessage
+      ? `Backend evidence contract unavailable. Showing incident snapshot evidence only. ${errorMessage}`
+      : fallback.reasoning_summary,
+    incident_summary: errorMessage
+      ? `Incident snapshot fallback is active for ${incident.service || incident.root_cause_entity || "the selected service"}.`
+      : fallback.incident_summary,
   };
 }
 

@@ -25,12 +25,16 @@ export default function IncidentDetailsPage() {
     if (!incident) {
       return {};
     }
-    const end = new Date(incident.timestamp).toISOString();
-    const start = new Date(new Date(incident.timestamp).getTime() - 60 * 60 * 1000).toISOString();
+    const scope = incident.scope && typeof incident.scope === "object" ? incident.scope : {};
+    const end = scope.incident_window_end || incident.telemetry_snapshot?.incident_window_end || new Date(incident.timestamp).toISOString();
+    const start =
+      scope.incident_window_start ||
+      incident.telemetry_snapshot?.incident_window_start ||
+      new Date(new Date(incident.timestamp).getTime() - 60 * 60 * 1000).toISOString();
     return {
-      cluster: incident.cluster,
-      namespace: incident.namespace,
-      service: incident.service,
+      cluster: scope.cluster || incident.cluster || "",
+      namespace: scope.namespace || incident.namespace || "",
+      service: scope.service || incident.service || "",
       start,
       end,
     };

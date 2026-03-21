@@ -35,9 +35,9 @@ func (s *Service) normalizeScope(req ScopeRequest) NormalizedScope {
 		end = start.Add(24 * time.Hour)
 	}
 	return NormalizedScope{
-		Cluster:   firstNonEmpty(req.Cluster, s.project.ClusterID),
-		Namespace: firstNonEmpty(req.Namespace, s.project.NamespaceFilter),
-		Service:   normalizeServiceName(firstNonEmpty(req.Service, s.project.ServiceFilter)),
+		Cluster:   normalizeScopeValue(firstNonEmpty(req.Cluster, s.project.ClusterID)),
+		Namespace: normalizeScopeValue(firstNonEmpty(req.Namespace, s.project.NamespaceFilter)),
+		Service:   normalizeServiceName(normalizeScopeValue(firstNonEmpty(req.Service, s.project.ServiceFilter))),
 		Start:     start,
 		End:       end,
 	}
@@ -59,4 +59,13 @@ func firstNonEmpty(values ...string) string {
 
 func normalizeServiceName(value string) string {
 	return strings.TrimSpace(strings.ToLower(value))
+}
+
+func normalizeScopeValue(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "all", "all clusters", "all namespaces", "all services":
+		return ""
+	default:
+		return strings.TrimSpace(value)
+	}
 }

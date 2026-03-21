@@ -70,9 +70,9 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 		defer cancel()
 		start, end := parseTimeRangeWithDefaults(r.URL.Query().Get("start"), r.URL.Query().Get("end"), 24*time.Hour)
 		contract, err := truthService.BuildDashboardContract(ctx, truth.ScopeRequest{
-			Cluster:   firstNonEmpty(r.URL.Query().Get("cluster"), project.ClusterID),
-			Namespace: firstNonEmpty(r.URL.Query().Get("namespace"), project.NamespaceFilter),
-			Service:   normalizeServiceName(firstNonEmpty(r.URL.Query().Get("service"), project.ServiceFilter)),
+			Cluster:   normalizeScopeFilterValue(firstNonEmpty(r.URL.Query().Get("cluster"), project.ClusterID)),
+			Namespace: normalizeScopeFilterValue(firstNonEmpty(r.URL.Query().Get("namespace"), project.NamespaceFilter)),
+			Service:   normalizeServiceName(normalizeScopeFilterValue(firstNonEmpty(r.URL.Query().Get("service"), project.ServiceFilter))),
 			Start:     start,
 			End:       end,
 		})
@@ -223,10 +223,13 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 
 		if len(parts) == 2 && parts[1] == "evidence" && r.Method == http.MethodGet {
 			start, end := parseTimeRangeWithDefaults(r.URL.Query().Get("start"), r.URL.Query().Get("end"), 24*time.Hour)
+			clusterParam := normalizeScopeFilterValue(r.URL.Query().Get("cluster"))
+			namespaceParam := normalizeScopeFilterValue(r.URL.Query().Get("namespace"))
+			serviceParam := normalizeServiceName(normalizeScopeFilterValue(r.URL.Query().Get("service")))
 			evidence, err := truthService.BuildSelectedIncidentContract(ctx, item.ID, truth.ScopeRequest{
-				Cluster:   firstNonEmpty(r.URL.Query().Get("cluster"), item.Cluster, item.Scope.Cluster),
-				Namespace: firstNonEmpty(r.URL.Query().Get("namespace"), item.Namespace, item.Scope.Namespace),
-				Service:   normalizeServiceName(firstNonEmpty(r.URL.Query().Get("service"), item.Service, item.Scope.Service)),
+				Cluster:   firstNonEmpty(clusterParam, item.Cluster, item.Scope.Cluster),
+				Namespace: firstNonEmpty(namespaceParam, item.Namespace, item.Scope.Namespace),
+				Service:   normalizeServiceName(firstNonEmpty(serviceParam, item.Service, item.Scope.Service)),
 				Start:     start,
 				End:       end,
 			})
@@ -843,6 +846,16 @@ func inferNodeTypeFromID(id string) string {
 func logFilters(endpoint, cluster, namespace, service, start, end, timeRange string) {
 	fmt.Printf("api %s filters cluster=%q namespace=%q service=%q start=%q end=%q time_range=%q\n", endpoint, cluster, namespace, service, start, end, timeRange)
 }
+
+func normalizeScopeFilterValue(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "all", "all clusters", "all namespaces", "all services":
+		return ""
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
 
 func filterGraphByServiceChain(graph clickhouse.TopologyGraph, service string) clickhouse.TopologyGraph {
 	target := normalizeServiceName(service)

@@ -1,8 +1,30 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8081";
 
+function normalizeScopeValue(value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const normalized = value.trim();
+  const lower = normalized.toLowerCase();
+  if (!normalized || lower === "all" || lower === "all clusters" || lower === "all namespaces" || lower === "all services") {
+    return "";
+  }
+  return normalized;
+}
+
+function sanitizeParams(params = {}) {
+  const next = { ...params };
+  ["cluster", "namespace", "service"].forEach((key) => {
+    if (key in next) {
+      next[key] = normalizeScopeValue(next[key]);
+    }
+  });
+  return next;
+}
+
 function withQuery(path, params = {}) {
   const query = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
+  Object.entries(sanitizeParams(params)).forEach(([key, value]) => {
     if (value !== "" && value !== null && value !== undefined) {
       query.set(key, value);
     }
