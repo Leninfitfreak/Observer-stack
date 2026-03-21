@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -20,8 +21,11 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 	graph := s.ResolveTopology(ctx, scope)
 	scopedGraph := scopeTopology(graph, scope.Service)
 	if shouldEnrichTopology(scopedGraph) {
+		log.Printf("telemetry_collector: attempting signoz topology enrichment service=%s namespace=%s cluster=%s", firstNonEmpty(scope.Service, "all"), firstNonEmpty(scope.Namespace, "all"), firstNonEmpty(scope.Cluster, "all"))
 		if enrichedGraph, err := fetchSigNozDependencies(ctx, scope); err == nil {
 			scopedGraph = mergeScopedTopology(scopedGraph, enrichedGraph, scope)
+		} else {
+			log.Printf("telemetry_collector: signoz topology enrichment failed service=%s namespace=%s cluster=%s err=%v", firstNonEmpty(scope.Service, "all"), firstNonEmpty(scope.Namespace, "all"), firstNonEmpty(scope.Cluster, "all"), err)
 		}
 	}
 	missing := buildMissingEvidence(item, scope, direct, scopedGraph)
