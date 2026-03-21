@@ -80,6 +80,11 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             unsupported_statements JSONB NOT NULL DEFAULT '[]'::jsonb,
             validation_result TEXT NOT NULL DEFAULT 'partial',
             confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+            unsupported_claims_count INTEGER NOT NULL DEFAULT 0,
+            normalized_output BOOLEAN NOT NULL DEFAULT FALSE,
+            evidence_binding TEXT NOT NULL DEFAULT 'direct',
+            corrections JSONB NOT NULL DEFAULT '[]'::jsonb,
+            raw_model_output_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """,
@@ -97,6 +102,11 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         )
         """,
         "ALTER TABLE reasoning_requests ADD COLUMN IF NOT EXISTS trigger_type TEXT NOT NULL DEFAULT 'manual'",
+        "ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS unsupported_claims_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS normalized_output BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS evidence_binding TEXT NOT NULL DEFAULT 'direct'",
+        "ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS corrections JSONB NOT NULL DEFAULT '[]'::jsonb",
+        "ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS raw_model_output_summary JSONB NOT NULL DEFAULT '{}'::jsonb",
         """
         CREATE TABLE IF NOT EXISTS reasoning_runs (
             reasoning_run_id TEXT PRIMARY KEY,
@@ -645,14 +655,24 @@ def store_reasoning_validation(conn: psycopg.Connection, report) -> None:
                 unsupported_statements,
                 validation_result,
                 confidence_score,
+                unsupported_claims_count,
+                normalized_output,
+                evidence_binding,
+                corrections,
+                raw_model_output_summary,
                 created_at
-            ) VALUES (%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,NOW())
+            ) VALUES (%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,NOW())
             ON CONFLICT (incident_id) DO UPDATE SET
                 reasoning_statements = EXCLUDED.reasoning_statements,
                 supporting_signals = EXCLUDED.supporting_signals,
                 unsupported_statements = EXCLUDED.unsupported_statements,
                 validation_result = EXCLUDED.validation_result,
                 confidence_score = EXCLUDED.confidence_score,
+                unsupported_claims_count = EXCLUDED.unsupported_claims_count,
+                normalized_output = EXCLUDED.normalized_output,
+                evidence_binding = EXCLUDED.evidence_binding,
+                corrections = EXCLUDED.corrections,
+                raw_model_output_summary = EXCLUDED.raw_model_output_summary,
                 created_at = NOW()
             """,
             (
@@ -662,6 +682,11 @@ def store_reasoning_validation(conn: psycopg.Connection, report) -> None:
                 json.dumps(report.unsupported_statements, default=str),
                 report.validation_result,
                 report.confidence_score,
+                report.unsupported_claims_count,
+                report.normalized_output,
+                report.evidence_binding,
+                json.dumps(report.corrections, default=str),
+                json.dumps(report.raw_model_output_summary, default=str),
             ),
         )
 

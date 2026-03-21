@@ -32,6 +32,7 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 	quality := classifyEvidence(item, direct, scopedGraph)
 	contextual := buildContextualEvidence(quality, scopedGraph)
 	coverage := buildCoverage(scope, direct, quality, scopedGraph)
+	validation, _ := s.store.GetReasoningValidation(ctx, item.ID)
 
 	related, _ := s.store.ListCorrelatedIncidents(ctx, item.ID, 24*time.Hour, 8)
 	history, _ := s.ListIncidents(ctx, NormalizedScope{
@@ -63,6 +64,14 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		"reasoning_ready":            item.Reasoning != nil && isCompletedReasoningStatus(item.ReasoningStatus),
 		"reasoning_execution_mode":   reasoningExecutionMode(item),
 		"reasoning_failure_summary":  reasoningFailureSummary(item),
+		"reasoning_validation_status": validationStatus(validation),
+		"reasoning_validation_summary": validationSummary(validation),
+		"unsupported_claims_count":   unsupportedClaimsCount(validation),
+		"unsupported_claims":         unsupportedClaims(validation),
+		"reasoning_normalized":       validationNormalized(validation),
+		"reasoning_binding_level":    validationBinding(validation),
+		"reasoning_corrections":      validationCorrections(validation),
+		"raw_model_output_summary":   rawModelOutputSummary(validation),
 		"incident_summary":           incidentSummary(item, direct),
 		"reasoning_summary":          reasoningSummary(item),
 		"signal_summary":             signalSummary(item, quality),
@@ -113,6 +122,65 @@ func shouldEnrichTopology(scopedGraph map[string]any) bool {
 	nodes, _ := scopedGraph["nodes"].([]clickhouse.TopologyNode)
 	edges, _ := scopedGraph["edges"].([]clickhouse.TopologyEdge)
 	return len(edges) == 0 || (len(nodes) == 0 && len(edges) == 0)
+}
+
+func validationStatus(validation *incidents.ReasoningValidation) string {
+	if validation == nil {
+		return ""
+	}
+	return strings.TrimSpace(validation.ValidationResult)
+}
+
+func unsupportedClaimsCount(validation *incidents.ReasoningValidation) int {
+	if validation == nil {
+		return 0
+	}
+	return validation.UnsupportedClaimsCount
+}
+
+func unsupportedClaims(validation *incidents.ReasoningValidation) []string {
+	if validation == nil {
+		return []string{}
+	}
+	return validation.UnsupportedStatements
+}
+
+func validationNormalized(validation *incidents.ReasoningValidation) bool {
+	return validation != nil && validation.NormalizedOutput
+}
+
+func validationBinding(validation *incidents.ReasoningValidation) string {
+	if validation == nil {
+		return ""
+	}
+	return strings.TrimSpace(validation.EvidenceBinding)
+}
+
+func validationCorrections(validation *incidents.ReasoningValidation) []string {
+	if validation == nil {
+		return []string{}
+	}
+	return validation.Corrections
+}
+
+func rawModelOutputSummary(validation *incidents.ReasoningValidation) map[string]any {
+	if validation == nil {
+		return map[string]any{}
+	}
+	return validation.RawModelOutputSummary
+}
+
+func validationSummary(validation *incidents.ReasoningValidation) string {
+	if validation == nil {
+		return ""
+	}
+	if validation.NormalizedOutput {
+		return "Model output contained unsupported claims; corrected using evidence validation."
+	}
+	if strings.EqualFold(validation.ValidationResult, "partial") {
+		return "Model output was partially supported and constrained to selected-incident evidence."
+	}
+	return ""
 }
 
 func fetchSigNoZBaseURL() string {

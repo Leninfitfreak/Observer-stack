@@ -122,6 +122,11 @@ export default function IncidentDetailsPanel({
   const reasoningReady = canonicalEvidence.reasoning_ready;
   const reasoningExecutionMode = canonicalEvidence.reasoning_execution_mode || (derivedStatus === "completed_with_fallback" ? "fallback" : reasoningReady ? "model" : "pending");
   const reasoningFailureSummary = canonicalEvidence.reasoning_failure_summary || reasoningError || selectedRun?.error_message || "";
+  const reasoningValidationSummary = canonicalEvidence.reasoning_validation_summary || "";
+  const reasoningValidationStatus = canonicalEvidence.reasoning_validation_status || "";
+  const unsupportedClaims = Array.isArray(canonicalEvidence.unsupported_claims) ? canonicalEvidence.unsupported_claims : [];
+  const reasoningCorrections = Array.isArray(canonicalEvidence.reasoning_corrections) ? canonicalEvidence.reasoning_corrections : [];
+  const rawModelOutputSummary = canonicalEvidence.raw_model_output_summary || {};
   const incidentHistory = Array.isArray(canonicalEvidence.incident_history) ? canonicalEvidence.incident_history : [];
   const correlations = Array.isArray(canonicalEvidence.related_incidents) ? canonicalEvidence.related_incidents : [];
   const clusterContext = canonicalEvidence.cluster_context && typeof canonicalEvidence.cluster_context === "object" ? canonicalEvidence.cluster_context : {};
@@ -541,6 +546,24 @@ export default function IncidentDetailsPanel({
               {derivedStatus === "completed_with_fallback" ? "Model failure summary" : "Last error"}: {reasoningFailureSummary}
             </p>
           ) : null}
+          {reasoningValidationSummary ? (
+            <div className="mt-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+              <p>{reasoningValidationSummary}</p>
+              {reasoningValidationStatus ? (
+                <p className="mt-1 text-amber-200">Validation status: {toText(reasoningValidationStatus)}</p>
+              ) : null}
+              {unsupportedClaims.length ? (
+                <ul className="mt-2 space-y-1">
+                  {unsupportedClaims.slice(0, 4).map((item) => <li key={item}>- {toText(item)}</li>)}
+                </ul>
+              ) : null}
+              {reasoningCorrections.length ? (
+                <ul className="mt-2 space-y-1 text-amber-200">
+                  {reasoningCorrections.slice(0, 4).map((item) => <li key={item}>- {toText(item)}</li>)}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="mt-6 grid gap-6 xl:grid-cols-2">
@@ -601,6 +624,11 @@ export default function IncidentDetailsPanel({
                 <p className="text-xs uppercase tracking-[0.3em] text-slate-500">Selected Run</p>
                 <p className="mt-2">{toText(runDetail.summary || "No summary")}</p>
                 <p className="mt-2 text-xs text-slate-400">Confidence: {formatScore(runDetail.root_cause_confidence ?? 0)}</p>
+                {Object.keys(rawModelOutputSummary).length ? (
+                  <div className="mt-2 text-xs text-slate-400">
+                    Raw model output: {toText(rawModelOutputSummary.root_cause_service || "unknown")} / {toText(rawModelOutputSummary.root_cause_signal || "unknown")}
+                  </div>
+                ) : null}
                 {runDetail.error_message ? (
                   <p className={`mt-2 text-xs ${runDetail.status === "completed_with_fallback" ? "text-amber-300" : "text-rose-300"}`}>
                     {runDetail.status === "completed_with_fallback" ? "Fallback reason" : "Failure reason"}: {toText(runDetail.error_message)}

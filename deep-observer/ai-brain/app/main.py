@@ -30,7 +30,7 @@ from .llm.client import build_llm_client
 from .reasoner import build_prompt_package, fallback_reasoning, generate_reasoning
 from .runbook_generator import generate_runbook
 from .telemetry import TelemetryReader
-from .validation_engine import validate_reasoning
+from .validation_engine import validate_and_bind_reasoning
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -201,27 +201,10 @@ def main() -> None:
                             else:
                                 reasoning["execution_mode"] = "model"
                                 reasoning["model_failure_summary"] = ""
-                            validation = validate_reasoning(incident, context, reasoning, fetch_known_services(conn))
+                            reasoning, validation = validate_and_bind_reasoning(incident, context, reasoning, fetch_known_services(conn))
                             store_reasoning_validation(conn, validation)
-                            if validation.validation_result == "unsupported":
-                                regenerated = fallback_reasoning(incident, context, historical_matches)
-                                regenerated["confidence_score"] = min(
-                                    regenerated.get("confidence_score", 0.6),
-                                    validation.confidence_score,
-                                )
-                                unsupported = ", ".join(validation.unsupported_statements[:3])
-                                regenerated["impact_assessment"] = (
-                                    f"{regenerated.get('impact_assessment', '')} "
-                                    f"Validation warning: unsupported claims were removed ({unsupported})."
-                                ).strip()
-                                regenerated["execution_mode"] = "fallback"
-                                regenerated["model_failure_summary"] = (
-                                    f"Validation removed unsupported model output ({unsupported})."
-                                )
-                                fallback_used = True
-                                if not model_failure:
-                                    model_failure = regenerated["model_failure_summary"]
-                                reasoning = regenerated
+                            if validation.normalized_output and reasoning.get("execution_mode") == "model":
+                                reasoning["validation_summary"] = reasoning.get("validation_summary") or "Model output normalized to match evidence."
                             store_reasoning(conn, incident, reasoning)
                             store_runbook(conn, generate_runbook(incident, reasoning, historical_matches))
                             update_reasoning_run(
@@ -242,6 +225,13 @@ def main() -> None:
                                         "execution_mode": reasoning.get("execution_mode", "model"),
                                         "model_failure_summary": reasoning.get("model_failure_summary", ""),
                                         "prompt_diagnostics": prompt_diagnostics,
+                                        "reasoning_validation_status": validation.validation_result,
+                                        "unsupported_claims_count": validation.unsupported_claims_count,
+                                        "unsupported_claims": validation.unsupported_statements,
+                                        "normalized_output": validation.normalized_output,
+                                        "evidence_binding": validation.evidence_binding,
+                                        "corrections": validation.corrections,
+                                        "raw_model_output_summary": validation.raw_model_output_summary,
                                     },
                                     "confidence_explanation": reasoning.get("confidence_explanation", {}),
                                     "correlation_summary": reasoning.get("correlation_summary", ""),

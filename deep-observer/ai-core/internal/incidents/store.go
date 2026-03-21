@@ -107,6 +107,21 @@ type Reasoning struct {
 	CreatedAt               time.Time         `json:"created_at"`
 }
 
+type ReasoningValidation struct {
+	IncidentID              string         `json:"incident_id"`
+	ReasoningStatements     []string       `json:"reasoning_statements"`
+	SupportingSignals       []string       `json:"supporting_signals"`
+	UnsupportedStatements   []string       `json:"unsupported_statements"`
+	ValidationResult        string         `json:"validation_result"`
+	ConfidenceScore         float64        `json:"confidence_score"`
+	UnsupportedClaimsCount  int            `json:"unsupported_claims_count"`
+	NormalizedOutput        bool           `json:"normalized_output"`
+	EvidenceBinding         string         `json:"evidence_binding"`
+	Corrections             []string       `json:"corrections"`
+	RawModelOutputSummary   map[string]any `json:"raw_model_output_summary"`
+	CreatedAt               time.Time      `json:"created_at"`
+}
+
 type ReasoningRequest struct {
 	IncidentID  string     `json:"incident_id"`
 	Status      string     `json:"status"`
@@ -257,6 +272,25 @@ func (s *Store) EnsureSchema(ctx context.Context) error {
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS deployment_correlation TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE reasoning ADD COLUMN IF NOT EXISTS historical_matches JSONB NOT NULL DEFAULT '[]'::jsonb`,
 		`ALTER TABLE reasoning_requests ADD COLUMN IF NOT EXISTS trigger_type TEXT NOT NULL DEFAULT 'manual'`,
+		`CREATE TABLE IF NOT EXISTS reasoning_validations (
+			incident_id TEXT PRIMARY KEY REFERENCES incidents(incident_id) ON DELETE CASCADE,
+			reasoning_statements JSONB NOT NULL DEFAULT '[]'::jsonb,
+			supporting_signals JSONB NOT NULL DEFAULT '[]'::jsonb,
+			unsupported_statements JSONB NOT NULL DEFAULT '[]'::jsonb,
+			validation_result TEXT NOT NULL DEFAULT 'partial',
+			confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+			unsupported_claims_count INTEGER NOT NULL DEFAULT 0,
+			normalized_output BOOLEAN NOT NULL DEFAULT FALSE,
+			evidence_binding TEXT NOT NULL DEFAULT 'direct',
+			corrections JSONB NOT NULL DEFAULT '[]'::jsonb,
+			raw_model_output_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS unsupported_claims_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS normalized_output BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS evidence_binding TEXT NOT NULL DEFAULT 'direct'`,
+		`ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS corrections JSONB NOT NULL DEFAULT '[]'::jsonb`,
+		`ALTER TABLE reasoning_validations ADD COLUMN IF NOT EXISTS raw_model_output_summary JSONB NOT NULL DEFAULT '{}'::jsonb`,
 		`CREATE TABLE IF NOT EXISTS reasoning_runs (
 			reasoning_run_id TEXT PRIMARY KEY,
 			incident_id TEXT NOT NULL REFERENCES incidents(incident_id) ON DELETE CASCADE,
@@ -1247,6 +1281,50 @@ func (s *Store) GetReasoningRun(ctx context.Context, incidentID, runID string) (
 	_ = json.Unmarshal(confidenceJSON, &item.ConfidenceExplanation)
 	item.RootCauseService = normalizeIncidentEntity(item.RootCauseService)
 	item.PropagationPath = normalizeNarrativePathValues(item.PropagationPath)
+	return &item, nil
+}
+
+func (s *Store) GetReasoningValidation(ctx context.Context, incidentID string) (*ReasoningValidation, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT
+			incident_id,
+			reasoning_statements,
+			supporting_signals,
+			unsupported_statements,
+			validation_result,
+			confidence_score,
+			unsupported_claims_count,
+			normalized_output,
+			evidence_binding,
+			corrections,
+			raw_model_output_summary,
+			created_at
+		FROM reasoning_validations
+		WHERE incident_id = $1
+	`, incidentID)
+	var item ReasoningValidation
+	var reasoningJSON, supportsJSON, unsupportedJSON, correctionsJSON, rawJSON []byte
+	if err := row.Scan(
+		&item.IncidentID,
+		&reasoningJSON,
+		&supportsJSON,
+		&unsupportedJSON,
+		&item.ValidationResult,
+		&item.ConfidenceScore,
+		&item.UnsupportedClaimsCount,
+		&item.NormalizedOutput,
+		&item.EvidenceBinding,
+		&correctionsJSON,
+		&rawJSON,
+		&item.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(reasoningJSON, &item.ReasoningStatements)
+	_ = json.Unmarshal(supportsJSON, &item.SupportingSignals)
+	_ = json.Unmarshal(unsupportedJSON, &item.UnsupportedStatements)
+	_ = json.Unmarshal(correctionsJSON, &item.Corrections)
+	_ = json.Unmarshal(rawJSON, &item.RawModelOutputSummary)
 	return &item, nil
 }
 
