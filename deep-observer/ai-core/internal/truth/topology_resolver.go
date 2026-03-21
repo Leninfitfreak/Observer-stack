@@ -9,26 +9,21 @@ import (
 )
 
 func (s *Service) ResolveTopology(ctx context.Context, scope NormalizedScope) clickhouse.TopologyGraph {
-	graph := clickhouse.TopologyGraph{Nodes: []clickhouse.TopologyNode{}, Edges: []clickhouse.TopologyEdge{}}
-	client, err := s.newClickHouseClient(ctx)
-	if err != nil {
-		return graph
+	graph := clickhouse.TopologyGraph{
+		Nodes: []clickhouse.TopologyNode{},
+		Edges: []clickhouse.TopologyEdge{},
 	}
-	defer client.Close()
-
-	baseFilters := clickhouse.Filters{
+	fetched, err := s.signozFetchDependencyGraph(ctx, NormalizedScope{
 		Cluster:   scope.Cluster,
 		Namespace: scope.Namespace,
 		Service:   "",
 		Start:     scope.Start,
 		End:       scope.End,
-	}
-	graph, err = client.BuildTopology(ctx, baseFilters)
+	})
 	if err != nil {
-		return clickhouse.TopologyGraph{Nodes: []clickhouse.TopologyNode{}, Edges: []clickhouse.TopologyEdge{}}
+		return graph
 	}
-
-	graph = sanitizeGraph(dedupeGraph(graph))
+	graph = sanitizeGraph(dedupeGraph(fetched))
 	if scope.Service != "" {
 		graph = filterGraphToService(graph, scope.Service)
 	}

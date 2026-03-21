@@ -1,14 +1,8 @@
 package truth
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -17,17 +11,10 @@ import (
 )
 
 func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident, scope NormalizedScope) map[string]any {
-	direct := buildDirectEvidence(item)
-	graph := s.ResolveTopology(ctx, scope)
+	incidentScope := incidentScopedScope(item, scope)
+	direct := s.buildDirectEvidenceFromSynapse(ctx, item, incidentScope)
+	graph := s.ResolveTopology(ctx, incidentScope)
 	scopedGraph := scopeTopology(graph, scope.Service)
-	if shouldEnrichTopology(scopedGraph) {
-		log.Printf("telemetry_collector: attempting signoz topology enrichment service=%s namespace=%s cluster=%s", firstNonEmpty(scope.Service, "all"), firstNonEmpty(scope.Namespace, "all"), firstNonEmpty(scope.Cluster, "all"))
-		if enrichedGraph, err := fetchSigNozDependencies(ctx, scope); err == nil {
-			scopedGraph = mergeScopedTopology(scopedGraph, enrichedGraph, scope)
-		} else {
-			log.Printf("telemetry_collector: signoz topology enrichment failed service=%s namespace=%s cluster=%s err=%v", firstNonEmpty(scope.Service, "all"), firstNonEmpty(scope.Namespace, "all"), firstNonEmpty(scope.Cluster, "all"), err)
-		}
-	}
 	missing := buildMissingEvidence(item, scope, direct, scopedGraph)
 	quality := classifyEvidence(item, direct, scopedGraph)
 	contextual := buildContextualEvidence(quality, scopedGraph)
@@ -45,6 +32,15 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 	}, 12)
 	sparsePredictiveState := isSparsePredictiveIncident(item, direct, quality)
 	sparsePredictiveContract := buildSparsePredictiveContract(item, scope, direct, quality, history)
+	reasoningAllowed := !sparsePredictiveState && hasDirectEvidence(direct)
+	impacted := impactedServicesFromTopology(scope, scopedGraph)
+	propagation := propagationPath(item, scopedGraph)
+	causal := toAnyStrings(item.Reasoning, item.DependencyChain)
+	if sparsePredictiveState {
+		impacted = []string{}
+		propagation = []string{}
+		causal = []string{}
+	}
 
 	return map[string]any{
 		"incident":                   item,
@@ -58,9 +54,9 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		"telemetry_evidence":         buildTelemetryEvidence(scope, direct, quality, scopedGraph),
 		"observability_coverage":     coverage,
 		"observability_score":        coverage["score"],
-		"impacted_services":          impactedServices(item),
-		"propagation_path":           propagationPath(item, scopedGraph),
-		"causal_chain":               toAnyStrings(item.Reasoning, item.DependencyChain),
+		"impacted_services":          impacted,
+		"propagation_path":           propagation,
+		"causal_chain":               causal,
 		"confidence_details":         reasoning["confidence_details"],
 		"trust_score":                reasoning["trust_score"],
 		"reasoning_status":           reasoning["status"],
@@ -79,8 +75,8 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		"incident_summary":           incidentSummary(item, direct),
 		"reasoning_summary":          reasoning["summary"],
 		"signal_summary":             signalSummary(item, quality),
-		"log_summary":                logSummary(item),
-		"impact_summary":             impactSummary(item),
+		"log_summary":                logSummaryFromDirect(item, direct),
+		"impact_summary":             impactSummaryFromScopedEvidence(item, scope, scopedGraph),
 		"decision_panel":             reasoning["decision_panel"],
 		"prioritized_actions":        prioritizedActions(item, quality),
 		"runbook":                    runbook(item, quality),
@@ -96,6 +92,7 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		"missing_telemetry_signals":  missing,
 		"sparse_predictive_state":    sparsePredictiveState,
 		"sparse_predictive_contract": sparsePredictiveContract,
+		"reasoning_allowed":          reasoningAllowed,
 	}
 }
 
@@ -149,37 +146,6 @@ func buildSparsePredictiveContract(
 		},
 		"related_observed_incidents": relatedObserved,
 	}
-}
-
-type sigNozDependencyItem struct {
-	Parent    string  `json:"parent"`
-	Child     string  `json:"child"`
-	CallCount int64   `json:"callCount"`
-	ErrorRate float64 `json:"errorRate"`
-	P99       float64 `json:"p99"`
-	P95       float64 `json:"p95"`
-	P90       float64 `json:"p90"`
-	P75       float64 `json:"p75"`
-	P50       float64 `json:"p50"`
-}
-
-type sigNozTag struct {
-	Key          string   `json:"key"`
-	TagType      string   `json:"tagType"`
-	StringValues []string `json:"stringValues"`
-	NumberValues []int    `json:"numberValues"`
-	BoolValues   []bool   `json:"boolValues"`
-	Operator     string   `json:"operator"`
-}
-
-func shouldEnrichTopology(scopedGraph map[string]any) bool {
-	available, _ := scopedGraph["available"].(bool)
-	if !available {
-		return true
-	}
-	nodes, _ := scopedGraph["nodes"].([]clickhouse.TopologyNode)
-	edges, _ := scopedGraph["edges"].([]clickhouse.TopologyEdge)
-	return len(edges) == 0 || (len(nodes) == 0 && len(edges) == 0)
 }
 
 func validationStatus(validation *incidents.ReasoningValidation) string {
@@ -241,185 +207,6 @@ func validationSummary(validation *incidents.ReasoningValidation) string {
 	return ""
 }
 
-func fetchSigNoZBaseURL() string {
-	for _, key := range []string{"SIGNOZ_API_BASE_URL", "SIGNOZ_BASE_URL"} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			return strings.TrimRight(value, "/")
-		}
-	}
-	return "http://signoz:8080"
-}
-
-func fetchSigNoZAPIKey() string {
-	for _, key := range []string{"SIGNOZ_API_KEY", "signoz_api_key"} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func fetchSigNozDependencies(ctx context.Context, scope NormalizedScope) (clickhouse.TopologyGraph, error) {
-	graph := clickhouse.TopologyGraph{
-		GeneratedAt: time.Now().UTC(),
-		Nodes:       []clickhouse.TopologyNode{},
-		Edges:       []clickhouse.TopologyEdge{},
-	}
-
-	payload := map[string]any{
-		"start": scope.Start.UTC().Format(time.RFC3339),
-		"end":   scope.End.UTC().Format(time.RFC3339),
-		"tags":  buildSigNozTags(scope),
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return graph, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fetchSigNoZBaseURL()+"/api/v1/dependency_graph", bytes.NewReader(body))
-	if err != nil {
-		return graph, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if apiKey := fetchSigNoZAPIKey(); apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-		req.Header.Set("SIGNOZ-API-KEY", apiKey)
-	}
-
-	client := &http.Client{Timeout: 8 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return graph, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return graph, fmt.Errorf("signoz dependency_graph returned %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
-	}
-
-	var items []sigNozDependencyItem
-	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
-		return graph, err
-	}
-
-	nodeMap := map[string]clickhouse.TopologyNode{}
-	for _, item := range items {
-		source := normalizeServiceName(item.Parent)
-		target := normalizeServiceName(item.Child)
-		if source == "" || target == "" || source == target {
-			continue
-		}
-
-		graph.Edges = append(graph.Edges, clickhouse.TopologyEdge{
-			Source:         source,
-			Target:         target,
-			DependencyType: "trace_http",
-			CallCount:      item.CallCount,
-			AvgLatencyMs:   firstPositiveFloat(item.P95, item.P99, item.P90, item.P75, item.P50),
-			ErrorRate:      item.ErrorRate,
-		})
-
-		if _, ok := nodeMap[source]; !ok {
-			nodeMap[source] = clickhouse.TopologyNode{
-				ID:        source,
-				Label:     source,
-				NodeType:  "service",
-				Cluster:   scope.Cluster,
-				Namespace: scope.Namespace,
-			}
-		}
-		if _, ok := nodeMap[target]; !ok {
-			nodeMap[target] = clickhouse.TopologyNode{
-				ID:        target,
-				Label:     target,
-				NodeType:  "service",
-				Cluster:   scope.Cluster,
-				Namespace: scope.Namespace,
-			}
-		}
-	}
-	for _, node := range nodeMap {
-		graph.Nodes = append(graph.Nodes, node)
-	}
-	return graph, nil
-}
-
-func buildSigNozTags(scope NormalizedScope) []sigNozTag {
-	tags := []sigNozTag{}
-	add := func(key, value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		tags = append(tags, sigNozTag{
-			Key:          key,
-			TagType:      "ResourceAttribute",
-			StringValues: []string{value},
-			NumberValues: []int{},
-			BoolValues:   []bool{},
-			Operator:     "Equals",
-		})
-	}
-	add("service.name", scope.Service)
-	add("k8s.namespace.name", scope.Namespace)
-	add("k8s.cluster.name", scope.Cluster)
-	return tags
-}
-
-func mergeScopedTopology(existing map[string]any, enriched clickhouse.TopologyGraph, scope NormalizedScope) map[string]any {
-	baseNodes, _ := existing["nodes"].([]clickhouse.TopologyNode)
-	baseEdges, _ := existing["edges"].([]clickhouse.TopologyEdge)
-
-	nodeMap := map[string]clickhouse.TopologyNode{}
-	for _, node := range baseNodes {
-		nodeMap[node.ID] = node
-	}
-	edgeMap := map[string]clickhouse.TopologyEdge{}
-	for _, edge := range baseEdges {
-		key := edge.Source + "|" + edge.Target + "|" + edge.DependencyType
-		edgeMap[key] = edge
-	}
-
-	scopedEnriched := scopeTopology(enriched, scope.Service)
-	enrichedNodes, _ := scopedEnriched["nodes"].([]clickhouse.TopologyNode)
-	enrichedEdges, _ := scopedEnriched["edges"].([]clickhouse.TopologyEdge)
-	for _, node := range enrichedNodes {
-		if _, ok := nodeMap[node.ID]; !ok {
-			nodeMap[node.ID] = node
-		}
-	}
-	for _, edge := range enrichedEdges {
-		key := edge.Source + "|" + edge.Target + "|" + edge.DependencyType
-		if _, ok := edgeMap[key]; !ok {
-			edgeMap[key] = edge
-		}
-	}
-
-	nodes := make([]clickhouse.TopologyNode, 0, len(nodeMap))
-	for _, node := range nodeMap {
-		nodes = append(nodes, node)
-	}
-	edges := make([]clickhouse.TopologyEdge, 0, len(edgeMap))
-	for _, edge := range edgeMap {
-		edges = append(edges, edge)
-	}
-
-	return map[string]any{
-		"available": len(nodes) > 0 || len(edges) > 0,
-		"nodes":     nodes,
-		"edges":     edges,
-	}
-}
-
-func firstPositiveFloat(values ...float64) float64 {
-	for _, value := range values {
-		if value > 0 {
-			return value
-		}
-	}
-	return 0
-}
-
 func telemetryChart(item *incidents.Incident) []map[string]any {
 	out := []map[string]any{}
 	for _, event := range item.TimelineSummary {
@@ -435,20 +222,87 @@ func telemetryChart(item *incidents.Incident) []map[string]any {
 	return out
 }
 
-func buildDirectEvidence(item *incidents.Incident) map[string]any {
-	snapshot := item.TelemetrySnapshot
-	return map[string]any{
-		"request_count":           snapshot.RequestCount,
-		"log_count":               snapshot.LogCount,
-		"trace_sample_count":      len(snapshot.TraceIDs),
-		"error_rate":              snapshot.ErrorRate,
-		"p95_latency_ms":          snapshot.P95LatencyMs,
-		"cpu_utilization":         snapshot.CPUUtilization,
-		"memory_utilization":      snapshot.MemoryUtilization,
-		"metric_highlights":       snapshot.MetricHighlights,
-		"timeline_event_count":    len(item.TimelineSummary),
-		"direct_dependency_nodes": append([]string{}, item.DependencyChain...),
+func (s *Service) buildDirectEvidenceFromSynapse(ctx context.Context, item *incidents.Incident, scope NormalizedScope) map[string]any {
+	summary := s.fetchEvidenceFromSynapse(ctx, scope, item.Service)
+	if strings.EqualFold(firstNonEmpty(item.IncidentType, "observed"), "predictive") {
+		snapshotSparse := item.TelemetrySnapshot.RequestCount == 0 &&
+			item.TelemetrySnapshot.LogCount == 0 &&
+			len(item.TelemetrySnapshot.TraceIDs) == 0 &&
+			len(item.TelemetrySnapshot.MetricHighlights) == 0
+		if snapshotSparse {
+			summary.RequestCount = 0
+			summary.LogCount = 0
+			summary.TraceCount = 0
+			summary.ErrorLogSamples = []string{}
+			summary.TraceIDs = []string{}
+			summary.MetricHighlights = map[string]float64{}
+			summary.ErrorRate = 0
+			summary.P95LatencyMs = 0
+		}
 	}
+	if summary.TraceCount == 0 && len(summary.TraceIDs) > 0 {
+		summary.TraceCount = len(summary.TraceIDs)
+	}
+	dependencyNodes := topologyDependencyNodes(scope, s.ResolveTopology(ctx, scope))
+	return map[string]any{
+		"request_count":           summary.RequestCount,
+		"log_count":               summary.LogCount,
+		"trace_sample_count":      summary.TraceCount,
+		"error_rate":              summary.ErrorRate,
+		"p95_latency_ms":          summary.P95LatencyMs,
+		"cpu_utilization":         0.0,
+		"memory_utilization":      0.0,
+		"metric_highlights":       summary.MetricHighlights,
+		"timeline_event_count":    len(item.TimelineSummary),
+		"direct_dependency_nodes": dependencyNodes,
+		"error_log_samples":       summary.ErrorLogSamples,
+		"trace_ids":               summary.TraceIDs,
+	}
+}
+
+func incidentScopedScope(item *incidents.Incident, scope NormalizedScope) NormalizedScope {
+	scoped := scope
+	scoped.Start = incidentWindowStart(item, scope.Start)
+	scoped.End = incidentWindowEnd(item, scope.End)
+	if scoped.End.Before(scoped.Start) {
+		scoped.End = scoped.Start.Add(15 * time.Minute)
+	}
+	if scoped.Start.Equal(scoped.End) {
+		scoped.End = scoped.Start.Add(15 * time.Minute)
+	}
+	scoped.Cluster = firstNonEmpty(scoped.Cluster, item.Cluster, item.Scope.Cluster)
+	scoped.Namespace = firstNonEmpty(scoped.Namespace, item.Namespace, item.Scope.Namespace)
+	scoped.Service = normalizeServiceName(firstNonEmpty(scoped.Service, item.Service, item.Scope.Service))
+	return scoped
+}
+
+func hasDirectEvidence(direct map[string]any) bool {
+	if direct["request_count"].(int64) > 0 || direct["log_count"].(int64) > 0 || direct["trace_sample_count"].(int) > 0 {
+		return true
+	}
+	switch values := direct["metric_highlights"].(type) {
+	case map[string]any:
+		return len(values) > 0
+	case map[string]float64:
+		return len(values) > 0
+	default:
+		return false
+	}
+}
+
+func topologyDependencyNodes(scope NormalizedScope, graph clickhouse.TopologyGraph) []string {
+	target := normalizeServiceName(scope.Service)
+	out := []string{}
+	for _, edge := range graph.Edges {
+		source := normalizeServiceName(edge.Source)
+		targetNode := normalizeServiceName(edge.Target)
+		if target != "" && source != target && targetNode != target {
+			continue
+		}
+		out = append(out, canonicalNarrativeValue(edge.Source))
+		out = append(out, canonicalNarrativeValue(edge.Target))
+	}
+	return uniqueStrings(out)
 }
 
 func buildIncidentScope(item *incidents.Incident, scope NormalizedScope) map[string]any {
@@ -494,26 +348,39 @@ func classifyEvidence(item *incidents.Incident, direct map[string]any, scopedGra
 		"infra":      "missing",
 		"topology":   "missing",
 	}
-	if direct["request_count"].(int64) > 0 || direct["trace_sample_count"].(int) > 0 {
+	if direct["trace_sample_count"].(int) > 0 {
 		quality["traces"] = "direct"
 	}
+	hasDirectSignals := quality["traces"] == "direct" || direct["log_count"].(int64) > 0 || direct["request_count"].(int64) > 0
 	if direct["log_count"].(int64) > 0 {
 		quality["logs"] = "direct"
 	}
-	if len(item.TelemetrySnapshot.MetricHighlights) > 0 || item.TelemetrySnapshot.P95LatencyMs > 0 || item.TelemetrySnapshot.ErrorRate > 0 {
-		quality["metrics"] = "direct"
+	metricHighlightCount := 0
+	switch values := direct["metric_highlights"].(type) {
+	case map[string]any:
+		metricHighlightCount = len(values)
+	case map[string]float64:
+		metricHighlightCount = len(values)
 	}
-	deps := strings.ToLower(strings.Join(item.DependencyChain, " "))
+	if metricHighlightCount > 0 || direct["p95_latency_ms"].(float64) > 0 || direct["error_rate"].(float64) > 0 {
+		quality["metrics"] = "direct"
+		hasDirectSignals = true
+	}
+	dependencyNodes := []string{}
+	if values, ok := direct["direct_dependency_nodes"].([]string); ok {
+		dependencyNodes = values
+	}
+	deps := strings.ToLower(strings.Join(dependencyNodes, " "))
 	if strings.Contains(deps, "db:") {
 		quality["database"] = "direct"
 	}
 	if strings.Contains(deps, "messaging:") {
 		quality["messaging"] = "direct"
 	}
-	if len(item.TelemetrySnapshot.ErrorLogs) > 0 {
+	if values, ok := direct["error_log_samples"].([]string); ok && len(values) > 0 {
 		quality["exceptions"] = "direct"
 	}
-	if item.TelemetrySnapshot.CPUUtilization > 0 || item.TelemetrySnapshot.MemoryUtilization > 0 {
+	if direct["cpu_utilization"].(float64) > 0 || direct["memory_utilization"].(float64) > 0 {
 		quality["infra"] = "direct"
 	}
 	edgesText := fmt.Sprintf("%v", scopedGraph["edges"])
@@ -523,10 +390,18 @@ func classifyEvidence(item *incidents.Incident, direct map[string]any, scopedGra
 	if quality["messaging"] == "missing" && strings.Contains(strings.ToLower(edgesText), "messaging:") {
 		quality["messaging"] = "contextual"
 	}
-	if len(item.DependencyChain) > 0 {
+	if len(dependencyNodes) > 0 && hasDirectSignals {
 		quality["topology"] = "direct"
 	} else if available, _ := scopedGraph["available"].(bool); available {
 		quality["topology"] = "contextual"
+	}
+	if !hasDirectSignals {
+		if quality["database"] == "direct" {
+			quality["database"] = "contextual"
+		}
+		if quality["messaging"] == "direct" {
+			quality["messaging"] = "contextual"
+		}
 	}
 	return quality
 }
@@ -562,13 +437,21 @@ func buildMissingEvidence(item *incidents.Incident, scope NormalizedScope, direc
 	if direct["log_count"].(int64) == 0 {
 		missing = append(missing, "No incident-scoped logs were found.")
 	}
-	if len(item.TelemetrySnapshot.MetricHighlights) == 0 && item.TelemetrySnapshot.P95LatencyMs == 0 && item.TelemetrySnapshot.ErrorRate == 0 {
+	metricHighlightCount := 0
+	switch values := direct["metric_highlights"].(type) {
+	case map[string]any:
+		metricHighlightCount = len(values)
+	case map[string]float64:
+		metricHighlightCount = len(values)
+	}
+	if metricHighlightCount == 0 && direct["p95_latency_ms"].(float64) == 0 && direct["error_rate"].(float64) == 0 {
 		missing = append(missing, "No incident-scoped service metrics were found.")
 	}
-	if len(item.TelemetrySnapshot.ErrorLogs) == 0 {
+	errorSamples, _ := direct["error_log_samples"].([]string)
+	if len(errorSamples) == 0 {
 		missing = append(missing, "No exception evidence was found for the selected incident scope.")
 	}
-	if item.TelemetrySnapshot.CPUUtilization == 0 && item.TelemetrySnapshot.MemoryUtilization == 0 {
+	if direct["cpu_utilization"].(float64) == 0 && direct["memory_utilization"].(float64) == 0 {
 		missing = append(missing, "No runtime host/container evidence was correlated for the selected incident scope.")
 	}
 	if available, _ := scopedGraph["available"].(bool); !available && len(item.DependencyChain) == 0 {
@@ -648,6 +531,60 @@ func impactedServices(item *incidents.Incident) []string {
 		}
 	}
 	return uniqueStrings(values)
+}
+
+func impactedServicesFromTopology(scope NormalizedScope, scopedGraph map[string]any) []string {
+	target := normalizeServiceName(scope.Service)
+	edges, _ := scopedGraph["edges"].([]clickhouse.TopologyEdge)
+	values := []string{}
+	for _, edge := range edges {
+		source := normalizeServiceName(edge.Source)
+		targetNode := normalizeServiceName(edge.Target)
+		if target != "" && source != target && targetNode != target {
+			continue
+		}
+		if source == target && edge.Target != "" {
+			values = append(values, canonicalNarrativeValue(edge.Target))
+		}
+		if targetNode == target && edge.Source != "" {
+			values = append(values, canonicalNarrativeValue(edge.Source))
+		}
+	}
+	return uniqueStrings(values)
+}
+
+func logSummaryFromDirect(item *incidents.Incident, direct map[string]any) any {
+	logCount, _ := direct["log_count"].(int64)
+	samples, _ := direct["error_log_samples"].([]string)
+	if logCount == 0 && len(samples) == 0 {
+		return nil
+	}
+	sample := ""
+	if len(samples) > 0 {
+		sample = samples[0]
+	}
+	return map[string]any{
+		"key_error":        firstNonEmpty(sample, "Log anomaly detected"),
+		"occurrence_count": logCount,
+		"affected_service": item.Service,
+		"sample_log_line":  sample,
+		"log_summary_text": fmt.Sprintf("Incident-scoped logs were retrieved from Synapse API for %s.", item.Service),
+	}
+}
+
+func impactSummaryFromScopedEvidence(item *incidents.Incident, scope NormalizedScope, scopedGraph map[string]any) map[string]any {
+	secondary := impactedServicesFromTopology(scope, scopedGraph)
+	userImpact := "User impact depends on selected incident evidence."
+	if item.Reasoning != nil && strings.TrimSpace(item.Reasoning.CustomerImpact) != "" {
+		userImpact = item.Reasoning.CustomerImpact
+	}
+	return map[string]any{
+		"primary_service":       firstNonEmpty(scope.Service, item.Service, item.RootCauseEntity),
+		"secondary_services":    secondary,
+		"summary_text":          "Impact summary is derived from API-scoped topology and incident evidence.",
+		"estimated_user_impact": userImpact,
+		"severity_label":        strings.ToUpper(firstNonEmpty(item.Severity, "unknown")),
+	}
 }
 
 func propagationPath(item *incidents.Incident, scopedGraph map[string]any) []string {

@@ -8,10 +8,10 @@ func (s *Service) BuildSelectedIncidentContract(ctx context.Context, incidentID 
 		return nil, err
 	}
 	scope := s.normalizeScope(req)
-	if item.Scope.IncidentWindowStart != nil && req.Start.IsZero() {
+	if item.Scope.IncidentWindowStart != nil {
 		scope.Start = item.Scope.IncidentWindowStart.UTC()
 	}
-	if item.Scope.IncidentWindowEnd != nil && req.End.IsZero() {
+	if item.Scope.IncidentWindowEnd != nil {
 		scope.End = item.Scope.IncidentWindowEnd.UTC()
 	}
 	scope.Cluster = firstNonEmpty(scope.Cluster, item.Cluster, item.Scope.Cluster)

@@ -95,52 +95,105 @@ export default function IncidentDetailsPanel({
   const currentIncident = activeIncident || incident;
   const reasoning = currentIncident?.reasoning;
   const canonicalEvidence = serverEvidence
-    || (evidenceLoading ? buildPendingEvidenceSkeleton(currentIncident) : buildFallbackEvidenceContract(currentIncident, evidenceError));
-  const reasoningView = canonicalEvidence.reasoning_view && typeof canonicalEvidence.reasoning_view === "object"
-    ? canonicalEvidence.reasoning_view
+    || (evidenceLoading ? buildPendingEvidenceSkeleton(currentIncident) : null);
+  const renderedEvidence = canonicalEvidence || {
+    scope: { scope_complete: false, scope_warnings: [] },
+    confidence_details: {},
+    prioritized_actions: [],
+    decision_panel: {},
+    signal_summary: {},
+    log_summary: null,
+    impact_summary: {},
+    incident_timeline: [],
+    observability_gaps: {},
+    telemetry_audit: {},
+    telemetry_evidence: [],
+    impacted_services: [],
+    runbook: {},
+    reasoning_ready: false,
+    sparse_predictive_state: false,
+    sparse_predictive_contract: {},
+  };
+  const reasoningView = renderedEvidence.reasoning_view && typeof renderedEvidence.reasoning_view === "object"
+    ? renderedEvidence.reasoning_view
     : {};
   const anomalyScore = formatScore(currentIncident?.anomaly_score);
   const derivedStatus = reasoningView.status || reasoningStatus || currentIncident?.reasoning_status || (reasoning ? "completed" : "not_generated");
   const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
   const canRunReasoning =
     Boolean(currentIncident) &&
-    canonicalEvidence.scope.scope_complete &&
+    renderedEvidence.scope.scope_complete &&
     ["not_generated", "failed", "completed", "completed_with_fallback"].includes(derivedStatus) &&
     !reasoningBusy;
-  const confidenceDetails = reasoningView.confidence_details || canonicalEvidence.confidence_details;
-  const prioritizedActions = canonicalEvidence.prioritized_actions;
-  const decisionPanel = reasoningView.decision_panel || canonicalEvidence.decision_panel;
-  const signalSummary = canonicalEvidence.signal_summary;
-  const logSummary = canonicalEvidence.log_summary;
-  const impactSummary = canonicalEvidence.impact_summary;
-  const incidentTimeline = canonicalEvidence.incident_timeline;
-  const observabilityGaps = canonicalEvidence.observability_gaps;
-  const trustScore = reasoningView.trust_score || canonicalEvidence.trust_score;
-  const telemetryAudit = canonicalEvidence.telemetry_audit;
-  const telemetryEvidence = canonicalEvidence.telemetry_evidence;
-  const impactedServices = canonicalEvidence.impacted_services;
-  const scope = canonicalEvidence.scope || {};
-  const scopedRunbook = canonicalEvidence.runbook;
+  const confidenceDetails = reasoningView.confidence_details || renderedEvidence.confidence_details || {};
+  const prioritizedActions = Array.isArray(renderedEvidence.prioritized_actions) ? renderedEvidence.prioritized_actions : [];
+  const decisionPanelRaw = reasoningView.decision_panel || renderedEvidence.decision_panel || {};
+  const decisionPanel = {
+    root_cause: decisionPanelRaw.root_cause || "",
+    impact_summary: decisionPanelRaw.impact_summary || "",
+    immediate_action: decisionPanelRaw.immediate_action || "",
+    next_actions: Array.isArray(decisionPanelRaw.next_actions) ? decisionPanelRaw.next_actions : [],
+    investigation_steps: Array.isArray(decisionPanelRaw.investigation_steps) ? decisionPanelRaw.investigation_steps : [],
+    confidence_score: Number(decisionPanelRaw.confidence_score ?? 0),
+  };
+  const signalSummaryRaw = renderedEvidence.signal_summary || {};
+  const signalSummary = {
+    critical_signals: Array.isArray(signalSummaryRaw.critical_signals) ? signalSummaryRaw.critical_signals : [],
+    secondary_signals: Array.isArray(signalSummaryRaw.secondary_signals) ? signalSummaryRaw.secondary_signals : [],
+    missing_signals: Array.isArray(signalSummaryRaw.missing_signals) ? signalSummaryRaw.missing_signals : [],
+  };
+  const logSummary = renderedEvidence.log_summary || null;
+  const impactSummaryRaw = renderedEvidence.impact_summary || {};
+  const impactSummary = {
+    primary_service: impactSummaryRaw.primary_service || "",
+    secondary_services: Array.isArray(impactSummaryRaw.secondary_services) ? impactSummaryRaw.secondary_services : [],
+    summary_text: impactSummaryRaw.summary_text || "",
+    estimated_user_impact: impactSummaryRaw.estimated_user_impact || "",
+    severity_label: impactSummaryRaw.severity_label || "",
+  };
+  const incidentTimeline = Array.isArray(renderedEvidence.incident_timeline) ? renderedEvidence.incident_timeline : [];
+  const observabilityGapsRaw = renderedEvidence.observability_gaps || {};
+  const observabilityGaps = {
+    missing_critical_signals: Array.isArray(observabilityGapsRaw.missing_critical_signals) ? observabilityGapsRaw.missing_critical_signals : [],
+    impact_on_confidence: observabilityGapsRaw.impact_on_confidence || "",
+    recommended_instrumentation_steps: Array.isArray(observabilityGapsRaw.recommended_instrumentation_steps) ? observabilityGapsRaw.recommended_instrumentation_steps : [],
+    summary: observabilityGapsRaw.summary || "",
+  };
+  const trustScoreRaw = reasoningView.trust_score || renderedEvidence.trust_score || {};
+  const trustScore = {
+    score: Number(trustScoreRaw.score ?? 0),
+    level: trustScoreRaw.level || "pending",
+    summary: trustScoreRaw.summary || "",
+  };
+  const telemetryAudit = renderedEvidence.telemetry_audit;
+  const telemetryEvidence = renderedEvidence.telemetry_evidence;
+  const impactedServices = Array.isArray(renderedEvidence.impacted_services) ? renderedEvidence.impacted_services : [];
+  const scope = renderedEvidence.scope || {};
+  const scopedRunbookRaw = renderedEvidence.runbook || {};
+  const scopedRunbook = {
+    incident_steps: Array.isArray(scopedRunbookRaw.incident_steps) ? scopedRunbookRaw.incident_steps : [],
+    related_context_steps: Array.isArray(scopedRunbookRaw.related_context_steps) ? scopedRunbookRaw.related_context_steps : [],
+  };
   const workflowStatus = (currentIncident?.workflow_status || "open").toLowerCase();
-  const reasoningReady = canonicalEvidence.reasoning_ready;
-  const reasoningExecutionMode = reasoningView.execution_mode || canonicalEvidence.reasoning_execution_mode || (derivedStatus === "completed_with_fallback" ? "fallback" : reasoningReady ? "model" : "pending");
-  const reasoningFailureSummary = reasoningView.failure_summary || canonicalEvidence.reasoning_failure_summary || reasoningError || selectedRun?.error_message || "";
-  const reasoningValidationSummary = canonicalEvidence.reasoning_validation_summary || "";
-  const reasoningValidationStatus = canonicalEvidence.reasoning_validation_status || "";
-  const unsupportedClaims = Array.isArray(canonicalEvidence.unsupported_claims) ? canonicalEvidence.unsupported_claims : [];
-  const reasoningCorrections = Array.isArray(canonicalEvidence.reasoning_corrections) ? canonicalEvidence.reasoning_corrections : [];
-  const rawModelOutputSummary = canonicalEvidence.raw_model_output_summary || {};
-  const incidentHistory = Array.isArray(canonicalEvidence.incident_history) ? canonicalEvidence.incident_history : [];
-  const correlations = Array.isArray(canonicalEvidence.related_incidents) ? canonicalEvidence.related_incidents : [];
-  const clusterContext = canonicalEvidence.cluster_context && typeof canonicalEvidence.cluster_context === "object" ? canonicalEvidence.cluster_context : {};
-  const changeTimelineItems = Array.isArray(canonicalEvidence.change_timeline) ? canonicalEvidence.change_timeline : [];
-  const sloStatus = Array.isArray(canonicalEvidence.slo_status) ? canonicalEvidence.slo_status : [];
-  const serviceHealthScore = canonicalEvidence.service_health_score ?? "Unavailable";
-  const renderedReasoningSummary = reasoningView.summary || canonicalEvidence.reasoning_summary;
-  const sparsePredictiveState = Boolean(canonicalEvidence.sparse_predictive_state);
+  const reasoningReady = renderedEvidence.reasoning_ready;
+  const reasoningExecutionMode = reasoningView.execution_mode || renderedEvidence.reasoning_execution_mode || (derivedStatus === "completed_with_fallback" ? "fallback" : reasoningReady ? "model" : "pending");
+  const reasoningFailureSummary = reasoningView.failure_summary || renderedEvidence.reasoning_failure_summary || reasoningError || selectedRun?.error_message || "";
+  const reasoningValidationSummary = renderedEvidence.reasoning_validation_summary || "";
+  const reasoningValidationStatus = renderedEvidence.reasoning_validation_status || "";
+  const unsupportedClaims = Array.isArray(renderedEvidence.unsupported_claims) ? renderedEvidence.unsupported_claims : [];
+  const reasoningCorrections = Array.isArray(renderedEvidence.reasoning_corrections) ? renderedEvidence.reasoning_corrections : [];
+  const rawModelOutputSummary = renderedEvidence.raw_model_output_summary || {};
+  const incidentHistory = Array.isArray(renderedEvidence.incident_history) ? renderedEvidence.incident_history : [];
+  const correlations = Array.isArray(renderedEvidence.related_incidents) ? renderedEvidence.related_incidents : [];
+  const clusterContext = renderedEvidence.cluster_context && typeof renderedEvidence.cluster_context === "object" ? renderedEvidence.cluster_context : {};
+  const changeTimelineItems = Array.isArray(renderedEvidence.change_timeline) ? renderedEvidence.change_timeline : [];
+  const sloStatus = Array.isArray(renderedEvidence.slo_status) ? renderedEvidence.slo_status : [];
+  const serviceHealthScore = renderedEvidence.service_health_score ?? "Unavailable";
+  const renderedReasoningSummary = reasoningView.summary || renderedEvidence.reasoning_summary;
+  const sparsePredictiveState = Boolean(renderedEvidence.sparse_predictive_state);
   const sparsePredictiveContract =
-    canonicalEvidence.sparse_predictive_contract && typeof canonicalEvidence.sparse_predictive_contract === "object"
-      ? canonicalEvidence.sparse_predictive_contract
+    renderedEvidence.sparse_predictive_contract && typeof renderedEvidence.sparse_predictive_contract === "object"
+      ? renderedEvidence.sparse_predictive_contract
       : {};
 
   const refreshIncident = async () => {
@@ -284,7 +337,7 @@ export default function IncidentDetailsPanel({
           <InfoCard title="Root Cause Service" value={reasoningReady ? (reasoning?.root_cause_service || currentIncident.root_cause_entity || "Pending") : "Not generated"} />
           <InfoCard title="Root Cause Signal" value={reasoningReady ? (reasoning?.root_cause_signal || toList(currentIncident.signals).join(", ")) : "Not generated"} />
           <InfoCard title="Customer Impact" value={reasoningReady ? (reasoning?.customer_impact || reasoning?.impact_assessment || "Pending") : "Awaiting reasoning"} />
-          <InfoCard title="Observability Score" value={`${canonicalEvidence.observability_score}%`} />
+          <InfoCard title="Observability Score" value={`${renderedEvidence.observability_score ?? 0}%`} />
           <InfoCard
             title="Service Health Score"
             value={typeof serviceHealthScore === "number" ? `${formatScore(serviceHealthScore)} / 100` : serviceHealthScore}
@@ -679,15 +732,15 @@ export default function IncidentDetailsPanel({
         <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
           <RichSection
             title="Incident Summary"
-            content={canonicalEvidence.incident_summary}
+            content={renderedEvidence.incident_summary}
           />
           <RichSection title="Reasoning Summary" content={renderedReasoningSummary} />
           <RichList title="Signals Detected" items={signalSummary.critical_signals.concat(signalSummary.secondary_signals)} />
-          <RichList title="Causal Propagation Chain" items={canonicalEvidence.causal_chain} />
+          <RichList title="Causal Propagation Chain" items={renderedEvidence.causal_chain} />
           <RichList title="Suggested Actions" items={prioritizedActions.map((item) => item.label)} />
-          <RichList title="Propagation Path" items={canonicalEvidence.propagation_path} />
+          <RichList title="Propagation Path" items={renderedEvidence.propagation_path} />
           <RichList title="Impacted Services" items={impactedServices} />
-          <RichList title="Missing Telemetry Signals" items={canonicalEvidence.missing_telemetry_signals} />
+          <RichList title="Missing Telemetry Signals" items={renderedEvidence.missing_telemetry_signals} />
           <RichList title="Telemetry Evidence" items={telemetryEvidence} />
         </div>
 
@@ -711,7 +764,7 @@ export default function IncidentDetailsPanel({
           />
           <RichSection
             title="Selected-Incident Coverage"
-            content={buildSelectedIncidentCoverageContent(canonicalEvidence)}
+            content={buildSelectedIncidentCoverageContent(renderedEvidence)}
           />
         </div>
 
