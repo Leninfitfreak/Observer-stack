@@ -1,8 +1,13 @@
 package truth
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +19,11 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 	direct := buildDirectEvidence(item)
 	graph := s.ResolveTopology(ctx, scope)
 	scopedGraph := scopeTopology(graph, scope.Service)
+	if shouldEnrichTopology(scopedGraph) {
+		if enrichedGraph, err := fetchSigNozDependencies(ctx, scope); err == nil {
+			scopedGraph = mergeScopedTopology(scopedGraph, enrichedGraph, scope)
+		}
+	}
 	missing := buildMissingEvidence(item, scope, direct, scopedGraph)
 	quality := classifyEvidence(item, direct, scopedGraph)
 	contextual := buildContextualEvidence(quality, scopedGraph)
@@ -66,6 +76,216 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		"service_health_score":       serviceHealthScore(item),
 		"missing_telemetry_signals":  missing,
 	}
+}
+
+type sigNozDependencyItem struct {
+	Parent    string  `json:"parent"`
+	Child     string  `json:"child"`
+	CallCount int64   `json:"callCount"`
+	ErrorRate float64 `json:"errorRate"`
+	P99       float64 `json:"p99"`
+	P95       float64 `json:"p95"`
+	P90       float64 `json:"p90"`
+	P75       float64 `json:"p75"`
+	P50       float64 `json:"p50"`
+}
+
+type sigNozTag struct {
+	Key          string   `json:"key"`
+	TagType      string   `json:"tagType"`
+	StringValues []string `json:"stringValues"`
+	NumberValues []int    `json:"numberValues"`
+	BoolValues   []bool   `json:"boolValues"`
+	Operator     string   `json:"operator"`
+}
+
+func shouldEnrichTopology(scopedGraph map[string]any) bool {
+	available, _ := scopedGraph["available"].(bool)
+	if !available {
+		return true
+	}
+	nodes, _ := scopedGraph["nodes"].([]clickhouse.TopologyNode)
+	edges, _ := scopedGraph["edges"].([]clickhouse.TopologyEdge)
+	return len(edges) == 0 || (len(nodes) == 0 && len(edges) == 0)
+}
+
+func fetchSigNoZBaseURL() string {
+	for _, key := range []string{"SIGNOZ_API_BASE_URL", "SIGNOZ_BASE_URL"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return strings.TrimRight(value, "/")
+		}
+	}
+	return "http://signoz:8080"
+}
+
+func fetchSigNoZAPIKey() string {
+	for _, key := range []string{"SIGNOZ_API_KEY", "signoz_api_key"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func fetchSigNozDependencies(ctx context.Context, scope NormalizedScope) (clickhouse.TopologyGraph, error) {
+	graph := clickhouse.TopologyGraph{
+		GeneratedAt: time.Now().UTC(),
+		Nodes:       []clickhouse.TopologyNode{},
+		Edges:       []clickhouse.TopologyEdge{},
+	}
+
+	payload := map[string]any{
+		"start": scope.Start.UTC().Format(time.RFC3339),
+		"end":   scope.End.UTC().Format(time.RFC3339),
+		"tags":  buildSigNozTags(scope),
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return graph, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fetchSigNoZBaseURL()+"/api/v1/dependency_graph", bytes.NewReader(body))
+	if err != nil {
+		return graph, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey := fetchSigNoZAPIKey(); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("SIGNOZ-API-KEY", apiKey)
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return graph, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return graph, fmt.Errorf("signoz dependency_graph returned %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+	}
+
+	var items []sigNozDependencyItem
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return graph, err
+	}
+
+	nodeMap := map[string]clickhouse.TopologyNode{}
+	for _, item := range items {
+		source := normalizeServiceName(item.Parent)
+		target := normalizeServiceName(item.Child)
+		if source == "" || target == "" || source == target {
+			continue
+		}
+
+		graph.Edges = append(graph.Edges, clickhouse.TopologyEdge{
+			Source:         source,
+			Target:         target,
+			DependencyType: "trace_http",
+			CallCount:      item.CallCount,
+			AvgLatencyMs:   firstPositiveFloat(item.P95, item.P99, item.P90, item.P75, item.P50),
+			ErrorRate:      item.ErrorRate,
+		})
+
+		if _, ok := nodeMap[source]; !ok {
+			nodeMap[source] = clickhouse.TopologyNode{
+				ID:        source,
+				Label:     source,
+				NodeType:  "service",
+				Cluster:   scope.Cluster,
+				Namespace: scope.Namespace,
+			}
+		}
+		if _, ok := nodeMap[target]; !ok {
+			nodeMap[target] = clickhouse.TopologyNode{
+				ID:        target,
+				Label:     target,
+				NodeType:  "service",
+				Cluster:   scope.Cluster,
+				Namespace: scope.Namespace,
+			}
+		}
+	}
+	for _, node := range nodeMap {
+		graph.Nodes = append(graph.Nodes, node)
+	}
+	return graph, nil
+}
+
+func buildSigNozTags(scope NormalizedScope) []sigNozTag {
+	tags := []sigNozTag{}
+	add := func(key, value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		tags = append(tags, sigNozTag{
+			Key:          key,
+			TagType:      "ResourceAttribute",
+			StringValues: []string{value},
+			NumberValues: []int{},
+			BoolValues:   []bool{},
+			Operator:     "Equals",
+		})
+	}
+	add("service.name", scope.Service)
+	add("k8s.namespace.name", scope.Namespace)
+	add("k8s.cluster.name", scope.Cluster)
+	return tags
+}
+
+func mergeScopedTopology(existing map[string]any, enriched clickhouse.TopologyGraph, scope NormalizedScope) map[string]any {
+	baseNodes, _ := existing["nodes"].([]clickhouse.TopologyNode)
+	baseEdges, _ := existing["edges"].([]clickhouse.TopologyEdge)
+
+	nodeMap := map[string]clickhouse.TopologyNode{}
+	for _, node := range baseNodes {
+		nodeMap[node.ID] = node
+	}
+	edgeMap := map[string]clickhouse.TopologyEdge{}
+	for _, edge := range baseEdges {
+		key := edge.Source + "|" + edge.Target + "|" + edge.DependencyType
+		edgeMap[key] = edge
+	}
+
+	scopedEnriched := scopeTopology(enriched, scope.Service)
+	enrichedNodes, _ := scopedEnriched["nodes"].([]clickhouse.TopologyNode)
+	enrichedEdges, _ := scopedEnriched["edges"].([]clickhouse.TopologyEdge)
+	for _, node := range enrichedNodes {
+		if _, ok := nodeMap[node.ID]; !ok {
+			nodeMap[node.ID] = node
+		}
+	}
+	for _, edge := range enrichedEdges {
+		key := edge.Source + "|" + edge.Target + "|" + edge.DependencyType
+		if _, ok := edgeMap[key]; !ok {
+			edgeMap[key] = edge
+		}
+	}
+
+	nodes := make([]clickhouse.TopologyNode, 0, len(nodeMap))
+	for _, node := range nodeMap {
+		nodes = append(nodes, node)
+	}
+	edges := make([]clickhouse.TopologyEdge, 0, len(edgeMap))
+	for _, edge := range edgeMap {
+		edges = append(edges, edge)
+	}
+
+	return map[string]any{
+		"available": len(nodes) > 0 || len(edges) > 0,
+		"nodes":     nodes,
+		"edges":     edges,
+	}
+}
+
+func firstPositiveFloat(values ...float64) float64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func telemetryChart(item *incidents.Incident) []map[string]any {
