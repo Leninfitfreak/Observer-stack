@@ -40,23 +40,55 @@ func confidenceDetails(item *incidents.Incident, quality map[string]string) map[
 	}
 }
 
-func trustScore(item *incidents.Incident, quality map[string]string) map[string]any {
-	score := item.PredictiveConfidence
-	if item.Reasoning != nil && isCompletedReasoningStatus(item.ReasoningStatus) {
-		score = item.Reasoning.ConfidenceScore
-	}
-	if score <= 0 {
-		score = 0.35
-	}
-	if quality["traces"] == "direct" || quality["metrics"] == "direct" {
-		if score < 0.65 {
-			score = 0.65
+func evidenceTrustValue(quality map[string]string) float64 {
+	total := 0.0
+	max := 8.0
+	for _, signal := range []string{"traces", "logs", "metrics", "database", "messaging", "exceptions", "infra", "topology"} {
+		switch quality[signal] {
+		case "direct":
+			total += 1.0
+		case "contextual":
+			total += 0.25
 		}
 	}
+	if max <= 0 {
+		return 0
+	}
+	score := total / max
+	if score < 0.05 {
+		score = 0.05
+	}
+	if score > 0.95 {
+		score = 0.95
+	}
+	return score
+}
+
+func trustScore(item *incidents.Incident, quality map[string]string) map[string]any {
+	score := evidenceTrustValue(quality)
 	return map[string]any{
 		"score":   score,
 		"level":   confidenceLevel(score),
 		"summary": "Trust uses the same backend evidence contract as the rest of the selected-incident page.",
+	}
+}
+
+func reasoningView(item *incidents.Incident, quality map[string]string) map[string]any {
+	status := firstNonEmpty(strings.ToLower(item.ReasoningStatus), "not_generated")
+	ready := item.Reasoning != nil && isCompletedReasoningStatus(item.ReasoningStatus)
+	confidence := confidenceDetails(item, quality)
+	trust := trustScore(item, quality)
+	return map[string]any{
+		"status":               status,
+		"summary":              reasoningSummary(item),
+		"confidence_score":     confidence["score"],
+		"confidence_level":     confidence["level"],
+		"confidence_details":   confidence,
+		"execution_mode":       reasoningExecutionMode(item),
+		"failure_summary":      reasoningFailureSummary(item),
+		"placeholder_allowed":  !ready,
+		"decision_panel":       decisionPanel(item, quality),
+		"trust_score":          trust,
 	}
 }
 

@@ -96,23 +96,26 @@ export default function IncidentDetailsPanel({
   const reasoning = currentIncident?.reasoning;
   const canonicalEvidence = serverEvidence
     || (evidenceLoading ? buildPendingEvidenceSkeleton(currentIncident) : buildFallbackEvidenceContract(currentIncident, evidenceError));
+  const reasoningView = canonicalEvidence.reasoning_view && typeof canonicalEvidence.reasoning_view === "object"
+    ? canonicalEvidence.reasoning_view
+    : {};
   const anomalyScore = formatScore(currentIncident?.anomaly_score);
-  const derivedStatus = reasoningStatus || currentIncident?.reasoning_status || (reasoning ? "completed" : "not_generated");
+  const derivedStatus = reasoningView.status || reasoningStatus || currentIncident?.reasoning_status || (reasoning ? "completed" : "not_generated");
   const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
   const canRunReasoning =
     Boolean(currentIncident) &&
     canonicalEvidence.scope.scope_complete &&
     ["not_generated", "failed", "completed", "completed_with_fallback"].includes(derivedStatus) &&
     !reasoningBusy;
-  const confidenceDetails = canonicalEvidence.confidence_details;
+  const confidenceDetails = reasoningView.confidence_details || canonicalEvidence.confidence_details;
   const prioritizedActions = canonicalEvidence.prioritized_actions;
-  const decisionPanel = canonicalEvidence.decision_panel;
+  const decisionPanel = reasoningView.decision_panel || canonicalEvidence.decision_panel;
   const signalSummary = canonicalEvidence.signal_summary;
   const logSummary = canonicalEvidence.log_summary;
   const impactSummary = canonicalEvidence.impact_summary;
   const incidentTimeline = canonicalEvidence.incident_timeline;
   const observabilityGaps = canonicalEvidence.observability_gaps;
-  const trustScore = canonicalEvidence.trust_score;
+  const trustScore = reasoningView.trust_score || canonicalEvidence.trust_score;
   const telemetryAudit = canonicalEvidence.telemetry_audit;
   const telemetryEvidence = canonicalEvidence.telemetry_evidence;
   const impactedServices = canonicalEvidence.impacted_services;
@@ -120,8 +123,8 @@ export default function IncidentDetailsPanel({
   const scopedRunbook = canonicalEvidence.runbook;
   const workflowStatus = (currentIncident?.workflow_status || "open").toLowerCase();
   const reasoningReady = canonicalEvidence.reasoning_ready;
-  const reasoningExecutionMode = canonicalEvidence.reasoning_execution_mode || (derivedStatus === "completed_with_fallback" ? "fallback" : reasoningReady ? "model" : "pending");
-  const reasoningFailureSummary = canonicalEvidence.reasoning_failure_summary || reasoningError || selectedRun?.error_message || "";
+  const reasoningExecutionMode = reasoningView.execution_mode || canonicalEvidence.reasoning_execution_mode || (derivedStatus === "completed_with_fallback" ? "fallback" : reasoningReady ? "model" : "pending");
+  const reasoningFailureSummary = reasoningView.failure_summary || canonicalEvidence.reasoning_failure_summary || reasoningError || selectedRun?.error_message || "";
   const reasoningValidationSummary = canonicalEvidence.reasoning_validation_summary || "";
   const reasoningValidationStatus = canonicalEvidence.reasoning_validation_status || "";
   const unsupportedClaims = Array.isArray(canonicalEvidence.unsupported_claims) ? canonicalEvidence.unsupported_claims : [];
@@ -133,6 +136,7 @@ export default function IncidentDetailsPanel({
   const changeTimelineItems = Array.isArray(canonicalEvidence.change_timeline) ? canonicalEvidence.change_timeline : [];
   const sloStatus = Array.isArray(canonicalEvidence.slo_status) ? canonicalEvidence.slo_status : [];
   const serviceHealthScore = canonicalEvidence.service_health_score ?? "Unavailable";
+  const renderedReasoningSummary = reasoningView.summary || canonicalEvidence.reasoning_summary;
 
   const refreshIncident = async () => {
     if (!currentIncident?.incident_id) return null;
@@ -662,7 +666,7 @@ export default function IncidentDetailsPanel({
             title="Incident Summary"
             content={canonicalEvidence.incident_summary}
           />
-          <RichSection title="Reasoning Summary" content={canonicalEvidence.reasoning_summary} />
+          <RichSection title="Reasoning Summary" content={renderedReasoningSummary} />
           <RichList title="Signals Detected" items={signalSummary.critical_signals.concat(signalSummary.secondary_signals)} />
           <RichList title="Causal Propagation Chain" items={canonicalEvidence.causal_chain} />
           <RichList title="Suggested Actions" items={prioritizedActions.map((item) => item.label)} />

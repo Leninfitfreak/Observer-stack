@@ -33,6 +33,7 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 	contextual := buildContextualEvidence(quality, scopedGraph)
 	coverage := buildCoverage(scope, direct, quality, scopedGraph)
 	validation, _ := s.store.GetReasoningValidation(ctx, item.ID)
+	reasoning := reasoningView(item, quality)
 
 	related, _ := s.store.ListCorrelatedIncidents(ctx, item.ID, 24*time.Hour, 8)
 	history, _ := s.ListIncidents(ctx, NormalizedScope{
@@ -58,12 +59,13 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		"impacted_services":          impactedServices(item),
 		"propagation_path":           propagationPath(item, scopedGraph),
 		"causal_chain":               toAnyStrings(item.Reasoning, item.DependencyChain),
-		"confidence_details":         confidenceDetails(item, quality),
-		"trust_score":                trustScore(item, quality),
-		"reasoning_status":           firstNonEmpty(strings.ToLower(item.ReasoningStatus), "not_generated"),
+		"confidence_details":         reasoning["confidence_details"],
+		"trust_score":                reasoning["trust_score"],
+		"reasoning_status":           reasoning["status"],
 		"reasoning_ready":            item.Reasoning != nil && isCompletedReasoningStatus(item.ReasoningStatus),
-		"reasoning_execution_mode":   reasoningExecutionMode(item),
-		"reasoning_failure_summary":  reasoningFailureSummary(item),
+		"reasoning_execution_mode":   reasoning["execution_mode"],
+		"reasoning_failure_summary":  reasoning["failure_summary"],
+		"reasoning_view":             reasoning,
 		"reasoning_validation_status": validationStatus(validation),
 		"reasoning_validation_summary": validationSummary(validation),
 		"unsupported_claims_count":   unsupportedClaimsCount(validation),
@@ -73,11 +75,11 @@ func (s *Service) collectTelemetry(ctx context.Context, item *incidents.Incident
 		"reasoning_corrections":      validationCorrections(validation),
 		"raw_model_output_summary":   rawModelOutputSummary(validation),
 		"incident_summary":           incidentSummary(item, direct),
-		"reasoning_summary":          reasoningSummary(item),
+		"reasoning_summary":          reasoning["summary"],
 		"signal_summary":             signalSummary(item, quality),
 		"log_summary":                logSummary(item),
 		"impact_summary":             impactSummary(item),
-		"decision_panel":             decisionPanel(item, quality),
+		"decision_panel":             reasoning["decision_panel"],
 		"prioritized_actions":        prioritizedActions(item, quality),
 		"runbook":                    runbook(item, quality),
 		"observability_gaps":         observabilityGaps(scope, quality, missing),
