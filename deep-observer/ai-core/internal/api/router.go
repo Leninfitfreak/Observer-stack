@@ -201,6 +201,20 @@ func NewRouter(store *incidents.Store, chConfig config.ClickHouseConfig, project
 			return
 		}
 
+		if len(parts) == 2 && parts[1] == "evidence" && r.Method == http.MethodGet {
+			fmt.Printf("api incident evidence incident=%s cluster=%q namespace=%q service=%q\n", item.ID, r.URL.Query().Get("cluster"), r.URL.Query().Get("namespace"), r.URL.Query().Get("service"))
+			start, end := parseTimeRangeWithDefaults(r.URL.Query().Get("start"), r.URL.Query().Get("end"), 24*time.Hour)
+			evidence := buildSelectedScopeEvidence(ctx, store, chConfig, project, item, clickhouse.Filters{
+				Cluster:   firstNonEmpty(r.URL.Query().Get("cluster"), item.Cluster, item.Scope.Cluster),
+				Namespace: firstNonEmpty(r.URL.Query().Get("namespace"), item.Namespace, item.Scope.Namespace),
+				Service:   normalizeServiceName(firstNonEmpty(r.URL.Query().Get("service"), item.Service, item.Scope.Service)),
+				Start:     start,
+				End:       end,
+			})
+			writeJSON(w, http.StatusOK, evidence)
+			return
+		}
+
 		writeJSON(w, http.StatusOK, item)
 	})
 

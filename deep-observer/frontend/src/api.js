@@ -42,6 +42,10 @@ export function fetchIncident(incidentId) {
   return request(`/api/incidents/${incidentId}`);
 }
 
+export function fetchIncidentEvidence(incidentId, filters) {
+  return request(`/api/incidents/${incidentId}/evidence`, filters);
+}
+
 export function fetchTimeline(incidentId) {
   return request(`/api/incidents/${incidentId}/timeline`);
 }

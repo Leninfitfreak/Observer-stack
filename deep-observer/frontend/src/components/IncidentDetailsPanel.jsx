@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   fetchIncident,
+  fetchIncidentEvidence,
   fetchTimeline,
   runReasoning,
   retryReasoning,
@@ -36,6 +37,7 @@ export default function IncidentDetailsPanel({
   const [workflowUpdating, setWorkflowUpdating] = useState(false);
   const [incidentCluster, setIncidentCluster] = useState(null);
   const [incidentHistory, setIncidentHistory] = useState([]);
+  const [serverEvidence, setServerEvidence] = useState(null);
 
   useEffect(() => {
     if (!incident) return;
@@ -56,6 +58,7 @@ export default function IncidentDetailsPanel({
       setReasoningHistory([]);
       setSelectedRun(null);
       setCorrelations([]);
+      setServerEvidence(null);
       return;
     }
     setActiveIncident(incident);
@@ -85,6 +88,16 @@ export default function IncidentDetailsPanel({
       .catch(console.error);
   }, [incident, filterQuery]);
 
+  useEffect(() => {
+    if (!incident) {
+      setServerEvidence(null);
+      return;
+    }
+    fetchIncidentEvidence(incident.incident_id, filterQuery)
+      .then((payload) => setServerEvidence(payload && typeof payload === "object" ? payload : null))
+      .catch(() => setServerEvidence(null));
+  }, [incident, filterQuery]);
+
   const chartPoints = timeline
     .filter((event) => Number.isFinite(Number(event?.value)))
     .slice(-8)
@@ -96,7 +109,7 @@ export default function IncidentDetailsPanel({
 
   const currentIncident = activeIncident || incident;
   const reasoning = currentIncident?.reasoning;
-  const canonicalEvidence = buildCanonicalIncidentEvidence({
+  const localCanonicalEvidence = buildCanonicalIncidentEvidence({
     incident: currentIncident,
     topology,
     timeline,
@@ -104,6 +117,17 @@ export default function IncidentDetailsPanel({
     correlations,
     incidentHistory,
   });
+  const canonicalEvidence = serverEvidence
+    ? {
+        ...localCanonicalEvidence,
+        ...serverEvidence,
+        scope: serverEvidence.scope || localCanonicalEvidence.scope,
+        direct_evidence: serverEvidence.direct_evidence || localCanonicalEvidence.direct_evidence,
+        contextual_evidence: serverEvidence.contextual_evidence || localCanonicalEvidence.contextual_evidence,
+        telemetry_audit: serverEvidence.telemetry_audit || localCanonicalEvidence.telemetry_audit,
+        incident_topology: serverEvidence.incident_topology || localCanonicalEvidence.incident_topology,
+      }
+    : localCanonicalEvidence;
   const anomalyScore = formatScore(currentIncident?.anomaly_score);
   const derivedStatus = reasoningStatus || currentIncident?.reasoning_status || (reasoning ? "completed" : "not_generated");
   const runDetail = selectedRun && selectedRun.reasoning_run_id ? selectedRun : null;
