@@ -1,0 +1,86 @@
+{
+  "route": "/dashboard/019d120b-b799-7a85-98d1-f48c32c48cce?variables=%257B%2522service.name%2522%253A%2522frontend%2522%257D&relativeTime=30m",
+  "url": "http://127.0.0.1:8080/dashboard/019d120b-b799-7a85-98d1-f48c32c48cce?variables=%257B%2522service.name%2522%253A%2522frontend%2522%257D&relativeTime=30m",
+  "title": "DEFAULT",
+  "navigationStatus": "loaded",
+  "bodySample": "",
+  "bodyLength": 0,
+  "screenshotStatus": "captured",
+  "events": {
+    "route": "/dashboard/019d120b-b799-7a85-98d1-f48c32c48cce?variables=%257B%2522service.name%2522%253A%2522frontend%2522%257D&relativeTime=30m",
+    "console": [
+      {
+        "type": "error",
+        "text": "Access to script at 'https://fast.appcues.com/generic/main/7.17.6/appcues.main.0aa93b691f53f8b2a7b7dce6ad16f640d96c3b21.js' from origin 'http://127.0.0.1:8080' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: It does not have HTTP ok status."
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: net::ERR_FAILED"
+      },
+      {
+        "type": "error",
+        "text": "Access to font at 'https://fonts.gstatic.com/s/inter/v20/UcCo3FwrK3iLTcviYwY.woff2' from origin 'http://127.0.0.1:8080' has been blocked by CORS policy: Request header field signoz-api-key is not allowed by Access-Control-Allow-Headers in preflight response."
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: net::ERR_FAILED"
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      },
+      {
+        "type": "error",
+        "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+      },
+      {
+        "type": "error",
+        "text": "Access to XMLHttpRequest at 'https://api.github.com/repos/signoz/signoz/releases/latest' from origin 'http://127.0.0.1:8080' has been blocked by CORS policy: Request header field signoz-api-key is not allowed by Access-Control-Allow-Headers in preflight response."
+      },
+      {
+        "type": "error",
+        "text": "client never received a response, or request never left"
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: net::ERR_FAILED"
+      }
+    ],
+    "pageErrors": [],
+    "requestFailures": [
+      {
+        "url": "https://fast.appcues.com/generic/main/7.17.6/appcues.main.0aa93b691f53f8b2a7b7dce6ad16f640d96c3b21.js",
+        "method": "GET",
+        "error": "net::ERR_FAILED"
+      },
+      {
+        "url": "https://fonts.gstatic.com/s/inter/v20/UcCo3FwrK3iLTcviYwY.woff2",
+        "method": "GET",
+        "error": "net::ERR_FAILED"
+      },
+      {
+        "url": "https://api.github.com/repos/signoz/signoz/releases/latest",
+        "method": "GET",
+        "error": "net::ERR_FAILED"
+      }
+    ],
+    "responses": [
+      {
+        "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+        "status": 404
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v1/user/me",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v1/features",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v1/version",
+        "status": 200
+      }
+    ]
+  }
+}

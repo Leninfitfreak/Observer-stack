@@ -1,0 +1,44 @@
+{
+  "route": "/dashboard/019d120b-c24b-716e-9890-14c5f3d54031?relativeTime=5m",
+  "url": "http://127.0.0.1:8080/dashboard/019d120b-c24b-716e-9890-14c5f3d54031?relativeTime=5m",
+  "title": "Open source Observability platform | SigNoz",
+  "navigationStatus": "loaded",
+  "bodySample": "SigNoz\nOpenTelemetry-Native Logs, Metrics and Traces in a single pane",
+  "bodyLength": 69,
+  "screenshotStatus": "captured",
+  "events": {
+    "route": "/dashboard/019d120b-c24b-716e-9890-14c5f3d54031?relativeTime=5m",
+    "console": [
+      {
+        "type": "error",
+        "text": "Access to script at 'https://fast.appcues.com/generic/main/7.17.6/appcues.main.0aa93b691f53f8b2a7b7dce6ad16f640d96c3b21.js' from origin 'http://127.0.0.1:8080' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: It does not have HTTP ok status."
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: net::ERR_FAILED"
+      },
+      {
+        "type": "error",
+        "text": "Access to font at 'https://fonts.gstatic.com/s/inter/v20/UcCo3FwrK3iLTcviYwY.woff2' from origin 'http://127.0.0.1:8080' has been blocked by CORS policy: Request header field signoz-api-key is not allowed by Access-Control-Allow-Headers in preflight response."
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: net::ERR_FAILED"
+      }
+    ],
+    "pageErrors": [],
+    "requestFailures": [
+      {
+        "url": "https://fast.appcues.com/generic/main/7.17.6/appcues.main.0aa93b691f53f8b2a7b7dce6ad16f640d96c3b21.js",
+        "method": "GET",
+        "error": "net::ERR_FAILED"
+      },
+      {
+        "url": "https://fonts.gstatic.com/s/inter/v20/UcCo3FwrK3iLTcviYwY.woff2",
+        "method": "GET",
+        "error": "net::ERR_FAILED"
+      }
+    ],
+    "responses": []
+  }
+}

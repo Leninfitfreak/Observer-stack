@@ -1,0 +1,53 @@
+{
+  "route": "/dashboard/019d1451-e7fa-7dea-9226-908b415c2dff?relativeTime=5m",
+  "url": "http://127.0.0.1:8080/dashboard/019d1451-e7fa-7dea-9226-908b415c2dff?relativeTime=5m",
+  "title": "Observer Stack",
+  "navigationStatus": "loaded",
+  "bodySample": "Observer Stack\nOpenTelemetry-Native Logs, Metrics and Traces in a single pane",
+  "bodyLength": 77,
+  "screenshotStatus": "captured",
+  "events": {
+    "route": "/dashboard/019d1451-e7fa-7dea-9226-908b415c2dff?relativeTime=5m",
+    "console": [
+      {
+        "type": "error",
+        "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      },
+      {
+        "type": "error",
+        "text": "Access to font at 'https://fonts.gstatic.com/s/inter/v20/UcCo3FwrK3iLTcviYwY.woff2' from origin 'http://127.0.0.1:8080' has been blocked by CORS policy: Request header field signoz-api-key is not allowed by Access-Control-Allow-Headers in preflight response."
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: net::ERR_FAILED"
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: the server responded with a status of 404 ()"
+      },
+      {
+        "type": "error",
+        "text": "Refused to execute script from 'https://widget.usepylon.com/widget/' because its MIME type ('') is not executable, and strict MIME type checking is enabled."
+      }
+    ],
+    "pageErrors": [],
+    "requestFailures": [
+      {
+        "url": "http://fast.appcues.com/.js",
+        "method": "GET",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://fonts.gstatic.com/s/inter/v20/UcCo3FwrK3iLTcviYwY.woff2",
+        "method": "GET",
+        "error": "net::ERR_FAILED"
+      },
+      {
+        "url": "https://widget.usepylon.com/widget/",
+        "method": "GET",
+        "error": "net::ERR_ABORTED"
+      }
+    ],
+    "responses": []
+  }
+}

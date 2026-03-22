@@ -1,0 +1,1015 @@
+{
+  "timestamp_utc": "2026-03-22T10:20:19.951Z",
+  "base_url": "http://127.0.0.1:8080",
+  "dashboards": [
+    {
+      "title": "LeninKart Platform Overview",
+      "slug": "platform-overview",
+      "optional": false,
+      "status": "passed",
+      "found_in_list": true,
+      "click_navigation_passed": true,
+      "direct_route_passed": true,
+      "responsive": true,
+      "rendered": true,
+      "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-platform-overview-e2e.png",
+      "url": "http://127.0.0.1:8080/dashboard/019d14d4-1acd-71a8-96ea-e409d7c6e8b9",
+      "title_text": "LeninKart Platform Overview",
+      "elapsed_ms": 19553,
+      "console_errors": [
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        },
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        }
+      ],
+      "page_errors": [],
+      "request_failures": [
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "method": "POST",
+          "error": "net::ERR_ABORTED"
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "method": "POST",
+          "error": "net::ERR_ABORTED"
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "method": "POST",
+          "error": "net::ERR_ABORTED"
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "method": "POST",
+          "error": "net::ERR_ABORTED"
+        }
+      ],
+      "api_responses": [
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d14d4-1acd-71a8-96ea-e409d7c6e8b9",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d14d4-1acd-71a8-96ea-e409d7c6e8b9",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "title": "LeninKart Product Service Overview",
+      "slug": "product-service-overview",
+      "optional": false,
+      "status": "passed",
+      "found_in_list": true,
+      "click_navigation_passed": true,
+      "direct_route_passed": true,
+      "responsive": true,
+      "rendered": true,
+      "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-product-service-overview-e2e.png",
+      "url": "http://127.0.0.1:8080/dashboard/019d14d4-1d5f-7a53-ad3e-fe3854192ac9",
+      "title_text": "LeninKart Product Service Overview",
+      "elapsed_ms": 20615,
+      "console_errors": [
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        },
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        }
+      ],
+      "page_errors": [],
+      "request_failures": [],
+      "api_responses": [
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d14d4-1d5f-7a53-ad3e-fe3854192ac9",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d14d4-1d5f-7a53-ad3e-fe3854192ac9",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "title": "LeninKart Order Service Overview",
+      "slug": "order-service-overview",
+      "optional": false,
+      "status": "passed",
+      "found_in_list": true,
+      "click_navigation_passed": true,
+      "direct_route_passed": true,
+      "responsive": true,
+      "rendered": true,
+      "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-order-service-overview-e2e.png",
+      "url": "http://127.0.0.1:8080/dashboard/019d14d4-1dfd-71b8-82a1-9a59493d647d",
+      "title_text": "LeninKart Order Service Overview",
+      "elapsed_ms": 16626,
+      "console_errors": [
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        },
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        }
+      ],
+      "page_errors": [],
+      "request_failures": [],
+      "api_responses": [
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d14d4-1dfd-71b8-82a1-9a59493d647d",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d14d4-1dfd-71b8-82a1-9a59493d647d",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "title": "LeninKart Kafka Overview",
+      "slug": "kafka",
+      "optional": false,
+      "status": "passed",
+      "found_in_list": true,
+      "click_navigation_passed": true,
+      "direct_route_passed": true,
+      "responsive": true,
+      "rendered": true,
+      "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-kafka-e2e.png",
+      "url": "http://127.0.0.1:8080/dashboard/019d120b-c24b-716e-9890-14c5f3d54031",
+      "title_text": "LeninKart Kafka Overview",
+      "elapsed_ms": 13844,
+      "console_errors": [
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        },
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        }
+      ],
+      "page_errors": [],
+      "request_failures": [],
+      "api_responses": [
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d120b-c24b-716e-9890-14c5f3d54031",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d120b-c24b-716e-9890-14c5f3d54031",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "title": "LeninKart Frontend Overview",
+      "slug": "frontend-overview",
+      "optional": false,
+      "status": "passed",
+      "found_in_list": true,
+      "click_navigation_passed": true,
+      "direct_route_passed": true,
+      "responsive": true,
+      "rendered": true,
+      "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-frontend-overview-e2e.png",
+      "url": "http://127.0.0.1:8080/dashboard/019d14d4-1ec7-77d8-af0e-2e590a467fcc",
+      "title_text": "LeninKart Frontend Overview",
+      "elapsed_ms": 17036,
+      "console_errors": [
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        },
+        {
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+        },
+        {
+          "type": "error",
+          "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+        },
+        {
+          "type": "error",
+          "text": "any"
+        }
+      ],
+      "page_errors": [],
+      "request_failures": [],
+      "api_responses": [
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d14d4-1ec7-77d8-af0e-2e590a467fcc",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/event",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v5/query_range",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/me",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/features",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+          "status": 404
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/version",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/dashboards/019d14d4-1ec7-77d8-af0e-2e590a467fcc",
+          "status": 200
+        },
+        {
+          "url": "http://127.0.0.1:8080/api/v1/user",
+          "status": 200
+        }
+      ]
+    }
+  ],
+  "list_page": {
+    "url": "http://127.0.0.1:8080/dashboard",
+    "title": "SigNoz | All Dashboards",
+    "elapsed_ms": 15639,
+    "body_length": 726
+  },
+  "global_console_errors": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "warning",
+      "text": "[API Warning] Request to /user/preferences took 6749ms"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "warning",
+      "text": "[API Warning] Request to /query_range took 5038ms"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "warning",
+      "text": "aggregateData is null in baseAggregateOptionsConfig"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    },
+    {
+      "type": "error",
+      "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:743421)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1b22b7bbc971cbdb8aa7.js:2:770100)"
+    },
+    {
+      "type": "error",
+      "text": "any"
+    }
+  ],
+  "global_page_errors": [],
+  "global_request_failures": [
+    {
+      "url": "http://127.0.0.1:8080/api/v5/query_range",
+      "method": "POST",
+      "error": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://127.0.0.1:8080/api/v5/query_range",
+      "method": "POST",
+      "error": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://127.0.0.1:8080/api/v5/query_range",
+      "method": "POST",
+      "error": "net::ERR_ABORTED"
+    },
+    {
+      "url": "http://127.0.0.1:8080/api/v5/query_range",
+      "method": "POST",
+      "error": "net::ERR_ABORTED"
+    }
+  ]
+}

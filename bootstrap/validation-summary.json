@@ -1,0 +1,149 @@
+{
+  "timestamp_utc": "2026-03-22T10:20:19.951Z",
+  "status": "passed",
+  "signoz_base_url": "http://127.0.0.1:8080",
+  "dashboard_mode": "minimal-showcase-query-validated",
+  "runtime_baseline": {
+    "observer_stack_stable": true,
+    "kafka_platform_healthy": true,
+    "signoz_version": "v0.113.0"
+  },
+  "bootstrap_execution": {
+    "status": "passed",
+    "summary_file": "D:\\Projects\\Services\\observer-stack\\bootstrap\\last-run-summary.json",
+    "dashboards_updated": [
+      "LeninKart Platform Overview",
+      "LeninKart Product Service Overview",
+      "LeninKart Order Service Overview",
+      "LeninKart Kafka Overview",
+      "LeninKart Frontend Overview"
+    ]
+  },
+  "query_validation": {
+    "report": "D:\\Projects\\Services\\observer-stack\\bootstrap\\DASHBOARD_QUERY_VALIDATION_REPORT.md",
+    "thresholds": {
+      "query_validation_window_minutes": 15,
+      "max_widget_meta_duration_ms": 2500,
+      "max_widget_wall_time_ms": 8000,
+      "max_widget_rows_scanned": 150000,
+      "max_widget_bytes_scanned": 20971520,
+      "max_widget_series_count": 20,
+      "max_widget_group_by_count": 1
+    },
+    "dashboards": [
+      {
+        "title": "LeninKart Platform Overview",
+        "widgets_kept": 4,
+        "widgets_removed": 0,
+        "kept_titles": [
+          "Product Request Rate",
+          "Order Request Rate",
+          "Kafka Messages In Rate",
+          "Frontend CPU Utilization"
+        ],
+        "removed_titles": []
+      },
+      {
+        "title": "LeninKart Product Service Overview",
+        "widgets_kept": 2,
+        "widgets_removed": 1,
+        "kept_titles": [
+          "Request Rate",
+          "Database Call Rate"
+        ],
+        "removed_titles": [
+          "External Call Rate"
+        ]
+      },
+      {
+        "title": "LeninKart Order Service Overview",
+        "widgets_kept": 2,
+        "widgets_removed": 1,
+        "kept_titles": [
+          "Request Rate",
+          "External Call Rate"
+        ],
+        "removed_titles": [
+          "Database Call Rate"
+        ]
+      },
+      {
+        "title": "LeninKart Kafka Overview",
+        "widgets_kept": 1,
+        "widgets_removed": 2,
+        "kept_titles": [
+          "Messages In Rate"
+        ],
+        "removed_titles": [
+          "Total Consumer Lag",
+          "Messages Consumed by Group"
+        ]
+      },
+      {
+        "title": "LeninKart Frontend Overview",
+        "widgets_kept": 2,
+        "widgets_removed": 1,
+        "kept_titles": [
+          "Memory Working Set",
+          "Memory RSS"
+        ],
+        "removed_titles": [
+          "CPU Utilization"
+        ]
+      }
+    ]
+  },
+  "dashboard_e2e_validation": {
+    "status": "passed",
+    "script": "D:\\Projects\\Services\\observer-stack\\bootstrap\\validate_dashboards_e2e.mjs",
+    "summary_file": "D:\\Projects\\Services\\observer-stack\\bootstrap\\dashboard-e2e-summary.json",
+    "list_page": {
+      "title": "SigNoz | All Dashboards",
+      "elapsed_ms": 15639,
+      "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-list-e2e.png"
+    },
+    "dashboards": [
+      {
+        "title": "LeninKart Platform Overview",
+        "status": "passed",
+        "elapsed_ms": 19553,
+        "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-platform-overview-e2e.png"
+      },
+      {
+        "title": "LeninKart Product Service Overview",
+        "status": "passed",
+        "elapsed_ms": 20615,
+        "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-product-service-overview-e2e.png"
+      },
+      {
+        "title": "LeninKart Order Service Overview",
+        "status": "passed",
+        "elapsed_ms": 16626,
+        "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-order-service-overview-e2e.png"
+      },
+      {
+        "title": "LeninKart Kafka Overview",
+        "status": "passed",
+        "elapsed_ms": 13844,
+        "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-kafka-e2e.png"
+      },
+      {
+        "title": "LeninKart Frontend Overview",
+        "status": "passed",
+        "elapsed_ms": 17036,
+        "screenshot": "D:\\Projects\\Services\\screenshots\\observer-stack\\dashboard-frontend-overview-e2e.png"
+      }
+    ]
+  },
+  "non_blocking_noise": [
+    "GET /api/v3/licenses/active returns 404 in the stock SigNoz UI",
+    "the frontend logs 'no active license found'",
+    "some widgets log 'aggregateData is null in baseAggregateOptionsConfig'",
+    "some query_range requests are aborted as the browser navigates away from a page"
+  ],
+  "reports": [
+    "D:\\Projects\\Services\\observer-stack\\bootstrap\\DASHBOARD_QUERY_VALIDATION_REPORT.md",
+    "D:\\Projects\\Services\\observer-stack\\bootstrap\\MINIMAL_DASHBOARD_SIMPLIFICATION_REPORT.md",
+    "D:\\Projects\\Services\\observer-stack\\bootstrap\\DASHBOARD_E2E_VALIDATION_REPORT.md"
+  ]
+}

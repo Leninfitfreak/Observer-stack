@@ -1,0 +1,113 @@
+{
+  "route": "/dashboard/019d120b-c24b-716e-9890-14c5f3d54031?relativeTime=5m",
+  "url": "http://127.0.0.1:8080/dashboard/019d120b-c24b-716e-9890-14c5f3d54031?relativeTime=5m",
+  "title": "Observer Stack",
+  "navigationStatus": "loaded",
+  "bodySample": "",
+  "events": {
+    "route": "/dashboard/019d120b-c24b-716e-9890-14c5f3d54031?relativeTime=5m",
+    "console": [
+      {
+        "type": "error",
+        "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: the server responded with a status of 404 (Not Found)"
+      },
+      {
+        "type": "error",
+        "text": "APIError: no active license found for the organization 019cfd41-456f-7c46-9beb-62b60ba4c759\n    at c (http://127.0.0.1:8080/main.1a57560a62c536ce9c9d.js:2:833050)\n    at Object.s [as queryFn] (http://127.0.0.1:8080/main.1a57560a62c536ce9c9d.js:2:860224)"
+      },
+      {
+        "type": "error",
+        "text": "Access to font at 'https://fonts.gstatic.com/s/inter/v20/UcCo3FwrK3iLTcviYwY.woff2' from origin 'http://127.0.0.1:8080' has been blocked by CORS policy: Request header field signoz-api-key is not allowed by Access-Control-Allow-Headers in preflight response."
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: net::ERR_FAILED"
+      },
+      {
+        "type": "error",
+        "text": "Access to XMLHttpRequest at 'https://api.github.com/repos/signoz/signoz/releases/latest' from origin 'http://127.0.0.1:8080' has been blocked by CORS policy: Request header field signoz-api-key is not allowed by Access-Control-Allow-Headers in preflight response."
+      },
+      {
+        "type": "error",
+        "text": "client never received a response, or request never left"
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: net::ERR_FAILED"
+      },
+      {
+        "type": "error",
+        "text": "Access to XMLHttpRequest at 'https://cms.signoz.cloud/api/release-changelogs?filters[version][$eq]=v0.113.0&populate[features][sort]=sort_order:asc&populate[features][populate][media][fields]=id,ext,url,mime,alternativeText&populate[features][filters][deployment_type][$notIn]=Cloud%20only' from origin 'http://127.0.0.1:8080' has been blocked by CORS policy: Request header field signoz-api-key is not allowed by Access-Control-Allow-Headers in preflight response."
+      },
+      {
+        "type": "error",
+        "text": "client never received a response, or request never left"
+      },
+      {
+        "type": "error",
+        "text": "Failed to load resource: net::ERR_FAILED"
+      }
+    ],
+    "pageErrors": [],
+    "requestFailures": [
+      {
+        "url": "http://fast.appcues.com/.js",
+        "method": "GET",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "https://fonts.gstatic.com/s/inter/v20/UcCo3FwrK3iLTcviYwY.woff2",
+        "method": "GET",
+        "error": "net::ERR_FAILED"
+      },
+      {
+        "url": "https://api.github.com/repos/signoz/signoz/releases/latest",
+        "method": "GET",
+        "error": "net::ERR_FAILED"
+      },
+      {
+        "url": "https://cms.signoz.cloud/api/release-changelogs?filters[version][$eq]=v0.113.0&populate[features][sort]=sort_order:asc&populate[features][populate][media][fields]=id,ext,url,mime,alternativeText&populate[features][filters][deployment_type][$notIn]=Cloud%20only",
+        "method": "GET",
+        "error": "net::ERR_FAILED"
+      }
+    ],
+    "responses": [
+      {
+        "url": "http://127.0.0.1:8080/api/v1/user/me",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v3/licenses/active",
+        "status": 404
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v1/features",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v1/version",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v1/dashboards/019d120b-c24b-716e-9890-14c5f3d54031",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v1/org/preferences",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v1/user/preferences",
+        "status": 200
+      },
+      {
+        "url": "http://127.0.0.1:8080/api/v1/user",
+        "status": 200
+      }
+    ]
+  }
+}
